@@ -3849,7 +3849,6 @@ TEST(DecodeTest, ProgressionTest) {
   std::vector<uint8_t> pixels =
       jxl::test::GetSomeTestImage(xsize, ysize, num_channels, 0);
   jxl::TestCodestreamParams params;
-  params.cparams.progressive_dc = 1;
   params.add_preview = true;
   jxl::PaddedBytes data = jxl::CreateTestJXLCodestream(
       jxl::Span<const uint8_t>(pixels.data(), pixels.size()), xsize, ysize,
@@ -3857,22 +3856,21 @@ TEST(DecodeTest, ProgressionTest) {
   StreamPositions streampos;
   AnalyzeCodestream(data, &streampos);
   const std::vector<FramePositions>& fp = streampos.frames;
-  // We have preview, dc frame and regular frame.
-  EXPECT_EQ(3, fp.size());
-  EXPECT_EQ(7, fp[2].section_end.size());
-  EXPECT_EQ(data.size(), fp[2].section_end[6]);
+  // We have preview and regular frame.
+  EXPECT_EQ(2, fp.size());
+  EXPECT_EQ(7, fp[1].section_end.size());
+  EXPECT_EQ(data.size(), fp[1].section_end[6]);
   std::vector<Breakpoint> breakpoints{
       {fp[0].frame_start, NO_FLUSH},           // headers
       {fp[1].frame_start, NO_FLUSH},           // preview
-      {fp[2].frame_start, NO_FLUSH},           // dc frame
-      {fp[2].section_end[0], NO_FLUSH},        // DC global
-      {fp[2].section_end[1] - 1, NO_FLUSH},    // partial DC group
-      {fp[2].section_end[1], NEW_FLUSH},       // DC group
-      {fp[2].section_end[2], SAME_FLUSH},      // AC global
-      {fp[2].section_end[3], NEW_FLUSH},       // AC group 0
-      {fp[2].section_end[4] - 1, SAME_FLUSH},  // partial AC group 1
-      {fp[2].section_end[4], NEW_FLUSH},       // AC group 1
-      {fp[2].section_end[5], NEW_FLUSH},       // AC group 2
+      {fp[1].section_end[0], NO_FLUSH},        // DC global
+      {fp[1].section_end[1] - 1, NO_FLUSH},    // partial DC group
+      {fp[1].section_end[1], NEW_FLUSH},       // DC group
+      {fp[1].section_end[2], SAME_FLUSH},      // AC global
+      {fp[1].section_end[3], NEW_FLUSH},       // AC group 0
+      {fp[1].section_end[4] - 1, SAME_FLUSH},  // partial AC group 1
+      {fp[1].section_end[4], NEW_FLUSH},       // AC group 1
+      {fp[1].section_end[5], NEW_FLUSH},       // AC group 2
       {data.size() - 1, SAME_FLUSH},           // partial AC group 3
       {data.size(), NEW_FLUSH}};               // full image
   VerifyProgression(xsize, ysize, num_channels, pixels, data, breakpoints);
@@ -3893,7 +3891,6 @@ TEST(DecodeTest, ProgressionTestLosslessAlpha) {
   StreamPositions streampos;
   AnalyzeCodestream(data, &streampos);
   const std::vector<FramePositions>& fp = streampos.frames;
-  // We have preview, dc frame and regular frame.
   EXPECT_EQ(1, fp.size());
   EXPECT_EQ(7, fp[0].section_end.size());
   EXPECT_EQ(data.size(), fp[0].section_end[6]);
@@ -3919,97 +3916,6 @@ void VerifyFilePosition(size_t expected_pos, const jxl::PaddedBytes& data,
   EXPECT_EQ(expected_pos, pos);
   EXPECT_EQ(JXL_DEC_SUCCESS,
             JxlDecoderSetInput(dec, data.data() + pos, remaining));
-}
-
-TEST(DecodeTest, InputHandlingTestOneShot) {
-  size_t xsize = 508, ysize = 470;
-  uint32_t num_channels = 3;
-  std::vector<uint8_t> pixels =
-      jxl::test::GetSomeTestImage(xsize, ysize, num_channels, 0);
-  for (int i = 0; i < kCSBF_NUM_ENTRIES; ++i) {
-    printf("Testing with box format %d\n", i);
-    jxl::TestCodestreamParams params;
-    params.cparams.progressive_dc = 1;
-    params.add_preview = true;
-    params.box_format = (CodeStreamBoxFormat)i;
-    jxl::PaddedBytes data = jxl::CreateTestJXLCodestream(
-        jxl::Span<const uint8_t>(pixels.data(), pixels.size()), xsize, ysize,
-        num_channels, params);
-    JxlPixelFormat format = {num_channels, JXL_TYPE_UINT16, JXL_BIG_ENDIAN, 0};
-    StreamPositions streampos;
-    AnalyzeCodestream(data, &streampos);
-    const std::vector<FramePositions>& fp = streampos.frames;
-    // We have preview, dc frame and regular frame.
-    EXPECT_EQ(3, fp.size());
-
-    std::vector<uint8_t> pixels2;
-    pixels2.resize(pixels.size());
-
-    int kNumEvents = 6;
-    int events[] = {
-        JXL_DEC_BASIC_INFO, JXL_DEC_COLOR_ENCODING, JXL_DEC_PREVIEW_IMAGE,
-        JXL_DEC_FRAME,      JXL_DEC_FULL_IMAGE,     JXL_DEC_FRAME_PROGRESSION,
-    };
-    size_t end_positions[] = {
-        streampos.basic_info,     fp[0].frame_start,
-        fp[1].frame_start,        fp[2].toc_end,
-        streampos.codestream_end, streampos.codestream_end};
-    int events_wanted = 0;
-    for (int j = 0; j < kNumEvents; ++j) {
-      events_wanted |= events[j];
-      size_t end_pos = end_positions[j];
-      JxlDecoder* dec = JxlDecoderCreate(nullptr);
-      EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSubscribeEvents(dec, events_wanted));
-      EXPECT_EQ(JXL_DEC_SUCCESS,
-                JxlDecoderSetInput(dec, data.data(), data.size()));
-      EXPECT_EQ(JXL_DEC_BASIC_INFO, JxlDecoderProcessInput(dec));
-      VerifyFilePosition(streampos.basic_info, data, dec);
-      if (j >= 1) {
-        EXPECT_EQ(JXL_DEC_COLOR_ENCODING, JxlDecoderProcessInput(dec));
-        VerifyFilePosition(fp[0].frame_start, data, dec);
-      }
-      if (j >= 2) {
-        EXPECT_EQ(JXL_DEC_NEED_PREVIEW_OUT_BUFFER, JxlDecoderProcessInput(dec));
-        VerifyFilePosition(fp[0].toc_end, data, dec);
-        size_t buffer_size;
-        EXPECT_EQ(JXL_DEC_SUCCESS,
-                  JxlDecoderPreviewOutBufferSize(dec, &format, &buffer_size));
-        EXPECT_GE(pixels2.size(), buffer_size);
-        EXPECT_EQ(JXL_DEC_SUCCESS,
-                  JxlDecoderSetPreviewOutBuffer(dec, &format, pixels2.data(),
-                                                buffer_size));
-        EXPECT_EQ(JXL_DEC_PREVIEW_IMAGE, JxlDecoderProcessInput(dec));
-        VerifyFilePosition(fp[1].frame_start, data, dec);
-      }
-      if (j >= 3) {
-        EXPECT_EQ(JXL_DEC_FRAME, JxlDecoderProcessInput(dec));
-        VerifyFilePosition(fp[2].toc_end, data, dec);
-        if (j >= 5) {
-          EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetProgressiveDetail(dec, kDC));
-        }
-      }
-      if (j >= 4) {
-        EXPECT_EQ(JXL_DEC_NEED_IMAGE_OUT_BUFFER, JxlDecoderProcessInput(dec));
-        VerifyFilePosition(fp[2].toc_end, data, dec);
-        size_t buffer_size;
-        EXPECT_EQ(JXL_DEC_SUCCESS,
-                  JxlDecoderImageOutBufferSize(dec, &format, &buffer_size));
-        EXPECT_EQ(pixels2.size(), buffer_size);
-        EXPECT_EQ(JXL_DEC_SUCCESS,
-                  JxlDecoderSetImageOutBuffer(dec, &format, pixels2.data(),
-                                              pixels2.size()));
-        if (j >= 5) {
-          EXPECT_EQ(JXL_DEC_FRAME_PROGRESSION, JxlDecoderProcessInput(dec));
-          VerifyFilePosition(fp[2].section_end[1], data, dec);
-        }
-        EXPECT_EQ(JXL_DEC_FULL_IMAGE, JxlDecoderProcessInput(dec));
-        VerifyFilePosition(streampos.codestream_end, data, dec);
-      }
-      EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderProcessInput(dec));
-      VerifyFilePosition(end_pos, data, dec);
-      JxlDecoderDestroy(dec);
-    }
-  }
 }
 
 #if JPEGXL_ENABLE_JPEG
@@ -4104,104 +4010,6 @@ TEST(DecodeTest, JXL_TRANSCODE_JPEG_TEST(InputHandlingTestJPEGOneshot)) {
   }
 }
 #endif  // JPEGXL_ENABLE_JPEG
-
-TEST(DecodeTest, InputHandlingTestStreaming) {
-  size_t xsize = 508, ysize = 470;
-  uint32_t num_channels = 3;
-  std::vector<uint8_t> pixels =
-      jxl::test::GetSomeTestImage(xsize, ysize, num_channels, 0);
-  for (int i = 0; i < kCSBF_NUM_ENTRIES; ++i) {
-    printf("Testing with box format %d\n", i);
-    fflush(stdout);
-    jxl::TestCodestreamParams params;
-    params.cparams.progressive_dc = 1;
-    params.box_format = (CodeStreamBoxFormat)i;
-    params.add_preview = true;
-    jxl::PaddedBytes data = jxl::CreateTestJXLCodestream(
-        jxl::Span<const uint8_t>(pixels.data(), pixels.size()), xsize, ysize,
-        num_channels, params);
-    JxlPixelFormat format = {num_channels, JXL_TYPE_UINT16, JXL_BIG_ENDIAN, 0};
-    StreamPositions streampos;
-    AnalyzeCodestream(data, &streampos);
-    const std::vector<FramePositions>& fp = streampos.frames;
-    // We have preview, dc frame and regular frame.
-    EXPECT_EQ(3, fp.size());
-    std::vector<uint8_t> pixels2;
-    pixels2.resize(pixels.size());
-    int events_wanted =
-        (JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING | JXL_DEC_PREVIEW_IMAGE |
-         JXL_DEC_FRAME | JXL_DEC_FULL_IMAGE | JXL_DEC_FRAME_PROGRESSION |
-         JXL_DEC_BOX);
-    for (size_t increment : {1, 7, 27, 1024}) {
-      JxlDecoder* dec = JxlDecoderCreate(nullptr);
-      EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSubscribeEvents(dec, events_wanted));
-      size_t file_pos = 0;
-      size_t box_index = 0;
-      size_t avail_in = 0;
-      for (;;) {
-        const uint8_t* next_in = data.data() + file_pos;
-        EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetInput(dec, next_in, avail_in));
-        JxlDecoderStatus status = JxlDecoderProcessInput(dec);
-        size_t remaining = JxlDecoderReleaseInput(dec);
-        size_t consumed = avail_in - remaining;
-        file_pos += consumed;
-        avail_in += increment;
-        avail_in = std::min<size_t>(avail_in, data.size() - file_pos);
-        if (status == JXL_DEC_BASIC_INFO) {
-          EXPECT_EQ(file_pos, streampos.basic_info);
-        } else if (status == JXL_DEC_COLOR_ENCODING) {
-          EXPECT_EQ(file_pos, streampos.frames[0].frame_start);
-        } else if (status == JXL_DEC_NEED_PREVIEW_OUT_BUFFER) {
-          EXPECT_EQ(file_pos, streampos.frames[0].toc_end);
-          size_t buffer_size;
-          EXPECT_EQ(JXL_DEC_SUCCESS,
-                    JxlDecoderPreviewOutBufferSize(dec, &format, &buffer_size));
-          EXPECT_GE(pixels2.size(), buffer_size);
-          EXPECT_EQ(JXL_DEC_SUCCESS,
-                    JxlDecoderSetPreviewOutBuffer(dec, &format, pixels2.data(),
-                                                  buffer_size));
-        } else if (status == JXL_DEC_PREVIEW_IMAGE) {
-          EXPECT_EQ(file_pos, streampos.frames[1].frame_start);
-        } else if (status == JXL_DEC_FRAME) {
-          EXPECT_EQ(file_pos, streampos.frames[2].toc_end);
-          EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetProgressiveDetail(dec, kDC));
-        } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
-          EXPECT_EQ(file_pos, streampos.frames[2].toc_end);
-          size_t buffer_size;
-          EXPECT_EQ(JXL_DEC_SUCCESS,
-                    JxlDecoderImageOutBufferSize(dec, &format, &buffer_size));
-          EXPECT_EQ(pixels2.size(), buffer_size);
-          EXPECT_EQ(JXL_DEC_SUCCESS,
-                    JxlDecoderSetImageOutBuffer(dec, &format, pixels2.data(),
-                                                pixels2.size()));
-        } else if (status == JXL_DEC_FRAME_PROGRESSION) {
-          EXPECT_EQ(file_pos, streampos.frames[2].section_end[1]);
-        } else if (status == JXL_DEC_FULL_IMAGE) {
-          EXPECT_EQ(file_pos, streampos.codestream_end);
-        } else if (status == JXL_DEC_SUCCESS) {
-          EXPECT_EQ(file_pos, streampos.codestream_end);
-          break;
-        } else if (status == JXL_DEC_NEED_MORE_INPUT) {
-          EXPECT_LT(remaining, 12);
-          if ((i == kCSBF_None && file_pos >= 2) ||
-              (box_index > 0 && box_index < streampos.box_start.size() &&
-               file_pos >= streampos.box_start[box_index - 1] + 12 &&
-               file_pos < streampos.box_start[box_index])) {
-            EXPECT_EQ(remaining, 0);
-          }
-          if (file_pos == data.size()) break;
-        } else if (status == JXL_DEC_BOX) {
-          ASSERT_LT(box_index, streampos.box_start.size());
-          EXPECT_EQ(file_pos, streampos.box_start[box_index++]);
-        } else {
-          printf("Unexpected status: 0x%x\n", (int)status);
-          FAIL();
-        }
-      }
-      JxlDecoderDestroy(dec);
-    }
-  }
-}
 
 TEST(DecodeTest, FlushTest) {
   // Size large enough for multiple groups, required to have progressive

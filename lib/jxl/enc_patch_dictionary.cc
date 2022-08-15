@@ -740,7 +740,6 @@ void RoundtripPatchFrame(Image3F* reference_frame,
   cparams.noise = Override::kOff;
   cparams.modular_mode = true;
   cparams.responsive = 0;
-  cparams.progressive_dc = 0;
   cparams.progressive_mode = false;
   cparams.qprogressive_mode = false;
   // Use gradient predictor and not Predictor::Best.

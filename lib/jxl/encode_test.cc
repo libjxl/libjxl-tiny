@@ -390,13 +390,12 @@ TEST(EncodeTest, frame_settingsTest) {
     EXPECT_EQ(JXL_ENC_SUCCESS,
               JxlEncoderFrameSettingsSetOption(
                   frame_settings, JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC, -1));
-    EXPECT_EQ(JXL_ENC_SUCCESS,
+    EXPECT_EQ(JXL_ENC_ERROR,
               JxlEncoderFrameSettingsSetOption(
                   frame_settings, JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC, 2));
     VerifyFrameEncoding(enc.get(), frame_settings);
     EXPECT_EQ(false, enc->last_used_cparams.responsive);
     EXPECT_EQ(true, enc->last_used_cparams.progressive_mode);
-    EXPECT_EQ(2, enc->last_used_cparams.progressive_dc);
   }
 
   {
@@ -510,9 +509,6 @@ TEST(EncodeTest, LossyEncoderUseOriginalProfileTest) {
     ASSERT_NE(nullptr, enc.get());
     JxlEncoderFrameSettings* frame_settings =
         JxlEncoderFrameSettingsCreate(enc.get(), NULL);
-    EXPECT_EQ(JXL_ENC_SUCCESS,
-              JxlEncoderFrameSettingsSetOption(
-                  frame_settings, JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC, 2));
     VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 4500, true);
   }
   {

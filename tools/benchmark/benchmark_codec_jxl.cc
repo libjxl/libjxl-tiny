@@ -55,7 +55,6 @@ struct JxlArgs {
   bool use_ac_strategy;
   bool qprogressive;  // progressive with shift-quantization.
   bool progressive;
-  int progressive_dc;
 
   Override noise;
   Override dots;
@@ -79,8 +78,6 @@ Status AddCommandLineOptionsJxlCodec(BenchmarkArgs* args) {
                 "Enable quantized progressive mode for AC.", false);
   args->AddFlag(&jxlargs->progressive, "progressive",
                 "Enable progressive mode for AC.", false);
-  args->AddSigned(&jxlargs->progressive_dc, "progressive_dc",
-                  "Enable progressive mode for DC.", -1);
 
   args->AddOverride(&jxlargs->noise, "noise",
                     "Enable(1)/disable(0) noise generation.");
@@ -244,7 +241,6 @@ class JxlCodec : public ImageCodec {
 
     cparams_.progressive_mode = jxlargs->progressive;
     cparams_.qprogressive_mode = jxlargs->qprogressive;
-    cparams_.progressive_dc = jxlargs->progressive_dc;
 
     cparams_.noise = jxlargs->noise;
 

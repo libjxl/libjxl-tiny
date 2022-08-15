@@ -169,8 +169,6 @@ struct CompressParams {
   size_t center_x = static_cast<size_t>(-1);
   size_t center_y = static_cast<size_t>(-1);
 
-  int progressive_dc = -1;
-
   // If on: preserve color of invisible pixels (if off: don't care)
   // Default: on for lossless, off for lossy
   Override keep_invisible = Override::kDefault;
