@@ -715,8 +715,8 @@ class LossyFrameEncoder {
     shared.frame_header.UpdateFlag(false, FrameHeader::kUseDcFrame);
     auto compute_dc_coeffs = [&](const uint32_t group_index,
                                  size_t /* thread */) {
-      modular_frame_encoder->AddVarDCTDC(dc, group_index, /*nl_dc=*/false,
-                                         enc_state_, /*jpeg_transcode=*/true);
+      modular_frame_encoder->AddVarDCTDC(dc, group_index, enc_state_,
+                                         /*jpeg_transcode=*/true);
       modular_frame_encoder->AddACMetadata(group_index, /*jpeg_transcode=*/true,
                                            enc_state_);
     };

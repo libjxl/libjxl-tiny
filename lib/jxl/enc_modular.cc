@@ -1457,90 +1457,22 @@ int QuantizeGradient(const int32_t* qrow, size_t onerow, size_t c, size_t x,
 }
 
 void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
-                                      bool nl_dc, PassesEncoderState* enc_state,
+                                      PassesEncoderState* enc_state,
                                       bool jpeg_transcode) {
   const Rect r = enc_state->shared.DCGroupRect(group_index);
-  extra_dc_precision[group_index] = nl_dc ? 1 : 0;
-  float mul = 1 << extra_dc_precision[group_index];
+  extra_dc_precision[group_index] = 0;
 
   size_t stream_id = ModularStreamId::VarDCTDC(group_index).ID(frame_dim_);
   stream_options_[stream_id].max_chan_size = 0xFFFFFF;
-  stream_options_[stream_id].predictor = Predictor::Weighted;
-  stream_options_[stream_id].wp_tree_mode = ModularOptions::TreeMode::kWPOnly;
-  stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kWPFixedDC;
-  if (cparams_.decoding_speed_tier >= 1) {
-    stream_options_[stream_id].tree_kind =
-        ModularOptions::TreeKind::kGradientFixedDC;
-  }
+  stream_options_[stream_id].predictor = Predictor::Gradient;
+  stream_options_[stream_id].tree_kind =
+      ModularOptions::TreeKind::kGradientFixedDC;
 
   stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 8, 3);
-  if (nl_dc && stream_options_[stream_id].tree_kind ==
-                   ModularOptions::TreeKind::kGradientFixedDC) {
-    JXL_ASSERT(enc_state->shared.frame_header.chroma_subsampling.Is444());
+  if (enc_state->shared.frame_header.chroma_subsampling.Is444()) {
     for (size_t c : {1, 0, 2}) {
-      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c) * mul;
-      float y_factor = enc_state->shared.quantizer.GetDcStep(1) / mul;
-      float cfl_factor = enc_state->shared.cmap.DCFactors()[c];
-      for (size_t y = 0; y < r.ysize(); y++) {
-        int32_t* quant_row =
-            stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c].plane.Row(y);
-        size_t stride = stream_images_[stream_id]
-                            .channel[c < 2 ? c ^ 1 : c]
-                            .plane.PixelsPerRow();
-        const float* row = r.ConstPlaneRow(dc, c, y);
-        if (c == 1) {
-          for (size_t x = 0; x < r.xsize(); x++) {
-            quant_row[x] = QuantizeGradient(quant_row, stride, c, x, y,
-                                            r.xsize(), row[x], inv_factor);
-          }
-        } else {
-          int32_t* quant_row_y =
-              stream_images_[stream_id].channel[0].plane.Row(y);
-          for (size_t x = 0; x < r.xsize(); x++) {
-            quant_row[x] = QuantizeGradient(
-                quant_row, stride, c, x, y, r.xsize(),
-                row[x] - quant_row_y[x] * (y_factor * cfl_factor), inv_factor);
-          }
-        }
-      }
-    }
-  } else if (nl_dc) {
-    JXL_ASSERT(enc_state->shared.frame_header.chroma_subsampling.Is444());
-    for (size_t c : {1, 0, 2}) {
-      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c) * mul;
-      float y_factor = enc_state->shared.quantizer.GetDcStep(1) / mul;
-      float cfl_factor = enc_state->shared.cmap.DCFactors()[c];
-      weighted::Header header;
-      weighted::State wp_state(header, r.xsize(), r.ysize());
-      for (size_t y = 0; y < r.ysize(); y++) {
-        int32_t* quant_row =
-            stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c].plane.Row(y);
-        size_t stride = stream_images_[stream_id]
-                            .channel[c < 2 ? c ^ 1 : c]
-                            .plane.PixelsPerRow();
-        const float* row = r.ConstPlaneRow(dc, c, y);
-        if (c == 1) {
-          for (size_t x = 0; x < r.xsize(); x++) {
-            quant_row[x] = QuantizeWP(quant_row, stride, c, x, y, r.xsize(),
-                                      &wp_state, row[x], inv_factor);
-            wp_state.UpdateErrors(quant_row[x], x, y, r.xsize());
-          }
-        } else {
-          int32_t* quant_row_y =
-              stream_images_[stream_id].channel[0].plane.Row(y);
-          for (size_t x = 0; x < r.xsize(); x++) {
-            quant_row[x] = QuantizeWP(
-                quant_row, stride, c, x, y, r.xsize(), &wp_state,
-                row[x] - quant_row_y[x] * (y_factor * cfl_factor), inv_factor);
-            wp_state.UpdateErrors(quant_row[x], x, y, r.xsize());
-          }
-        }
-      }
-    }
-  } else if (enc_state->shared.frame_header.chroma_subsampling.Is444()) {
-    for (size_t c : {1, 0, 2}) {
-      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c) * mul;
-      float y_factor = enc_state->shared.quantizer.GetDcStep(1) / mul;
+      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c);
+      float y_factor = enc_state->shared.quantizer.GetDcStep(1);
       float cfl_factor = enc_state->shared.cmap.DCFactors()[c];
       for (size_t y = 0; y < r.ysize(); y++) {
         int32_t* quant_row =
@@ -1570,7 +1502,7 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
               enc_state->shared.frame_header.chroma_subsampling.HShift(c),
           r.ysize() >>
               enc_state->shared.frame_header.chroma_subsampling.VShift(c));
-      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c) * mul;
+      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c);
       size_t ys = rect.ysize();
       size_t xs = rect.xsize();
       Channel& ch = stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c];
@@ -1588,8 +1520,8 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
   }
 
   DequantDC(r, &enc_state->shared.dc_storage, &enc_state->shared.quant_dc,
-            stream_images_[stream_id], enc_state->shared.quantizer.MulDC(),
-            1.0 / mul, enc_state->shared.cmap.DCFactors(),
+            stream_images_[stream_id], enc_state->shared.quantizer.MulDC(), 1.0,
+            enc_state->shared.cmap.DCFactors(),
             enc_state->shared.frame_header.chroma_subsampling,
             enc_state->shared.block_ctx_map);
 }
