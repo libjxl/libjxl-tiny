@@ -33,10 +33,5 @@ void DCFromLowestFrequencies(AcStrategy::Type strategy, const float* block,
                                                        dc_stride);
 }
 
-HWY_EXPORT(AFVDCT4x4);
-void AFVDCT4x4(const float* JXL_RESTRICT pixels, float* JXL_RESTRICT coeffs) {
-  return HWY_DYNAMIC_DISPATCH(AFVDCT4x4)(pixels, coeffs);
-}
 #endif  // HWY_ONCE
-
 }  // namespace jxl
