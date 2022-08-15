@@ -358,7 +358,7 @@ TEST(JxlTest, RoundtripMultiGroup) {
   };
 
   auto run_wombat = std::async(std::launch::async, test, SpeedTier::kWombat,
-                               2.0f, 34000u, 18);
+                               2.0f, 34500u, 18);
 }
 
 TEST(JxlTest, RoundtripRGBToGrayscale) {
