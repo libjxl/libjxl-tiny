@@ -219,10 +219,6 @@ uint64_t FrameFlagsFromParams(const CompressParams& cparams) {
     flags |= FrameHeader::kNoise;
   }
 
-  if (cparams.progressive_dc > 0 && cparams.modular_mode == false) {
-    flags |= FrameHeader::kUseDcFrame;
-  }
-
   return flags;
 }
 
@@ -311,14 +307,8 @@ Status MakeFrameHeader(const CompressParams& cparams,
   JXL_RETURN_IF_ERROR(LoopFilterFromParams(cparams, frame_header));
 
   frame_header->dc_level = frame_info.dc_level;
-  if (frame_header->dc_level > 2) {
-    // With 3 or more progressive_dc frames, the implementation does not yet
-    // work, see enc_cache.cc.
-    return JXL_FAILURE("progressive_dc > 2 is not yet supported");
-  }
-  if (cparams.progressive_dc > 0 &&
-      (cparams.ec_resampling != 1 || cparams.resampling != 1)) {
-    return JXL_FAILURE("Resampling not supported with DC frames");
+  if (frame_header->dc_level > 0) {
+    return JXL_FAILURE("progressive dc is not supported");
   }
   if (cparams.resampling != 1 && cparams.resampling != 2 &&
       cparams.resampling != 4 && cparams.resampling != 8) {
@@ -1130,28 +1120,11 @@ Status EncodeFrame(const CompressParams& cparams_orig,
 
   JXL_RETURN_IF_ERROR(ParamsPostInit(&cparams));
 
-  if (cparams.progressive_dc < 0) {
-    if (cparams.progressive_dc != -1) {
-      return JXL_FAILURE("Invalid progressive DC setting value (%d)",
-                         cparams.progressive_dc);
-    }
-    cparams.progressive_dc = 0;
-    // Enable progressive_dc for lower qualities, except for fast speeds where
-    // the modular encoder uses fixed tree.
-    if (cparams.speed_tier <= SpeedTier::kCheetah &&
-        cparams.butteraugli_distance >=
-            kMinButteraugliDistanceForProgressiveDc) {
-      cparams.progressive_dc = 1;
-    }
-  }
   if (cparams.ec_resampling < cparams.resampling) {
     cparams.ec_resampling = cparams.resampling;
   }
-  if (cparams.resampling > 1 || frame_info.is_preview) {
-    cparams.progressive_dc = 0;
-  }
 
-  if (frame_info.dc_level + cparams.progressive_dc > 4) {
+  if (frame_info.dc_level > 0) {
     return JXL_FAILURE("Too many levels of progressive DC");
   }
 

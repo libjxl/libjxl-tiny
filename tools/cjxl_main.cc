@@ -204,11 +204,6 @@ struct CompressArgs {
         &qprogressive_ac, &SetBooleanTrue, 1);
 
     cmdline->AddOptionValue(
-        '\0', "progressive_dc", "num_dc_frames",
-        "Progressive-DC setting. Valid values are: -1, 0, 1, 2.",
-        &progressive_dc, &ParseSigned, 1);
-
-    cmdline->AddOptionValue(
         'm', "modular", "0|1",
         "Use modular mode (not provided = encoder chooses, 0 = enforce VarDCT, "
         "1 = enforce modular mode).",
@@ -441,7 +436,6 @@ struct CompressArgs {
   bool progressive = false;
   bool progressive_ac = false;
   bool qprogressive_ac = false;
-  int32_t progressive_dc = -1;
   bool modular_lossy_palette = false;
   int32_t premultiply = -1;
   bool already_downsampled = false;
@@ -888,11 +882,6 @@ int main(int argc, char** argv) {
           cmdline.GetOption(args.opt_responsive_id)->matched();
       int32_t responsive = args.responsive ? 1 : 0;
 
-      process_flag(
-          "progressive_dc", args.progressive_dc,
-          JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC, [](int64_t x) -> std::string {
-            return (-1 <= x && x <= 2) ? "" : "Valid range is {-1, 0, 1, 2}.\n";
-          });
       SetFlagFrameOptionOrDie(
           "progressive_ac", static_cast<int32_t>(args.progressive_ac),
           jxl_encoder_frame_settings, JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC);
