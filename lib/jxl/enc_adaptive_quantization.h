@@ -32,12 +32,6 @@
 
 namespace jxl {
 
-// Computes the decoded image for a given set of compression parameters. Mainly
-// used in the FindBestQuantization loops and in some tests.
-// TODO(veluca): this doesn't seem the best possible file for this function.
-ImageBundle RoundtripImage(const Image3F& opsin, PassesEncoderState* enc_state,
-                           const JxlCmsInterface& cms, ThreadPool* pool);
-
 // Returns an image subsampled by kBlockDim in each direction. If the value
 // at pixel (x,y) in the returned image is greater than 1.0, it means that
 // more fine-grained quantization should be used in the corresponding block
@@ -52,15 +46,6 @@ float InitialQuantDC(float butteraugli_target);
 
 void AdjustQuantField(const AcStrategyImage& ac_strategy, const Rect& rect,
                       ImageF* quant_field);
-
-// Returns a quantizer that uses an adjusted version of the provided
-// quant_field. Also computes the dequant_map corresponding to the given
-// dequant_float_map and chosen quantization levels.
-// `linear` is only used in Kitten mode or slower.
-void FindBestQuantizer(const ImageBundle* linear, const Image3F& opsin,
-                       PassesEncoderState* enc_state,
-                       const JxlCmsInterface& cms, ThreadPool* pool,
-                       AuxOut* aux_out, double rescale = 1.0);
 
 }  // namespace jxl
 

@@ -252,41 +252,6 @@ TEST(EncodeTest, EncoderResetTest) {
                       false);
 }
 
-TEST(EncodeTest, CmsTest) {
-  JxlEncoderPtr enc = JxlEncoderMake(nullptr);
-  EXPECT_NE(nullptr, enc.get());
-  bool cms_called = false;
-  JxlCmsInterface cms = jxl::GetJxlCms();
-  struct InitData {
-    void* original_init_data;
-    jpegxl_cms_init_func original_init;
-    bool* cms_called;
-  };
-  InitData init_data = {/*original_init_data=*/cms.init_data,
-                        /*original_init=*/cms.init,
-                        /*cms_called=*/&cms_called};
-  cms.init_data = &init_data;
-  cms.init = +[](void* raw_init_data, size_t num_threads,
-                 size_t pixels_per_thread, const JxlColorProfile* input_profile,
-                 const JxlColorProfile* output_profile,
-                 float intensity_target) {
-    const InitData* init_data = static_cast<const InitData*>(raw_init_data);
-    *init_data->cms_called = true;
-    return init_data->original_init(init_data->original_init_data, num_threads,
-                                    pixels_per_thread, input_profile,
-                                    output_profile, intensity_target);
-  };
-  JxlEncoderSetCms(enc.get(), cms);
-  JxlEncoderFrameSettings* frame_settings =
-      JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
-  JxlEncoderSetFrameLossless(frame_settings, false);
-  ASSERT_EQ(JXL_ENC_SUCCESS,
-            JxlEncoderFrameSettingsSetOption(frame_settings,
-                                             JXL_ENC_FRAME_SETTING_EFFORT, 8));
-  VerifyFrameEncoding(enc.get(), frame_settings);
-  EXPECT_TRUE(cms_called);
-}
-
 TEST(EncodeTest, frame_settingsTest) {
   {
     JxlEncoderPtr enc = JxlEncoderMake(nullptr);
@@ -510,16 +475,6 @@ TEST(EncodeTest, LossyEncoderUseOriginalProfileTest) {
     JxlEncoderFrameSettings* frame_settings =
         JxlEncoderFrameSettingsCreate(enc.get(), NULL);
     VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 4500, true);
-  }
-  {
-    JxlEncoderPtr enc = JxlEncoderMake(nullptr);
-    ASSERT_NE(nullptr, enc.get());
-    JxlEncoderFrameSettings* frame_settings =
-        JxlEncoderFrameSettingsCreate(enc.get(), NULL);
-    ASSERT_EQ(JXL_ENC_SUCCESS,
-              JxlEncoderFrameSettingsSetOption(
-                  frame_settings, JXL_ENC_FRAME_SETTING_EFFORT, 8));
-    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 3700, true);
   }
 }
 

@@ -50,23 +50,14 @@ struct HistogramParams {
     if (tier > SpeedTier::kFalcon) {
       clustering = ClusteringType::kFastest;
       lz77_method = LZ77Method::kNone;
-    } else if (tier > SpeedTier::kTortoise) {
-      clustering = ClusteringType::kFast;
-    } else {
-      clustering = ClusteringType::kBest;
-    }
-    if (tier > SpeedTier::kTortoise) {
-      uint_method = HybridUintMethod::kNone;
-    }
-    if (tier >= SpeedTier::kSquirrel) {
-      ans_histogram_strategy = ANSHistogramStrategy::kApproximate;
     }
   }
 
-  ClusteringType clustering = ClusteringType::kBest;
-  HybridUintMethod uint_method = HybridUintMethod::kBest;
+  ClusteringType clustering = ClusteringType::kFast;
+  HybridUintMethod uint_method = HybridUintMethod::kNone;
   LZ77Method lz77_method = LZ77Method::kRLE;
-  ANSHistogramStrategy ans_histogram_strategy = ANSHistogramStrategy::kPrecise;
+  ANSHistogramStrategy ans_histogram_strategy =
+      ANSHistogramStrategy::kApproximate;
   std::vector<size_t> image_widths;
   size_t max_histograms = ~0;
   bool force_huffman = false;

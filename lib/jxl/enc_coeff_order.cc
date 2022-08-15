@@ -66,7 +66,7 @@ void ComputeCoeffOrder(SpeedTier speed, const ACImage& acs,
   double block_fraction = 1.0f;
   // TODO(veluca): figure out why sampling blocks if non-8x8s are used makes
   // encoding significantly less dense.
-  if (speed >= SpeedTier::kSquirrel && used_orders == 1) {
+  if (used_orders == 1) {
     block_fraction = 0.5f;
   }
   // No need to compute number of zero coefficients if all orders are the
