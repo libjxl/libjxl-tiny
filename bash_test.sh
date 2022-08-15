@@ -34,8 +34,8 @@ test_includes() {
 
       # Check that local files don't use the full path to third_party/
       # directory since the installed versions will not have that path.
-      # Add an exception for third_party/dirent.h.
-      if grep -v -F 'third_party/dirent.h' "$f" | \
+      # Add an exception for third_party/dirent.h and third_party/apngdis.
+      if grep -v -F 'third_party/dirent.h' "$f" | grep -v 'third_party/apngdis' | \
           grep -i -H -n -E '#include\s*[<"]third_party/' >&2 &&
           [[ $ret -eq 0 ]]; then
         cat >&2 <<EOF
