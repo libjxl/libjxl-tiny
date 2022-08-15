@@ -55,19 +55,6 @@ jobs:
               -DJPEGXL_ENABLE_VIEWERS=OFF
           - name: asan
             skip_install: true
-          - name: coverage
-            apt_pkgs: gcovr
-            # Coverage builds require a bit more RAM.
-            env_test_stack_size: 2048
-          # Build with support for decoding to JPEG bytes disabled. Produces a
-          # smaller build if only decoding to pixels is needed.
-          - name: release-nojpeg
-            mode: release
-            cxxflags: -DJXL_DEBUG_ON_ABORT=0
-            cmake_args: >-
-              -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF
-              -DJPEGXL_ENABLE_PLUGINS=OFF
-              -DJPEGXL_ENABLE_VIEWERS=OFF
           # Builds with gcc in release mode
           - name: release:gcc8
             mode: release
@@ -264,12 +251,6 @@ jobs:
         include:
          - msystem: mingw64
          - msystem: clang64
-         - msystem: mingw32
-           # TODO(eustas): investigate HWY Mul failures
-           disable_tests: HwyMulTestGroup/HwyMulTest\.TestAllMulHigh/EMU128|HwyMulTestGroup/HwyMulTest\.TestAllMulFixedPoint15/EMU128
-         - msystem: clang32
-           # TODO(eustas): investigate HWY Sort and JXL ANS failures
-           disable_tests: SortTestGroup/SortTest\.TestAllSort/.*|ANSTest\.RandomUnbalancedStreamRoundtrip3|ANSTest\.RandomUnbalancedStreamRoundtripBig
 
     defaults:
       run:
@@ -319,96 +300,3 @@ jobs:
            contains(github.event.pull_request.labels.*.name, 'CI:full'))
         run: ctest --test-dir build --parallel 2 --output-on-failure -E "${{ matrix.disable_tests }}"
 
-  wasm32_build:
-    name: WASM wasm32/${{ matrix.variant }}
-    runs-on: ubuntu-latest
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      BUILD_TARGET: wasm32
-      EM_VERSION: 3.1.1
-      NODE_VERSION: 18
-
-    strategy:
-      matrix:
-        include:
-          - variant: scalar
-          - variant: simd
-
-    steps:
-    - uses: actions/checkout@v2
-      with:
-        submodules: true
-        fetch-depth: 1
-    - name: Install build deps
-      shell: bash
-      run: |
-        set -x
-        sudo apt update
-        pkgs=(
-          # Build dependencies
-          ccache
-          cmake
-          doxygen
-          ninja-build
-          pkg-config
-        )
-        DEBIAN_FRONTEND=noninteractive sudo apt install -y "${pkgs[@]}"
-
-    - name: Git environment
-      id: git-env
-      run: |
-        echo "::set-output name=parent::$(git rev-parse ${{ github.sha }}^)"
-      shell: bash
-    - name: ccache
-      uses: actions/cache@v2
-      with:
-        path: ${{ env.CCACHE_DIR }}
-        key: build-wasm-${{ runner.os }}-${{ github.sha }}-${{ matrix.variant }}
-        restore-keys: |
-          build-wasm-${{ runner.os }}-${{ steps.git-env.outputs.parent }}-${{ matrix.variant }}
-
-    - name: Install node
-      uses: actions/setup-node@v3
-      with:
-        node-version: ${{env.NODE_VERSION}}
-
-    - name: Get non-EMSDK node path
-      run: which node >> $HOME/.base_node_path
-
-    - name: Install emsdk
-      uses: mymindstorm/setup-emsdk@v11
-      # TODO(deymo): We could cache this action but it doesn't work when running
-      # in a matrix.
-      with:
-        version: ${{env.EM_VERSION}}
-        no-cache: true
-
-    - name: Set EMSDK node version
-      run: |
-        echo "NODE_JS='$(cat $HOME/.base_node_path)'" >> $EM_CONFIG
-        emsdk construct_env
-
-    # TODO(deymo): Build and install other dependencies like libpng, libjpeg,
-    # etc.
-    - name: Build
-      run: |
-        mkdir -p ${CCACHE_DIR}
-        echo "max_size = 200M" > ${CCACHE_DIR}/ccache.conf
-        if [[ "${{ matrix.variant }}" == "simd" ]]; then
-          export ENABLE_WASM_SIMD=1
-        fi
-        ./ci.sh release \
-          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-          -DCMAKE_C_COMPILER_LAUNCHER=ccache
-      env:
-        SKIP_TEST: 1
-    - name: ccache stats
-      run: ccache --show-stats
-
-    - name: Test
-      if: |
-        github.event_name == 'push' ||
-        (github.event_name == 'pull_request' &&
-         contains(github.event.pull_request.labels.*.name, 'CI:full'))
-      run: |
-        ./ci.sh test

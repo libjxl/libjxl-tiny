@@ -49,7 +49,6 @@
 #include "lib/jxl/enc_modular.h"
 #include "lib/jxl/enc_noise.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_patch_dictionary.h"
 #include "lib/jxl/enc_photon_noise.h"
 #include "lib/jxl/enc_quant_weights.h"
 #include "lib/jxl/enc_splines.h"
@@ -1296,9 +1295,6 @@ Status EncodeFrame(const CompressParams& cparams_orig,
 
   writer->AppendByteAligned(lossy_frame_encoder.State()->special_frames);
   frame_header->UpdateFlag(
-      lossy_frame_encoder.State()->shared.image_features.patches.HasAny(),
-      FrameHeader::kPatches);
-  frame_header->UpdateFlag(
       lossy_frame_encoder.State()->shared.image_features.splines.HasAny(),
       FrameHeader::kSplines);
   JXL_RETURN_IF_ERROR(WriteFrameHeader(*frame_header, writer, aux_out));
@@ -1321,12 +1317,6 @@ Status EncodeFrame(const CompressParams& cparams_orig,
     return get_output(AcGroupIndex(pass, group, frame_dim.num_groups,
                                    frame_dim.num_dc_groups, has_ac_global));
   };
-
-  if (frame_header->flags & FrameHeader::kPatches) {
-    PatchDictionaryEncoder::Encode(
-        lossy_frame_encoder.State()->shared.image_features.patches,
-        get_output(0), kLayerDictionary, aux_out);
-  }
 
   if (frame_header->flags & FrameHeader::kSplines) {
     EncodeSplines(lossy_frame_encoder.State()->shared.image_features.splines,
