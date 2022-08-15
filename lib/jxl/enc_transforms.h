@@ -26,8 +26,6 @@ void TransformFromPixels(const AcStrategy::Type strategy,
 void DCFromLowestFrequencies(AcStrategy::Type strategy, const float* block,
                              float* dc, size_t dc_stride);
 
-void AFVDCT4x4(const float* JXL_RESTRICT pixels, float* JXL_RESTRICT coeffs);
-
 }  // namespace jxl
 
 #endif  // LIB_JXL_ENC_TRANSFORMS_H_

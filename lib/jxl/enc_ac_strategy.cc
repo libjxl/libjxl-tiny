@@ -505,30 +505,6 @@ uint8_t FindBest8x8Transform(size_t x, size_t y, int encoding_speed_tier,
           8.0f,
           0.81217614513585534f,
       },
-      {
-          AcStrategy::Type::AFV0,
-          4,
-          3.0f,
-          0.70086131125719425f,
-      },
-      {
-          AcStrategy::Type::AFV1,
-          4,
-          3.0f,
-          0.70086131125719425f,
-      },
-      {
-          AcStrategy::Type::AFV2,
-          4,
-          3.0f,
-          0.70086131125719425f,
-      },
-      {
-          AcStrategy::Type::AFV3,
-          4,
-          3.0f,
-          0.70086131125719425f,
-      },
   };
   double best = 1e30;
   uint8_t best_tx = kTransforms8x8[0].type;
@@ -1089,10 +1065,6 @@ void AcStrategyHeuristics::Finalize(AuxOut* aux_out) {
     aux_out->num_dct4x8_blocks =
         ac_strategy.CountBlocks(AcStrategy::Type::DCT4X8) +
         ac_strategy.CountBlocks(AcStrategy::Type::DCT8X4);
-    aux_out->num_afv_blocks = ac_strategy.CountBlocks(AcStrategy::Type::AFV0) +
-                              ac_strategy.CountBlocks(AcStrategy::Type::AFV1) +
-                              ac_strategy.CountBlocks(AcStrategy::Type::AFV2) +
-                              ac_strategy.CountBlocks(AcStrategy::Type::AFV3);
     aux_out->num_dct8_blocks = ac_strategy.CountBlocks(AcStrategy::Type::DCT);
     aux_out->num_dct8x16_blocks =
         ac_strategy.CountBlocks(AcStrategy::Type::DCT8X16) +
