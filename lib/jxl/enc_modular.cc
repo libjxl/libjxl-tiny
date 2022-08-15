@@ -26,7 +26,6 @@
 #include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_cluster.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_patch_dictionary.h"
 #include "lib/jxl/enc_quant_weights.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/gaborish.h"
@@ -475,15 +474,6 @@ Status ModularFrameEncoder::ComputeEncodingData(
 
   if (do_color && frame_header.loop_filter.gab) {
     GaborishInverse(color, 0.9908511000000001f, pool);
-  }
-
-  if (do_color && metadata.bit_depth.bits_per_sample <= 16 &&
-      cparams_.speed_tier < SpeedTier::kCheetah &&
-      cparams_.decoding_speed_tier < 2) {
-    FindBestPatchDictionary(*color, enc_state, cms, nullptr, aux_out,
-                            cparams_.color_transform == ColorTransform::kXYB);
-    PatchDictionaryEncoder::SubtractFrom(
-        enc_state->shared.image_features.patches, color);
   }
 
   // Convert ImageBundle to modular Image object

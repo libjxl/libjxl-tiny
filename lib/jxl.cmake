@@ -272,10 +272,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_comparator.h
   jxl/enc_context_map.cc
   jxl/enc_context_map.h
-  jxl/enc_detect_dots.cc
-  jxl/enc_detect_dots.h
-  jxl/enc_dot_dictionary.cc
-  jxl/enc_dot_dictionary.h
   jxl/enc_entropy_coder.cc
   jxl/enc_entropy_coder.h
   jxl/enc_external_image.cc
@@ -301,8 +297,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_noise.cc
   jxl/enc_noise.h
   jxl/enc_params.h
-  jxl/enc_patch_dictionary.cc
-  jxl/enc_patch_dictionary.h
   jxl/enc_photon_noise.cc
   jxl/enc_photon_noise.h
   jxl/enc_quant_weights.cc

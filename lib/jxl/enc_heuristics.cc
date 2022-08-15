@@ -20,7 +20,6 @@
 #include "lib/jxl/enc_chroma_from_luma.h"
 #include "lib/jxl/enc_modular.h"
 #include "lib/jxl/enc_noise.h"
-#include "lib/jxl/enc_patch_dictionary.h"
 #include "lib/jxl/enc_photon_noise.h"
 #include "lib/jxl/enc_quant_weights.h"
 #include "lib/jxl/enc_splines.h"
@@ -773,13 +772,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
     JXL_RETURN_IF_ERROR(shared.image_features.splines.InitializeDrawCache(
         opsin->xsize(), opsin->ysize(), shared.cmap));
     shared.image_features.splines.SubtractFrom(opsin);
-  }
-
-  // Find and subtract patches/dots.
-  if (ApplyOverride(cparams.patches,
-                    cparams.speed_tier <= SpeedTier::kSquirrel)) {
-    FindBestPatchDictionary(*opsin, enc_state, cms, pool, aux_out);
-    PatchDictionaryEncoder::SubtractFrom(shared.image_features.patches, opsin);
   }
 
   static const float kAcQuant = 0.79f;

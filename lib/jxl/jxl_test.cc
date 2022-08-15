@@ -610,64 +610,6 @@ TEST(JxlTest, RoundtripSmallNoGaborish) {
               IsSlightlyBelow(1.2));
 }
 
-TEST(JxlTest, RoundtripSmallPatchesAlpha) {
-  ThreadPool* pool = nullptr;
-  CodecInOut io;
-  io.metadata.m.color_encoding = ColorEncoding::LinearSRGB();
-  Image3F black_with_small_lines(256, 256);
-  ImageF alpha(black_with_small_lines.xsize(), black_with_small_lines.ysize());
-  ZeroFillImage(&black_with_small_lines);
-  // This pattern should be picked up by the patch detection heuristics.
-  for (size_t y = 0; y < black_with_small_lines.ysize(); y++) {
-    float* JXL_RESTRICT row = black_with_small_lines.PlaneRow(1, y);
-    for (size_t x = 0; x < black_with_small_lines.xsize(); x++) {
-      if (x % 4 == 0 && (y / 32) % 4 == 0) row[x] = 127.0f;
-    }
-  }
-  io.metadata.m.SetAlphaBits(8);
-  io.SetFromImage(std::move(black_with_small_lines),
-                  ColorEncoding::LinearSRGB());
-  FillImage(1.0f, &alpha);
-  io.Main().SetAlpha(std::move(alpha), /*alpha_is_premultiplied=*/false);
-
-  CompressParams cparams;
-  cparams.speed_tier = SpeedTier::kSquirrel;
-  cparams.butteraugli_distance = 0.1f;
-
-  CodecInOut io2;
-  EXPECT_LE(Roundtrip(&io, cparams, {}, pool, &io2), 2000u);
-  EXPECT_THAT(ButteraugliDistance(io, io2, cparams.ba_params, GetJxlCms(),
-                                  /*distmap=*/nullptr, pool),
-              IsSlightlyBelow(0.04f));
-}
-
-TEST(JxlTest, RoundtripSmallPatches) {
-  ThreadPool* pool = nullptr;
-  CodecInOut io;
-  io.metadata.m.color_encoding = ColorEncoding::LinearSRGB();
-  Image3F black_with_small_lines(256, 256);
-  ZeroFillImage(&black_with_small_lines);
-  // This pattern should be picked up by the patch detection heuristics.
-  for (size_t y = 0; y < black_with_small_lines.ysize(); y++) {
-    float* JXL_RESTRICT row = black_with_small_lines.PlaneRow(1, y);
-    for (size_t x = 0; x < black_with_small_lines.xsize(); x++) {
-      if (x % 4 == 0 && (y / 32) % 4 == 0) row[x] = 127.0f;
-    }
-  }
-  io.SetFromImage(std::move(black_with_small_lines),
-                  ColorEncoding::LinearSRGB());
-
-  CompressParams cparams;
-  cparams.speed_tier = SpeedTier::kSquirrel;
-  cparams.butteraugli_distance = 0.1f;
-
-  CodecInOut io2;
-  EXPECT_LE(Roundtrip(&io, cparams, {}, pool, &io2), 2000u);
-  EXPECT_THAT(ButteraugliDistance(io, io2, cparams.ba_params, GetJxlCms(),
-                                  /*distmap=*/nullptr, pool),
-              IsSlightlyBelow(0.04f));
-}
-
 // Test header encoding of original bits per sample
 TEST(JxlTest, RoundtripImageBundleOriginalBits) {
   ThreadPool* pool = nullptr;
@@ -789,7 +731,7 @@ TEST(JxlTest, RoundtripGrayscale) {
     EXPECT_LE(compressed.size(), 1300u);
     EXPECT_THAT(ButteraugliDistance(io, io2, cparams.ba_params, GetJxlCms(),
                                     /*distmap=*/nullptr, pool),
-                IsSlightlyBelow(6.0));
+                IsSlightlyBelow(8.0));
   }
 
   {
