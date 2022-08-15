@@ -358,7 +358,7 @@ TEST(JxlTest, RoundtripMultiGroup) {
   };
 
   auto run_wombat = std::async(std::launch::async, test, SpeedTier::kWombat,
-                               2.0f, 34500u, 18);
+                               2.0f, 34500u, 18.5);
 }
 
 TEST(JxlTest, RoundtripRGBToGrayscale) {
@@ -377,7 +377,7 @@ TEST(JxlTest, RoundtripRGBToGrayscale) {
 
   CodecInOut io2;
   EXPECT_FALSE(io.Main().IsGray());
-  EXPECT_LE(Roundtrip(&io, cparams, dparams, &pool, &io2), 55000u);
+  EXPECT_LE(Roundtrip(&io, cparams, dparams, &pool, &io2), 55100u);
   EXPECT_TRUE(io2.Main().IsGray());
 
   // Convert original to grayscale here, because TransformTo refuses to
@@ -413,7 +413,7 @@ TEST(JxlTest, RoundtripLargeFast) {
   cparams.speed_tier = SpeedTier::kSquirrel;
 
   CodecInOut io2;
-  EXPECT_LE(Roundtrip(&io, cparams, {}, &pool, &io2), 450800u);
+  EXPECT_LE(Roundtrip(&io, cparams, {}, &pool, &io2), 460200u);
 }
 
 TEST(JxlTest, RoundtripDotsForceEpf) {
@@ -1416,7 +1416,7 @@ TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression444)) {
   ThreadPoolInternal pool(8);
   const PaddedBytes orig = ReadTestData("jxl/flower/flower.png.im_q85_444.jpg");
   // JPEG size is 696,659 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 570000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 582000u);
 }
 
 #if JPEGXL_ENABLE_JPEG
@@ -1539,7 +1539,7 @@ TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression420)) {
   ThreadPoolInternal pool(8);
   const PaddedBytes orig = ReadTestData("jxl/flower/flower.png.im_q85_420.jpg");
   // JPEG size is 546,797 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 460000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 461000u);
 }
 
 TEST(JxlTest,
@@ -1548,7 +1548,7 @@ TEST(JxlTest,
   const PaddedBytes orig =
       ReadTestData("jxl/flower/flower.png.im_q85_luma_subsample.jpg");
   // JPEG size is 400,724 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 330000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 334000u);
 }
 
 TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression444_12)) {
@@ -1557,14 +1557,14 @@ TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression444_12)) {
   const PaddedBytes orig =
       ReadTestData("jxl/flower/flower.png.im_q85_444_1x2.jpg");
   // JPEG size is 703,874 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 570000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 582000u);
 }
 
 TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression422)) {
   ThreadPoolInternal pool(8);
   const PaddedBytes orig = ReadTestData("jxl/flower/flower.png.im_q85_422.jpg");
   // JPEG size is 522,057 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 500000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 508000u);
 }
 
 TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression440)) {
@@ -1589,7 +1589,7 @@ TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression420Progr)) {
   const PaddedBytes orig =
       ReadTestData("jxl/flower/flower.png.im_q85_420_progr.jpg");
   // JPEG size is 522,057 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 460000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 461000u);
 }
 
 }  // namespace

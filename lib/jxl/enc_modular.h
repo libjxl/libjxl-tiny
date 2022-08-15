@@ -43,7 +43,7 @@ class ModularFrameEncoder {
   // input DC image, not quantized; the group is specified by `group_index`, and
   // `nl_dc` decides whether to apply a near-lossless processing to the DC or
   // not.
-  void AddVarDCTDC(const Image3F& dc, size_t group_index, bool nl_dc,
+  void AddVarDCTDC(const Image3F& dc, size_t group_index,
                    PassesEncoderState* enc_state, bool jpeg_transcode);
   // Creates a modular image for the AC metadata of the given group
   // (`group_index`).
