@@ -123,10 +123,6 @@ struct CompressParams {
   float uniform_quant = 0.0f;
   float quant_border_bias = 0.0f;
 
-  // Try to achieve a maximum pixel-by-pixel error on each channel.
-  bool max_error_mode = false;
-  float max_error[3] = {0.0, 0.0, 0.0};
-
   SpeedTier speed_tier = SpeedTier::kSquirrel;
   int brotli_effort = -1;
 

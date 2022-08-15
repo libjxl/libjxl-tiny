@@ -363,18 +363,11 @@ ModularFrameEncoder::ModularFrameEncoder(const FrameHeader& frame_header,
     }
     switch (cparams_.speed_tier) {
       case SpeedTier::kSquirrel:
+      case SpeedTier::kKitten:
+      case SpeedTier::kTortoise:
         cparams_.options.splitting_heuristics_properties.assign(
             prop_order.begin(), prop_order.begin() + 8);
         cparams_.options.max_property_values = 32;
-        break;
-      case SpeedTier::kKitten:
-        cparams_.options.splitting_heuristics_properties.assign(
-            prop_order.begin(), prop_order.begin() + 10);
-        cparams_.options.max_property_values = 64;
-        break;
-      case SpeedTier::kTortoise:
-        cparams_.options.splitting_heuristics_properties = prop_order;
-        cparams_.options.max_property_values = 256;
         break;
       default:
         cparams_.options.splitting_heuristics_properties.assign(
@@ -382,26 +375,17 @@ ModularFrameEncoder::ModularFrameEncoder(const FrameHeader& frame_header,
         cparams_.options.max_property_values = 16;
         break;
     }
-    if (cparams_.speed_tier > SpeedTier::kTortoise) {
-      // Gradient in previous channels.
-      for (int i = 0; i < cparams_.options.max_properties; i++) {
-        cparams_.options.splitting_heuristics_properties.push_back(
-            kNumNonrefProperties + i * 4 + 3);
-      }
-    } else {
-      // All the extra properties in Tortoise mode.
-      for (int i = 0; i < cparams_.options.max_properties * 4; i++) {
-        cparams_.options.splitting_heuristics_properties.push_back(
-            kNumNonrefProperties + i);
-      }
+    // Gradient in previous channels.
+    for (int i = 0; i < cparams_.options.max_properties; i++) {
+      cparams_.options.splitting_heuristics_properties.push_back(
+          kNumNonrefProperties + i * 4 + 3);
     }
   }
 
   if (cparams_.options.predictor == static_cast<Predictor>(-1)) {
     // no explicit predictor(s) given, set a good default
-    if ((cparams_.speed_tier <= SpeedTier::kTortoise ||
-         cparams_.modular_mode == false) &&
-        cparams_.IsLossless() && cparams_.responsive == false) {
+    if (cparams_.modular_mode == false && cparams_.IsLossless() &&
+        cparams_.responsive == false) {
       // TODO(veluca): allow all predictors that don't break residual
       // multipliers in lossy mode.
       cparams_.options.predictor = Predictor::Variable;
@@ -1127,30 +1111,24 @@ Status ModularFrameEncoder::EncodeGlobalInfo(BitWriter* writer,
 
   // Write tree
   HistogramParams params;
-  if (cparams_.speed_tier > SpeedTier::kKitten) {
-    params.clustering = HistogramParams::ClusteringType::kFast;
-    params.ans_histogram_strategy =
-        cparams_.speed_tier > SpeedTier::kThunder
-            ? HistogramParams::ANSHistogramStrategy::kFast
-            : HistogramParams::ANSHistogramStrategy::kApproximate;
-    params.lz77_method =
-        cparams_.decoding_speed_tier >= 3 && cparams_.modular_mode
-            ? (cparams_.speed_tier >= SpeedTier::kFalcon
-                   ? HistogramParams::LZ77Method::kRLE
-                   : HistogramParams::LZ77Method::kLZ77)
-            : HistogramParams::LZ77Method::kNone;
-    // Near-lossless DC, as well as modular mode, require choosing hybrid uint
-    // more carefully.
-    if ((!extra_dc_precision.empty() && extra_dc_precision[0] != 0) ||
-        (cparams_.modular_mode && cparams_.speed_tier < SpeedTier::kCheetah)) {
-      params.uint_method = HistogramParams::HybridUintMethod::kFast;
-    } else {
-      params.uint_method = HistogramParams::HybridUintMethod::kNone;
-    }
-  } else if (cparams_.speed_tier <= SpeedTier::kTortoise) {
-    params.lz77_method = HistogramParams::LZ77Method::kOptimal;
+  params.clustering = HistogramParams::ClusteringType::kFast;
+  params.ans_histogram_strategy =
+      cparams_.speed_tier > SpeedTier::kThunder
+          ? HistogramParams::ANSHistogramStrategy::kFast
+          : HistogramParams::ANSHistogramStrategy::kApproximate;
+  params.lz77_method =
+      cparams_.decoding_speed_tier >= 3 && cparams_.modular_mode
+          ? (cparams_.speed_tier >= SpeedTier::kFalcon
+                 ? HistogramParams::LZ77Method::kRLE
+                 : HistogramParams::LZ77Method::kLZ77)
+          : HistogramParams::LZ77Method::kNone;
+  // Near-lossless DC, as well as modular mode, require choosing hybrid uint
+  // more carefully.
+  if ((!extra_dc_precision.empty() && extra_dc_precision[0] != 0) ||
+      (cparams_.modular_mode && cparams_.speed_tier < SpeedTier::kCheetah)) {
+    params.uint_method = HistogramParams::HybridUintMethod::kFast;
   } else {
-    params.lz77_method = HistogramParams::LZ77Method::kLZ77;
+    params.uint_method = HistogramParams::HybridUintMethod::kNone;
   }
   if (cparams_.decoding_speed_tier >= 1) {
     params.max_histograms = 12;
@@ -1158,9 +1136,7 @@ Status ModularFrameEncoder::EncodeGlobalInfo(BitWriter* writer,
   if (cparams_.decoding_speed_tier >= 1 && cparams_.responsive) {
     params.lz77_method = cparams_.speed_tier >= SpeedTier::kCheetah
                              ? HistogramParams::LZ77Method::kRLE
-                         : cparams_.speed_tier >= SpeedTier::kKitten
-                             ? HistogramParams::LZ77Method::kLZ77
-                             : HistogramParams::LZ77Method::kOptimal;
+                             : HistogramParams::LZ77Method::kLZ77;
   }
   if (cparams_.decoding_speed_tier >= 2 && cparams_.responsive) {
     params.uint_method = HistogramParams::HybridUintMethod::k000;
@@ -1401,13 +1377,9 @@ Status ModularFrameEncoder::PrepareStreamParams(const Rect& rect,
         nb_rcts_to_try = 5;
         break;
       case SpeedTier::kSquirrel:
-        nb_rcts_to_try = 7;
-        break;
       case SpeedTier::kKitten:
-        nb_rcts_to_try = 9;
-        break;
       case SpeedTier::kTortoise:
-        nb_rcts_to_try = 19;
+        nb_rcts_to_try = 7;
         break;
     }
     float best_cost = std::numeric_limits<float>::max();
@@ -1441,11 +1413,6 @@ Status ModularFrameEncoder::PrepareStreamParams(const Rect& rect,
     // No need to try anything, just use the default options.
   }
   size_t nb_wp_modes = 1;
-  if (cparams_.speed_tier <= SpeedTier::kTortoise) {
-    nb_wp_modes = 5;
-  } else if (cparams_.speed_tier <= SpeedTier::kKitten) {
-    nb_wp_modes = 2;
-  }
   if (nb_wp_modes > 1 &&
       (stream_options_[stream_id].predictor == Predictor::Weighted ||
        stream_options_[stream_id].predictor == Predictor::Best ||
@@ -1500,17 +1467,7 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
   stream_options_[stream_id].max_chan_size = 0xFFFFFF;
   stream_options_[stream_id].predictor = Predictor::Weighted;
   stream_options_[stream_id].wp_tree_mode = ModularOptions::TreeMode::kWPOnly;
-  if (cparams_.speed_tier >= SpeedTier::kSquirrel) {
-    stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kWPFixedDC;
-  }
-  if (cparams_.speed_tier < SpeedTier::kSquirrel && !nl_dc) {
-    stream_options_[stream_id].predictor =
-        (cparams_.speed_tier < SpeedTier::kKitten ? Predictor::Variable
-                                                  : Predictor::Best);
-    stream_options_[stream_id].wp_tree_mode =
-        ModularOptions::TreeMode::kDefault;
-    stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kLearn;
-  }
+  stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kWPFixedDC;
   if (cparams_.decoding_speed_tier >= 1) {
     stream_options_[stream_id].tree_kind =
         ModularOptions::TreeKind::kGradientFixedDC;
@@ -1649,7 +1606,7 @@ void ModularFrameEncoder::AddACMetadata(size_t group_index, bool jpeg_transcode,
   } else if (cparams_.speed_tier >= SpeedTier::kFalcon) {
     stream_options_[stream_id].tree_kind =
         ModularOptions::TreeKind::kFalconACMeta;
-  } else if (cparams_.speed_tier > SpeedTier::kKitten) {
+  } else {
     stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kACMeta;
   }
   // If we are using a non-constant CfL field, and are in a slow enough mode,

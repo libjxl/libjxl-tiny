@@ -173,21 +173,6 @@ void FindBestDequantMatrices(const CompressParams& cparams,
   // TODO(veluca): quant matrices for no-gaborish.
   // TODO(veluca): heuristics for in-bitstream quant tables.
   *dequant_matrices = DequantMatrices();
-  if (cparams.max_error_mode) {
-    // Set numerators of all quantization matrices to constant values.
-    float weights[3][1] = {{1.0f / cparams.max_error[0]},
-                           {1.0f / cparams.max_error[1]},
-                           {1.0f / cparams.max_error[2]}};
-    DctQuantWeightParams dct_params(weights);
-    std::vector<QuantEncoding> encodings(DequantMatrices::kNum,
-                                         QuantEncoding::DCT(dct_params));
-    DequantMatricesSetCustom(dequant_matrices, encodings,
-                             modular_frame_encoder);
-    float dc_weights[3] = {1.0f / cparams.max_error[0],
-                           1.0f / cparams.max_error[1],
-                           1.0f / cparams.max_error[2]};
-    DequantMatricesSetCustomDC(dequant_matrices, dc_weights);
-  }
 }
 
 bool DefaultEncoderHeuristics::HandlesColorConversion(
@@ -782,9 +767,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
   quantizer.ComputeGlobalScaleAndQuant(
       quant_dc, kAcQuant / cparams.butteraugli_distance, 0);
 
-  // TODO(veluca): we can now run all the code from here to FindBestQuantizer
-  // (excluded) one rect at a time. Do that.
-
   // Dependency graph:
   //
   // input: either XYB or input image
@@ -914,9 +896,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
     cfl_heuristics.ComputeDC(/*fast=*/cparams.speed_tier >= SpeedTier::kWombat,
                              &enc_state->shared.cmap);
   }
-
-  // Refine quantization levels.
-  FindBestQuantizer(original_pixels, *opsin, enc_state, cms, pool, aux_out);
 
   // Choose a context model that depends on the amount of quantization for AC.
   if (cparams.speed_tier < SpeedTier::kFalcon) {

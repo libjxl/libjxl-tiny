@@ -179,37 +179,6 @@ TEST(JxlTest, RoundtripSmallD1) {
   }
 }
 
-TEST(JxlTest, RoundtripOtherTransforms) {
-  ThreadPool* pool = nullptr;
-  const PaddedBytes orig =
-      ReadTestData("external/wesaturate/64px/a2d1un_nkitzmiller_srgb8.png");
-  std::unique_ptr<CodecInOut> io = jxl::make_unique<CodecInOut>();
-  ASSERT_TRUE(SetFromBytes(Span<const uint8_t>(orig), io.get(), pool));
-
-  CompressParams cparams;
-  // Slow modes access linear image for adaptive quant search
-  cparams.speed_tier = SpeedTier::kKitten;
-  cparams.color_transform = ColorTransform::kNone;
-  cparams.butteraugli_distance = 5.0f;
-
-  std::unique_ptr<CodecInOut> io2 = jxl::make_unique<CodecInOut>();
-  const size_t compressed_size =
-      Roundtrip(io.get(), cparams, {}, pool, io2.get());
-  EXPECT_LE(compressed_size, 23000u);
-  EXPECT_THAT(ButteraugliDistance(*io, *io2, cparams.ba_params, GetJxlCms(),
-                                  /*distmap=*/nullptr, pool),
-              IsSlightlyBelow(3.0));
-
-  // Check the consistency when performing another roundtrip.
-  std::unique_ptr<CodecInOut> io3 = jxl::make_unique<CodecInOut>();
-  const size_t compressed_size2 =
-      Roundtrip(io.get(), cparams, {}, pool, io3.get());
-  EXPECT_LE(compressed_size2, 23000u);
-  EXPECT_THAT(ButteraugliDistance(*io, *io3, cparams.ba_params, GetJxlCms(),
-                                  /*distmap=*/nullptr, pool),
-              IsSlightlyBelow(3.0));
-}
-
 TEST(JxlTest, RoundtripResample2) {
   ThreadPool* pool = nullptr;
   const PaddedBytes orig =
@@ -224,23 +193,6 @@ TEST(JxlTest, RoundtripResample2) {
   EXPECT_LE(Roundtrip(&io, cparams, {}, pool, &io2), 17000u);
   EXPECT_THAT(ComputeDistance2(io.Main(), io2.Main(), GetJxlCms()),
               IsSlightlyBelow(90));
-}
-
-TEST(JxlTest, RoundtripResample2Slow) {
-  ThreadPool* pool = nullptr;
-  const PaddedBytes orig =
-      ReadTestData("external/wesaturate/500px/u76c0g_bliznaca_srgb8.png");
-  CodecInOut io;
-  ASSERT_TRUE(SetFromBytes(Span<const uint8_t>(orig), &io, pool));
-  io.ShrinkTo(io.xsize(), io.ysize());
-  CompressParams cparams;
-  cparams.resampling = 2;
-  cparams.butteraugli_distance = 10;
-  cparams.speed_tier = SpeedTier::kTortoise;
-  CodecInOut io2;
-  EXPECT_LE(Roundtrip(&io, cparams, {}, pool, &io2), 5000u);
-  EXPECT_THAT(ComputeDistance2(io.Main(), io2.Main(), GetJxlCms()),
-              IsSlightlyBelow(250));
 }
 
 TEST(JxlTest, RoundtripResample2MT) {
@@ -405,8 +357,6 @@ TEST(JxlTest, RoundtripMultiGroup) {
                 IsSlightlyBelow(expected_distance));
   };
 
-  auto run_kitten = std::async(std::launch::async, test, SpeedTier::kKitten,
-                               1.0f, 55000u, 11);
   auto run_wombat = std::async(std::launch::async, test, SpeedTier::kWombat,
                                2.0f, 34000u, 18);
 }
