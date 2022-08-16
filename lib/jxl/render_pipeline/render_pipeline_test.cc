@@ -159,7 +159,6 @@ struct RenderPipelineTestInputSettings {
   // Input image.
   std::string input_path;
   size_t xsize, ysize;
-  bool jpeg_transcode = false;
   // Encoding settings.
   CompressParams cparams;
   // Short name for the encoder settings.
@@ -183,11 +182,7 @@ TEST_P(RenderPipelineTestParam, PipelineTest) {
   const PaddedBytes orig = ReadTestData(config.input_path);
 
   CodecInOut io;
-  if (config.jpeg_transcode) {
-    ASSERT_TRUE(jpeg::DecodeImageJPG(Span<const uint8_t>(orig), &io));
-  } else {
-    ASSERT_TRUE(SetFromBytes(Span<const uint8_t>(orig), &io, &pool));
-  }
+  ASSERT_TRUE(SetFromBytes(Span<const uint8_t>(orig), &io, &pool));
   io.ShrinkTo(config.xsize, config.ysize);
 
   if (config.add_spot_color) {
@@ -443,22 +438,6 @@ std::vector<RenderPipelineTestInputSettings> GeneratePipelineTests() {
     }
   }
 
-#if JPEGXL_ENABLE_TRANSCODE_JPEG
-  for (const char* input : {"jxl/flower/flower.png.im_q85_444.jpg",
-                            "jxl/flower/flower.png.im_q85_420.jpg",
-                            "jxl/flower/flower.png.im_q85_422.jpg",
-                            "jxl/flower/flower.png.im_q85_440.jpg"}) {
-    RenderPipelineTestInputSettings settings;
-    settings.input_path = input;
-    settings.jpeg_transcode = true;
-    settings.xsize = 2268;
-    settings.ysize = 1512;
-    settings.cparams_descr = "Default";
-    all_tests.push_back(settings);
-  }
-
-#endif
-
   {
     RenderPipelineTestInputSettings settings;
     settings.input_path = "jxl/grayscale_patches.png";
@@ -503,8 +482,7 @@ std::ostream& operator<<(std::ostream& os,
   std::replace_if(
       filename.begin(), filename.end(), [](char c) { return !isalnum(c); },
       '_');
-  os << filename << "_" << (c.jpeg_transcode ? "JPEG_" : "") << c.xsize << "x"
-     << c.ysize << "_" << c.cparams_descr;
+  os << filename << "_" << c.xsize << "x" << c.ysize << "_" << c.cparams_descr;
   return os;
 }
 
