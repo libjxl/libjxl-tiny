@@ -164,7 +164,7 @@ TEST(ModularTest, RoundtripLossy16) {
   io.metadata.m.color_encoding = ColorEncoding::SRGB();
 
   compressed_size = Roundtrip(&io, cparams, {}, pool, &io_out);
-  EXPECT_LE(compressed_size, 300u);
+  EXPECT_LE(compressed_size, 310u);
   cparams.ba_params.intensity_target = 80.0f;
   EXPECT_THAT(ButteraugliDistance(io, io_out, cparams.ba_params, GetJxlCms(),
                                   /*distmap=*/nullptr, pool),

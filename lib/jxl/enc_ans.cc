@@ -60,36 +60,6 @@ void ANSBuildInfoTable(const ANSHistBin* counts, const AliasTable::Entry* table,
   }
 }
 
-float EstimateDataBits(const ANSHistBin* histogram, const ANSHistBin* counts,
-                       size_t len) {
-  float sum = 0.0f;
-  int total_histogram = 0;
-  int total_counts = 0;
-  for (size_t i = 0; i < len; ++i) {
-    total_histogram += histogram[i];
-    total_counts += counts[i];
-    if (histogram[i] > 0) {
-      JXL_ASSERT(counts[i] > 0);
-      // += histogram[i] * -log(counts[i]/total_counts)
-      sum += histogram[i] *
-             std::max(0.0f, ANS_LOG_TAB_SIZE - FastLog2f(counts[i]));
-    }
-  }
-  if (total_histogram > 0) {
-    JXL_ASSERT(total_counts == ANS_TAB_SIZE);
-  }
-  return sum;
-}
-
-float EstimateDataBitsFlat(const ANSHistBin* histogram, size_t len) {
-  const float flat_bits = std::max(FastLog2f(len), 0.0f);
-  float total_histogram = 0;
-  for (size_t i = 0; i < len; ++i) {
-    total_histogram += histogram[i];
-  }
-  return total_histogram * flat_bits;
-}
-
 // Static Huffman code for encoding logcounts. The last symbol is used as RLE
 // sequence.
 static const uint8_t kLogCountBitLengths[ANS_LOG_TAB_SIZE + 2] = {
@@ -207,11 +177,6 @@ Status NormalizeCounts(ANSHistBin* counts, int* omit_pos, const int length,
   }
   return true;
 }
-
-struct SizeWriter {
-  size_t size = 0;
-  void Write(size_t num, size_t bits) { size += num; }
-};
 
 template <typename Writer>
 void StoreVarLenUint8(size_t n, Writer* writer) {
@@ -353,95 +318,14 @@ bool EncodeCounts(const ANSHistBin* counts, const int alphabet_size,
   return ok;
 }
 
-void EncodeFlatHistogram(const int alphabet_size, BitWriter* writer) {
-  // Mark non-small tree.
-  writer->Write(1, 0);
-  // Mark uniform histogram.
-  writer->Write(1, 1);
-  JXL_ASSERT(alphabet_size > 0);
-  // Encode alphabet size.
-  StoreVarLenUint8(alphabet_size - 1, writer);
-}
-
-float ComputeHistoAndDataCost(const ANSHistBin* histogram, size_t alphabet_size,
-                              uint32_t method) {
-  if (method == 0) {  // Flat code
-    return ANS_LOG_TAB_SIZE + 2 +
-           EstimateDataBitsFlat(histogram, alphabet_size);
-  }
-  // Non-flat: shift = method-1.
-  uint32_t shift = method - 1;
-  std::vector<ANSHistBin> counts(histogram, histogram + alphabet_size);
-  int omit_pos = 0;
-  int num_symbols;
-  int symbols[kMaxNumSymbolsForSmallCode] = {};
-  JXL_CHECK(NormalizeCounts(counts.data(), &omit_pos, alphabet_size,
-                            ANS_LOG_TAB_SIZE, shift, &num_symbols, symbols));
-  SizeWriter writer;
-  // Ignore the correctness, no real encoding happens at this stage.
-  (void)EncodeCounts(counts.data(), alphabet_size, omit_pos, num_symbols, shift,
-                     symbols, &writer);
-  return writer.size +
-         EstimateDataBits(histogram, counts.data(), alphabet_size);
-}
-
-uint32_t ComputeBestMethod(
-    const ANSHistBin* histogram, size_t alphabet_size, float* cost,
-    HistogramParams::ANSHistogramStrategy ans_histogram_strategy) {
-  size_t method = 0;
-  float fcost = ComputeHistoAndDataCost(histogram, alphabet_size, 0);
-  auto try_shift = [&](size_t shift) {
-    float c = ComputeHistoAndDataCost(histogram, alphabet_size, shift + 1);
-    if (c < fcost) {
-      method = shift + 1;
-      fcost = c;
-    }
-  };
-  switch (ans_histogram_strategy) {
-    case HistogramParams::ANSHistogramStrategy::kPrecise: {
-      for (uint32_t shift = 0; shift <= ANS_LOG_TAB_SIZE; shift++) {
-        try_shift(shift);
-      }
-      break;
-    }
-    case HistogramParams::ANSHistogramStrategy::kApproximate: {
-      for (uint32_t shift = 0; shift <= ANS_LOG_TAB_SIZE; shift += 2) {
-        try_shift(shift);
-      }
-      break;
-    }
-    case HistogramParams::ANSHistogramStrategy::kFast: {
-      try_shift(0);
-      try_shift(ANS_LOG_TAB_SIZE / 2);
-      try_shift(ANS_LOG_TAB_SIZE);
-      break;
-    }
-  };
-  *cost = fcost;
-  return method;
-}
-
 }  // namespace
 
 // Returns an estimate of the cost of encoding this histogram and the
 // corresponding data.
-void BuildAndStoreANSEncodingData(
-    HistogramParams::ANSHistogramStrategy ans_histogram_strategy,
-    const ANSHistBin* histogram, size_t alphabet_size, size_t log_alpha_size,
-    ANSEncSymbolInfo* info, BitWriter* writer) {
+void BuildAndStoreANSEncodingData(const ANSHistBin* histogram,
+                                  size_t alphabet_size, size_t log_alpha_size,
+                                  ANSEncSymbolInfo* info, BitWriter* writer) {
   JXL_ASSERT(alphabet_size <= ANS_TAB_SIZE);
-  // Ensure we ignore trailing zeros in the histogram.
-  if (alphabet_size != 0) {
-    size_t largest_symbol = 0;
-    for (size_t i = 0; i < alphabet_size; i++) {
-      if (histogram[i] != 0) largest_symbol = i;
-    }
-    alphabet_size = largest_symbol + 1;
-  }
-  float cost;
-  uint32_t method = ComputeBestMethod(histogram, alphabet_size, &cost,
-                                      ans_histogram_strategy);
-  JXL_ASSERT(cost >= 0);
   int num_symbols;
   int symbols[kMaxNumSymbolsForSmallCode] = {};
   std::vector<ANSHistBin> counts(histogram, histogram + alphabet_size);
@@ -454,60 +338,19 @@ void BuildAndStoreANSEncodingData(
       counts[0] = ANS_TAB_SIZE;
     }
   }
-  if (method == 0) {
-    counts = CreateFlatHistogram(alphabet_size, ANS_TAB_SIZE);
-    AliasTable::Entry a[ANS_MAX_ALPHABET_SIZE];
-    InitAliasTable(counts, ANS_TAB_SIZE, log_alpha_size, a);
-    ANSBuildInfoTable(counts.data(), a, alphabet_size, log_alpha_size, info);
-    EncodeFlatHistogram(alphabet_size, writer);
-    return;
-  }
   int omit_pos = 0;
-  uint32_t shift = method - 1;
   JXL_CHECK(NormalizeCounts(counts.data(), &omit_pos, alphabet_size,
-                            ANS_LOG_TAB_SIZE, shift, &num_symbols, symbols));
+                            ANS_LOG_TAB_SIZE, ANS_LOG_TAB_SIZE, &num_symbols,
+                            symbols));
   AliasTable::Entry a[ANS_MAX_ALPHABET_SIZE];
   InitAliasTable(counts, ANS_TAB_SIZE, log_alpha_size, a);
   ANSBuildInfoTable(counts.data(), a, alphabet_size, log_alpha_size, info);
-  EncodeCounts(counts.data(), alphabet_size, omit_pos, num_symbols, shift,
-               symbols, writer);
+  EncodeCounts(counts.data(), alphabet_size, omit_pos, num_symbols,
+               ANS_LOG_TAB_SIZE, symbols, writer);
   return;
 }
 
-template <typename Writer>
-void EncodeUintConfig(const HybridUintConfig uint_config, Writer* writer,
-                      size_t log_alpha_size) {
-  writer->Write(CeilLog2Nonzero(log_alpha_size + 1),
-                uint_config.split_exponent);
-  if (uint_config.split_exponent == log_alpha_size) {
-    return;  // msb/lsb don't matter.
-  }
-  size_t nbits = CeilLog2Nonzero(uint_config.split_exponent + 1);
-  writer->Write(nbits, uint_config.msb_in_token);
-  nbits = CeilLog2Nonzero(uint_config.split_exponent -
-                          uint_config.msb_in_token + 1);
-  writer->Write(nbits, uint_config.lsb_in_token);
-}
-template <typename Writer>
-void EncodeUintConfigs(const std::vector<HybridUintConfig>& uint_config,
-                       Writer* writer, size_t log_alpha_size) {
-  // TODO(veluca): RLE?
-  for (size_t i = 0; i < uint_config.size(); i++) {
-    EncodeUintConfig(uint_config[i], writer, log_alpha_size);
-  }
-}
-template void EncodeUintConfigs(const std::vector<HybridUintConfig>&,
-                                BitWriter*, size_t);
-
 namespace {
-
-void ChooseUintConfigs(const HistogramParams& params,
-                       const std::vector<std::vector<Token>>& tokens,
-                       const std::vector<uint8_t>& context_map,
-                       std::vector<Histogram>* clustered_histograms,
-                       EntropyEncodingData* codes, size_t* log_alpha_size) {
-  codes->uint_config.resize(clustered_histograms->size());
-}
 
 class HistogramBuilder {
  public:
@@ -545,13 +388,14 @@ class HistogramBuilder {
             clustered_histograms[i].ShannonEntropy();
       }
     }
-    size_t log_alpha_size = codes->lz77.enabled ? 8 : 7;  // Sane default.
-    ChooseUintConfigs(params, tokens, *context_map, &clustered_histograms,
-                      codes, &log_alpha_size);
-    if (log_alpha_size < 5) log_alpha_size = 5;
+    codes->uint_config.resize(clustered_histograms.size());
     writer->Write(1, 0);  // use_prefix_code
-    writer->Write(2, log_alpha_size - 5);
-    EncodeUintConfigs(codes->uint_config, writer, log_alpha_size);
+    writer->Write(2, 3);  // log_alpha_size = 8
+    for (size_t i = 0; i < clustered_histograms.size(); ++i) {
+      writer->Write(4, 4);  // split_exponent
+      writer->Write(3, 2);  // msb_in_token
+      writer->Write(2, 0);  // lsb_in_token
+    }
     for (size_t c = 0; c < clustered_histograms.size(); ++c) {
       size_t num_symbol = 0;
       for (size_t i = 0; i < clustered_histograms[c].data_.size(); i++) {
@@ -561,9 +405,8 @@ class HistogramBuilder {
       codes->encoding_info.back().resize(std::max<size_t>(1, num_symbol));
 
       BitWriter::Allotment allotment(writer, 256 + num_symbol * 24);
-      BuildAndStoreANSEncodingData(params.ans_histogram_strategy,
-                                   clustered_histograms[c].data_.data(),
-                                   num_symbol, log_alpha_size,
+      BuildAndStoreANSEncodingData(clustered_histograms[c].data_.data(),
+                                   num_symbol, /*log_alpha_size=*/8,
                                    codes->encoding_info.back().data(), writer);
       allotment.FinishedHistogram(writer);
       ReclaimAndCharge(writer, &allotment, layer, aux_out);
@@ -745,8 +588,7 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
                                  128 + num_contexts * 40 + max_contexts * 96);
   JXL_CHECK(Bundle::Write(codes->lz77, writer, layer, aux_out));
   if (codes->lz77.enabled) {
-    EncodeUintConfig(codes->lz77.length_uint_config, writer,
-                     /*log_alpha_size=*/8);
+    writer->Write(4, 0);  // uint config 0,0,0
     num_contexts += 1;
     tokens = std::move(tokens_lz77);
   }

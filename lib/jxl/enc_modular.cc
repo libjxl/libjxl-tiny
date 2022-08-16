@@ -1112,10 +1112,6 @@ Status ModularFrameEncoder::EncodeGlobalInfo(BitWriter* writer,
   // Write tree
   HistogramParams params;
   params.clustering = HistogramParams::ClusteringType::kFast;
-  params.ans_histogram_strategy =
-      cparams_.speed_tier > SpeedTier::kThunder
-          ? HistogramParams::ANSHistogramStrategy::kFast
-          : HistogramParams::ANSHistogramStrategy::kApproximate;
   params.lz77_method =
       cparams_.decoding_speed_tier >= 3 && cparams_.modular_mode
           ? HistogramParams::LZ77Method::kRLE

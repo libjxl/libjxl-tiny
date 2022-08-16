@@ -22,22 +22,9 @@ struct HistogramParams {
     kFast,
   };
 
-  enum class HybridUintMethod {
-    kNone,        // just use kHybridUint420Config.
-    k000,         // force the fastest option.
-    kFast,        // just try a couple of options.
-    kContextMap,  // fast choice for ctx map.
-  };
-
   enum class LZ77Method {
     kNone,     // do not try lz77.
     kRLE,      // only try doing RLE.
-  };
-
-  enum class ANSHistogramStrategy {
-    kFast,         // Only try some methods, early exit.
-    kApproximate,  // Only try some methods.
-    kPrecise,      // Try all methods.
   };
 
   HistogramParams() = default;
@@ -50,10 +37,7 @@ struct HistogramParams {
   }
 
   ClusteringType clustering = ClusteringType::kFast;
-  HybridUintMethod uint_method = HybridUintMethod::kNone;
   LZ77Method lz77_method = LZ77Method::kRLE;
-  ANSHistogramStrategy ans_histogram_strategy =
-      ANSHistogramStrategy::kApproximate;
   std::vector<size_t> image_widths;
   size_t max_histograms = ~0;
 };
