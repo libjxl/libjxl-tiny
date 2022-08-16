@@ -252,8 +252,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_ans.cc
   jxl/enc_ans.h
   jxl/enc_ans_params.h
-  jxl/enc_ar_control_field.cc
-  jxl/enc_ar_control_field.h
   jxl/enc_butteraugli_comparator.cc
   jxl/enc_butteraugli_comparator.h
   jxl/enc_butteraugli_pnorm.cc
