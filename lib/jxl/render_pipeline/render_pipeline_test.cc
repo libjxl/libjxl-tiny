@@ -294,30 +294,6 @@ std::vector<RenderPipelineTestInputSettings> GeneratePipelineTests() {
       all_tests.push_back(s);
     }
 
-    for (size_t ups : {2, 4, 8}) {
-      {
-        auto s = settings;
-        s.cparams.resampling = ups;
-        s.cparams_descr = "Ups" + std::to_string(ups);
-        all_tests.push_back(s);
-      }
-      {
-        auto s = settings;
-        s.cparams.resampling = ups;
-        s.cparams.epf = 1;
-        s.cparams_descr = "Ups" + std::to_string(ups) + "EPF1";
-        all_tests.push_back(s);
-      }
-      {
-        auto s = settings;
-        s.cparams.resampling = ups;
-        s.cparams.gaborish = Override::kOn;
-        s.cparams.epf = 1;
-        s.cparams_descr = "Ups" + std::to_string(ups) + "GabEPF1";
-        all_tests.push_back(s);
-      }
-    }
-
     {
       auto s = settings;
       s.cparams_descr = "ModularLossless";
@@ -343,27 +319,10 @@ std::vector<RenderPipelineTestInputSettings> GeneratePipelineTests() {
 
     {
       auto s = settings;
-      s.input_path = "jxl/flower/flower_alpha.png";
-      s.cparams_descr = "AlphaVarDCTUpsamplingEPF";
-      s.cparams.epf = 1;
-      s.cparams.ec_resampling = 2;
-      all_tests.push_back(s);
-    }
-
-    {
-      auto s = settings;
       s.cparams.modular_mode = true;
       s.cparams.butteraugli_distance = 0;
       s.input_path = "jxl/flower/flower_alpha.png";
       s.cparams_descr = "AlphaLossless";
-      all_tests.push_back(s);
-    }
-
-    {
-      auto s = settings;
-      s.input_path = "jxl/flower/flower_alpha.png";
-      s.cparams_descr = "AlphaDownsample";
-      s.cparams.ec_resampling = 2;
       all_tests.push_back(s);
     }
 
@@ -381,16 +340,6 @@ std::vector<RenderPipelineTestInputSettings> GeneratePipelineTests() {
     settings.xsize = 1011;
     settings.ysize = 277;
     settings.cparams_descr = "Patches";
-    all_tests.push_back(settings);
-  }
-
-  {
-    RenderPipelineTestInputSettings settings;
-    settings.input_path = "jxl/grayscale_patches.png";
-    settings.xsize = 1011;
-    settings.ysize = 277;
-    settings.cparams.resampling = 2;
-    settings.cparams_descr = "PatchesAndUps2";
     all_tests.push_back(settings);
   }
 

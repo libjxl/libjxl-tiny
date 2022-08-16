@@ -88,17 +88,8 @@ class JxlCodec : public ImageCodec {
   Status ParseParam(const std::string& param) override {
     const std::string kMaxPassesPrefix = "max_passes=";
     const std::string kDownsamplingPrefix = "downsampling=";
-    const std::string kResamplingPrefix = "resampling=";
-    const std::string kEcResamplingPrefix = "ec_resampling=";
 
-    if (param.substr(0, kResamplingPrefix.size()) == kResamplingPrefix) {
-      std::istringstream parser(param.substr(kResamplingPrefix.size()));
-      parser >> cparams_.resampling;
-    } else if (param.substr(0, kEcResamplingPrefix.size()) ==
-               kEcResamplingPrefix) {
-      std::istringstream parser(param.substr(kEcResamplingPrefix.size()));
-      parser >> cparams_.ec_resampling;
-    } else if (ImageCodec::ParseParam(param)) {
+    if (ImageCodec::ParseParam(param)) {
       if (param[0] == 'd' && butteraugli_target_ == 0.0) {
         cparams_.SetLossless();
       }

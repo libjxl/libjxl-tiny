@@ -242,25 +242,6 @@ struct CompressArgs {
         &patches, &ParseOverride, 1);
 
     cmdline->AddOptionValue(
-        '\0', "resampling", "-1|1|2|4|8",
-        "Resampling for extra channels. Default of -1 applies resampling only "
-        "for low quality. Value 1 does no downsampling (1x1), 2 does 2x2 "
-        "downsampling, 4 is for 4x4 downsampling, and 8 for 8x8 downsampling.",
-        &resampling, &ParseSigned, 0);
-
-    cmdline->AddOptionValue(
-        '\0', "ec_resampling", "-1|1|2|4|8",
-        "Resampling for extra channels. Default of -1 applies resampling only "
-        "for low quality. Value 1 does no downsampling (1x1), 2 does 2x2 "
-        "downsampling, 4 is for 4x4 downsampling, and 8 for 8x8 downsampling.",
-        &ec_resampling, &ParseSigned, 2);
-
-    cmdline->AddOptionFlag('\0', "already_downsampled",
-                           "Do not downsample the given input before encoding, "
-                           "but still signal that the decoder should upsample.",
-                           &already_downsampled, &SetBooleanTrue, 2);
-
-    cmdline->AddOptionValue(
         '\0', "epf", "-1|0|1|2|3",
         "Edge preserving filter level, -1 to 3. "
         "Value -1 means: default (encoder chooses), 0 to 3 set a strength.",
@@ -427,7 +408,6 @@ struct CompressArgs {
   bool qprogressive_ac = false;
   bool modular_lossy_palette = false;
   int32_t premultiply = -1;
-  bool already_downsampled = false;
   jxl::Override jpeg_reconstruction_cfl = jxl::Override::kDefault;
   jxl::Override modular = jxl::Override::kDefault;
   jxl::Override keep_invisible = jxl::Override::kDefault;
@@ -437,8 +417,6 @@ struct CompressArgs {
   jxl::Override group_order = jxl::Override::kDefault;
 
   size_t faster_decoding = 0;
-  int32_t resampling = -1;
-  int32_t ec_resampling = -1;
   int32_t epf = -1;
   int64_t center_x = -1;
   int64_t center_y = -1;
@@ -815,24 +793,6 @@ int main(int argc, char** argv) {
             return (0 <= x && x <= 4) ? ""
                                       : "Valid range is {0, 1, 2, 3, 4}.\n";
           });
-      process_flag("resampling", args.resampling,
-                   JXL_ENC_FRAME_SETTING_RESAMPLING,
-                   [](int64_t x) -> std::string {
-                     return (x == -1 || x == 1 || x == 4 || x == 8)
-                                ? ""
-                                : "Valid values are {-1, 1, 2, 4, 8}.\n";
-                   });
-      process_flag("ec_resampling", args.ec_resampling,
-                   JXL_ENC_FRAME_SETTING_EXTRA_CHANNEL_RESAMPLING,
-                   [](int64_t x) -> std::string {
-                     return (x == -1 || x == 1 || x == 4 || x == 8)
-                                ? ""
-                                : "Valid values are {-1, 1, 2, 4, 8}.\n";
-                   });
-      SetFlagFrameOptionOrDie("already_downsampled",
-                              static_cast<int32_t>(args.already_downsampled),
-                              jxl_encoder_frame_settings,
-                              JXL_ENC_FRAME_SETTING_ALREADY_DOWNSAMPLED);
       SetDistanceFromFlags(jxl_encoder_frame_settings, &cmdline, &args, codec);
 
       if (args.group_order != jxl::Override::kOn &&

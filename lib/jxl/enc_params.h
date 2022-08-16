@@ -208,19 +208,6 @@ struct CompressParams {
     color_transform = jxl::ColorTransform::kNone;
   }
 
-  // Down/upsample the image before encoding / after decoding by this factor.
-  // The resampling value can also be set to <= 0 to automatically choose based
-  // on distance, however EncodeFrame doesn't support this, so it is
-  // required to call PostInit() to set a valid positive resampling
-  // value and altered butteraugli score if this is used.
-  int resampling = -1;
-  int ec_resampling = -1;
-  // Skip the downsampling before encoding if this is true.
-  bool already_downsampled = false;
-  // Butteraugli target distance on the original full size image, this can be
-  // different from butteraugli_distance if resampling was used.
-  float original_butteraugli_distance = -1.0f;
-
   // Codestream level to conform to.
   // -1: don't care
   int level = -1;

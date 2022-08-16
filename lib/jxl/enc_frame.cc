@@ -148,30 +148,11 @@ Status MakeFrameHeader(const CompressParams& cparams,
   if (frame_header->dc_level > 0) {
     return JXL_FAILURE("progressive dc is not supported");
   }
-  if (cparams.resampling != 1 && cparams.resampling != 2 &&
-      cparams.resampling != 4 && cparams.resampling != 8) {
-    return JXL_FAILURE("Invalid resampling factor");
-  }
-  if (cparams.ec_resampling != 1 && cparams.ec_resampling != 2 &&
-      cparams.ec_resampling != 4 && cparams.ec_resampling != 8) {
-    return JXL_FAILURE("Invalid ec_resampling factor");
-  }
   // Resized frames.
   if (frame_info.frame_type != FrameType::kDCFrame) {
     frame_header->frame_origin = ib.origin;
-    size_t ups = 1;
-    if (cparams.already_downsampled) ups = cparams.resampling;
-
-    // TODO(lode): this is not correct in case of odd original image sizes in
-    // combination with cparams.already_downsampled. Likely these values should
-    // be set to respectively frame_header->default_xsize() and
-    // frame_header->default_ysize() instead, the original (non downsampled)
-    // intended decoded image dimensions. But it may be more subtle than that
-    // if combined with crop. This issue causes custom_size_or_origin to be
-    // incorrectly set to true in case of already_downsampled with odd output
-    // image size when no cropping is used.
-    frame_header->frame_size.xsize = ib.xsize() * ups;
-    frame_header->frame_size.ysize = ib.ysize() * ups;
+    frame_header->frame_size.xsize = ib.xsize();
+    frame_header->frame_size.ysize = ib.ysize();
     if (ib.origin.x0 != 0 || ib.origin.y0 != 0 ||
         frame_header->frame_size.xsize != frame_header->default_xsize() ||
         frame_header->frame_size.ysize != frame_header->default_ysize()) {
@@ -179,12 +160,11 @@ Status MakeFrameHeader(const CompressParams& cparams,
     }
   }
   // Upsampling.
-  frame_header->upsampling = cparams.resampling;
+  frame_header->upsampling = 1;
   const std::vector<ExtraChannelInfo>& extra_channels =
       frame_header->nonserialized_metadata->m.extra_channel_info;
   frame_header->extra_channel_upsampling.clear();
-  frame_header->extra_channel_upsampling.resize(extra_channels.size(),
-                                                cparams.ec_resampling);
+  frame_header->extra_channel_upsampling.resize(extra_channels.size(), 1);
   frame_header->save_as_reference = frame_info.save_as_reference;
 
   // Set blending-related information.
@@ -513,22 +493,6 @@ Status ParamsPostInit(CompressParams* p) {
   if (!p->modular_mode && p->butteraugli_distance == 0.0) {
     p->butteraugli_distance = kMinButteraugliDistance;
   }
-  if (p->original_butteraugli_distance == -1.0) {
-    p->original_butteraugli_distance = p->butteraugli_distance;
-  }
-  if (p->resampling <= 0) {
-    p->resampling = 1;
-    // For very low bit rates, using 2x2 resampling gives better results on
-    // most photographic images, with an adjusted butteraugli score chosen to
-    // give roughly the same amount of bits per pixel.
-    if (!p->already_downsampled && p->butteraugli_distance >= 20) {
-      p->resampling = 2;
-      p->butteraugli_distance = 6 + ((p->butteraugli_distance - 20) * 0.25);
-    }
-  }
-  if (p->ec_resampling <= 0) {
-    p->ec_resampling = p->resampling;
-  }
   return true;
 }
 
@@ -543,10 +507,6 @@ Status EncodeFrame(const CompressParams& cparams_orig,
   passes_enc_state->special_frames.clear();
 
   JXL_RETURN_IF_ERROR(ParamsPostInit(&cparams));
-
-  if (cparams.ec_resampling < cparams.resampling) {
-    cparams.ec_resampling = cparams.resampling;
-  }
 
   if (frame_info.dc_level > 0) {
     return JXL_FAILURE("Too many levels of progressive DC");
@@ -673,8 +633,7 @@ Status EncodeFrame(const CompressParams& cparams_orig,
     bool lossless = cparams.IsLossless();
     if (ib.HasAlpha() && !ib.AlphaIsPremultiplied() &&
         frame_header->frame_type == FrameType::kRegularFrame &&
-        !ApplyOverride(cparams.keep_invisible, lossless) &&
-        cparams.ec_resampling == cparams.resampling) {
+        !ApplyOverride(cparams.keep_invisible, lossless)) {
       // simplify invisible pixels
       SimplifyInvisible(&opsin, ib.alpha(), lossless);
     }
@@ -687,22 +646,11 @@ Status EncodeFrame(const CompressParams& cparams_orig,
       JXL_RETURN_IF_ERROR(lossy_frame_encoder.ComputeEncodingData(
           ib_or_linear, &opsin, cms, pool, modular_frame_encoder.get(),
           frame_header.get()));
-    } else if (frame_header->upsampling != 1 && !cparams.already_downsampled) {
-      // In VarDCT mode, LossyFrameHeuristics takes care of running downsampling
-      // after noise, if necessary.
-      DownsampleImage(&opsin, frame_header->upsampling);
     }
   } else {
     JXL_RETURN_IF_ERROR(lossy_frame_encoder.ComputeEncodingData(
         &ib, &opsin, cms, pool, modular_frame_encoder.get(),
         frame_header.get()));
-  }
-  if (cparams.ec_resampling != 1 && !cparams.already_downsampled) {
-    extra_channels = &extra_channels_storage;
-    for (size_t i = 0; i < ib.extra_channels().size(); i++) {
-      extra_channels_storage.emplace_back(CopyImage(ib.extra_channels()[i]));
-      DownsampleImage(&extra_channels_storage.back(), cparams.ec_resampling);
-    }
   }
   // needs to happen *AFTER* VarDCT-ComputeEncodingData.
   JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(
