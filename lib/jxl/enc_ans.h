@@ -87,7 +87,6 @@ using ANSHistBin = int32_t;
 
 struct EntropyEncodingData {
   std::vector<std::vector<ANSEncSymbolInfo>> encoding_info;
-  bool use_prefix_code;
   std::vector<HybridUintConfig> uint_config;
   LZ77Params lz77;
 };
@@ -131,9 +130,5 @@ void EncodeUintConfigs(const std::vector<HybridUintConfig>& uint_config,
 extern template void EncodeUintConfigs(const std::vector<HybridUintConfig>&,
                                        BitWriter*, size_t);
 
-// Globally set the option to create fuzzer-friendly ANS streams. Negatively
-// impacts compression. Not thread-safe.
-void SetANSFuzzerFriendly(bool ans_fuzzer_friendly);
 }  // namespace jxl
-
 #endif  // LIB_JXL_ENC_ANS_H_

@@ -397,7 +397,6 @@ Status WriteICC(const PaddedBytes& icc, BitWriter* JXL_RESTRICT writer,
   params.lz77_method = HistogramParams::LZ77Method::kRLE;
   EntropyEncodingData code;
   std::vector<uint8_t> context_map;
-  params.force_huffman = true;
   BuildAndEncodeHistograms(params, kNumICCContexts, tokens, &code, &context_map,
                            writer, layer, aux_out);
   WriteTokens(tokens[0], code, context_map, writer, layer, aux_out);

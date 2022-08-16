@@ -56,7 +56,6 @@ struct HistogramParams {
       ANSHistogramStrategy::kApproximate;
   std::vector<size_t> image_widths;
   size_t max_histograms = ~0;
-  bool force_huffman = false;
 };
 
 }  // namespace jxl

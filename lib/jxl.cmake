@@ -285,8 +285,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_group.h
   jxl/enc_heuristics.cc
   jxl/enc_heuristics.h
-  jxl/enc_huffman.cc
-  jxl/enc_huffman.h
   jxl/enc_icc_codec.cc
   jxl/enc_icc_codec.h
   jxl/enc_image_bundle.cc
