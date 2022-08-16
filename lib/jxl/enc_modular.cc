@@ -834,13 +834,10 @@ Status ModularFrameEncoder::ComputeEncodingData(
     const size_t gy = group_id / frame_dim_.xsize_groups;
     const Rect mrect(gx * frame_dim_.group_dim, gy * frame_dim_.group_dim,
                      frame_dim_.group_dim, frame_dim_.group_dim);
-    for (size_t i = 0; i < enc_state->progressive_splitter.GetNumPasses();
-         i++) {
-      int maxShift, minShift;
-      frame_header.passes.GetDownsamplingBracket(i, minShift, maxShift);
-      stream_params.push_back(GroupParams{
-          mrect, minShift, maxShift, ModularStreamId::ModularAC(group_id, i)});
-    }
+    int maxShift, minShift;
+    frame_header.passes.GetDownsamplingBracket(0, minShift, maxShift);
+    stream_params.push_back(GroupParams{
+        mrect, minShift, maxShift, ModularStreamId::ModularAC(group_id, 0)});
   }
   // if there's only one group, everything ends up in GlobalModular
   // in that case, also try RCTs/WP params for the one group

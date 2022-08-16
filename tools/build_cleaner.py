@@ -98,8 +98,6 @@ def SplitLibFiles(repo_files):
       "lib/jxl/linalg.cc",
       "lib/jxl/optimize.cc",
       "lib/jxl/optimize.h",
-      "lib/jxl/progressive_split.cc",
-      "lib/jxl/progressive_split.h",
       # TODO(deymo): Add luminance.cc and luminance.h here too. Currently used
       # by aux_out.h.
   ])

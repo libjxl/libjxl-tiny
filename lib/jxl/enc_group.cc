@@ -218,14 +218,10 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
     constexpr HWY_CAPPED(float, kDCTBlockSize) d;
 
     int32_t* JXL_RESTRICT coeffs[kMaxNumPasses][3] = {};
-    size_t num_passes = enc_state->progressive_splitter.GetNumPasses();
-    JXL_DASSERT(num_passes > 0);
-    for (size_t i = 0; i < num_passes; i++) {
-      // TODO(veluca): 16-bit quantized coeffs are not implemented yet.
-      JXL_ASSERT(enc_state->coeffs[i]->Type() == ACType::k32);
-      for (size_t c = 0; c < 3; c++) {
-        coeffs[i][c] = enc_state->coeffs[i]->PlaneRow(c, group_idx, 0).ptr32;
-      }
+    // TODO(veluca): 16-bit quantized coeffs are not implemented yet.
+    JXL_ASSERT(enc_state->coeffs[0]->Type() == ACType::k32);
+    for (size_t c = 0; c < 3; c++) {
+      coeffs[0][c] = enc_state->coeffs[0]->PlaneRow(c, group_idx, 0).ptr32;
     }
 
     HWY_ALIGN float* coeffs_in = fmem.get();
@@ -312,8 +308,10 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
             DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size,
                                     dc_rows[c] + bx, dc_stride);
           }
-          enc_state->progressive_splitter.SplitACCoefficients(
-              quantized, size, acs, bx, by, offset, coeffs);
+          for (size_t c = 0; c < 3; c++) {
+            memcpy(coeffs[0][c] + offset, quantized + c * size,
+                   sizeof(quantized[0]) * size);
+          }
           offset += size;
         }
       }

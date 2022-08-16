@@ -27,7 +27,6 @@
 #include "lib/jxl/image.h"
 #include "lib/jxl/image_bundle.h"
 #include "lib/jxl/passes_state.h"
-#include "lib/jxl/progressive_split.h"
 #include "lib/jxl/quant_weights.h"
 #include "lib/jxl/quantizer.h"
 
@@ -45,9 +44,6 @@ struct PassesEncoderState {
 
   // Raw data for special (reference+DC) frames.
   std::vector<std::unique_ptr<BitWriter>> special_frames;
-
-  // For splitting into passes.
-  ProgressiveSplitter progressive_splitter;
 
   CompressParams cparams;
 
