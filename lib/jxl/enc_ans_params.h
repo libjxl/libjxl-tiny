@@ -32,8 +32,6 @@ struct HistogramParams {
   enum class LZ77Method {
     kNone,     // do not try lz77.
     kRLE,      // only try doing RLE.
-    kLZ77,     // try lz77 with backward references.
-    kOptimal,  // optimal-matching LZ77 parsing.
   };
 
   enum class ANSHistogramStrategy {

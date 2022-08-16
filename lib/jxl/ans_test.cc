@@ -203,7 +203,7 @@ void TestCheckpointing(bool ans, bool lz77) {
   std::vector<uint8_t> context_map;
   EntropyEncodingData codes;
   HistogramParams params;
-  params.lz77_method = lz77 ? HistogramParams::LZ77Method::kLZ77
+  params.lz77_method = lz77 ? HistogramParams::LZ77Method::kRLE
                             : HistogramParams::LZ77Method::kNone;
   params.force_huffman = !ans;
 
