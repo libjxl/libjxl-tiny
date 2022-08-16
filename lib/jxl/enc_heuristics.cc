@@ -614,12 +614,10 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
   // Call InitialQuantField only in Hare mode or slower. Otherwise, rely
   // on simple heuristics in FindBestAcStrategy, or set a constant for Falcon
   // mode.
-  if (cparams.speed_tier > SpeedTier::kHare || cparams.uniform_quant > 0) {
+  if (cparams.speed_tier > SpeedTier::kHare) {
     enc_state->initial_quant_field =
         ImageF(shared.frame_dim.xsize_blocks, shared.frame_dim.ysize_blocks);
-    float q = cparams.uniform_quant > 0
-                  ? cparams.uniform_quant
-                  : kAcQuant / cparams.butteraugli_distance;
+    float q = kAcQuant / cparams.butteraugli_distance;
     FillImage(q, &enc_state->initial_quant_field);
   } else {
     // Call this here, as it relies on pre-gaborish values.

@@ -1521,12 +1521,6 @@ void ModularFrameEncoder::AddACMetadata(size_t group_index, bool jpeg_transcode,
   } else {
     stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kACMeta;
   }
-  // If we are using a non-constant CfL field, and are in a slow enough mode,
-  // re-enable tree computation for it.
-  if (cparams_.speed_tier < SpeedTier::kSquirrel &&
-      cparams_.force_cfl_jpeg_recompression) {
-    stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kLearn;
-  }
   // YToX, YToB, ACS + QF, EPF
   Image& image = stream_images_[stream_id];
   image = Image(r.xsize(), r.ysize(), 8, 4);
