@@ -1235,7 +1235,6 @@ struct PixelTestConfig {
   // Exif orientation, 1-8
   JxlOrientation orientation;
   bool keep_orientation;
-  size_t upsampling;
 };
 
 class DecodeTestParam : public ::testing::TestWithParam<PixelTestConfig> {};
@@ -1259,8 +1258,6 @@ TEST_P(DecodeTestParam, PixelTest) {
   // Lossless to verify pixels exactly after roundtrip.
   params.cparams.SetLossless();
   params.cparams.speed_tier = jxl::SpeedTier::kThunder;
-  params.cparams.resampling = config.upsampling;
-  params.cparams.ec_resampling = config.upsampling;
   params.box_format = config.add_container;
   params.orientation = config.orientation;
   params.add_preview = config.add_preview;
@@ -1313,20 +1310,8 @@ TEST_P(DecodeTestParam, PixelTest) {
         /*out_callback=*/{},
         static_cast<jxl::Orientation>(config.orientation)));
   }
-  if (config.upsampling == 1) {
-    EXPECT_EQ(0u, jxl::test::ComparePixels(pixels.data(), pixels2.data(), xsize,
-                                           ysize, format_orig, format));
-  } else {
-    // resampling is of course not lossless, so as a rough check:
-    // count pixels that are more than off-by-25 in the 8-bit value of one of
-    // the channels
-    EXPECT_LE(
-        jxl::test::ComparePixels(
-            pixels.data(), pixels2.data(), xsize, ysize, format_orig, format,
-            50.0 * (config.data_type == JXL_TYPE_UINT8 ? 1.0 : 256.0)),
-        300u);
-  }
-
+  EXPECT_EQ(0u, jxl::test::ComparePixels(pixels.data(), pixels2.data(), xsize,
+                                         ysize, format_orig, format));
   JxlDecoderDestroy(dec);
 }
 
@@ -1364,8 +1349,7 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
                        bool intrinsic_size, CodeStreamBoxFormat box,
                        JxlOrientation orientation, bool keep_orientation,
                        OutputFormat format, bool use_callback,
-                       bool set_buffer_early, bool resizable_runner,
-                       size_t upsampling) {
+                       bool set_buffer_early, bool resizable_runner) {
     PixelTestConfig c;
     c.grayscale = ch.grayscale;
     c.include_alpha = ch.include_alpha;
@@ -1382,22 +1366,18 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
     c.use_resizable_runner = resizable_runner;
     c.orientation = orientation;
     c.keep_orientation = keep_orientation;
-    c.upsampling = upsampling;
     all_tests.push_back(c);
   };
 
   // Test output formats and methods.
   for (ChannelInfo ch : ch_info) {
     for (int use_callback = 0; use_callback <= 1; use_callback++) {
-      for (size_t upsampling : {1, 2, 4, 8}) {
-        for (OutputFormat fmt : out_formats) {
-          make_test(ch, 301, 33, /*add_preview=*/false,
-                    /*add_intrinsic_size=*/false,
-                    CodeStreamBoxFormat::kCSBF_None, JXL_ORIENT_IDENTITY,
-                    /*keep_orientation=*/false, fmt, use_callback,
-                    /*set_buffer_early=*/false, /*resizable_runner=*/false,
-                    upsampling);
-        }
+      for (OutputFormat fmt : out_formats) {
+        make_test(ch, 301, 33, /*add_preview=*/false,
+                  /*add_intrinsic_size=*/false, CodeStreamBoxFormat::kCSBF_None,
+                  JXL_ORIENT_IDENTITY,
+                  /*keep_orientation=*/false, fmt, use_callback,
+                  /*set_buffer_early=*/false, /*resizable_runner=*/false);
       }
     }
   }
@@ -1408,7 +1388,7 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
               JXL_ORIENT_IDENTITY,
               /*keep_orientation=*/false, out_formats[0],
               /*use_callback=*/false,
-              /*set_buffer_early=*/false, /*resizable_runner=*/false, 1);
+              /*set_buffer_early=*/false, /*resizable_runner=*/false);
   }
   // Test previews.
   for (int add_preview = 0; add_preview <= 1; add_preview++) {
@@ -1416,7 +1396,7 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
               CodeStreamBoxFormat::kCSBF_None, JXL_ORIENT_IDENTITY,
               /*keep_orientation=*/false, out_formats[0],
               /*use_callback=*/false, /*set_buffer_early=*/false,
-              /*resizable_runner=*/false, 1);
+              /*resizable_runner=*/false);
   }
   // Test intrinsic sizes.
   for (int add_intrinsic_size = 0; add_intrinsic_size <= 1;
@@ -1425,7 +1405,7 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
               CodeStreamBoxFormat::kCSBF_None, JXL_ORIENT_IDENTITY,
               /*keep_orientation=*/false, out_formats[0],
               /*use_callback=*/false, /*set_buffer_early=*/false,
-              /*resizable_runner=*/false, 1);
+              /*resizable_runner=*/false);
   }
   // Test setting buffers early.
   make_test(ch_info[0], 300, 33, /*add_preview=*/false,
@@ -1433,7 +1413,7 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
             JXL_ORIENT_IDENTITY,
             /*keep_orientation=*/false, out_formats[0],
             /*use_callback=*/false, /*set_buffer_early=*/true,
-            /*resizable_runner=*/false, 1);
+            /*resizable_runner=*/false);
 
   // Test using the resizable runner
   for (size_t i = 0; i < 4; i++) {
@@ -1442,7 +1422,7 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
               JXL_ORIENT_IDENTITY,
               /*keep_orientation=*/false, out_formats[0],
               /*use_callback=*/false, /*set_buffer_early=*/false,
-              /*resizable_runner=*/true, 1);
+              /*resizable_runner=*/true);
   }
 
   // Test orientations.
@@ -1452,13 +1432,13 @@ std::vector<PixelTestConfig> GeneratePixelTests() {
               static_cast<JxlOrientation>(orientation),
               /*keep_orientation=*/false, out_formats[0],
               /*use_callback=*/false, /*set_buffer_early=*/true,
-              /*resizable_runner=*/false, 1);
+              /*resizable_runner=*/false);
     make_test(ch_info[0], 280, 12, /*add_preview=*/false,
               /*add_intrinsic_size=*/false, CodeStreamBoxFormat::kCSBF_None,
               static_cast<JxlOrientation>(orientation),
               /*keep_orientation=*/true, out_formats[0],
               /*use_callback=*/false, /*set_buffer_early=*/true,
-              /*resizable_runner=*/false, 1);
+              /*resizable_runner=*/false);
   }
 
   return all_tests;
@@ -1506,7 +1486,6 @@ std::ostream& operator<<(std::ostream& os, const PixelTestConfig& c) {
   if (c.use_resizable_runner) os << "ResizableRunner";
   if (c.orientation != 1) os << "O" << c.orientation;
   if (c.keep_orientation) os << "Keep";
-  if (c.upsampling > 1) os << "x" << c.upsampling;
   return os;
 }
 
@@ -3442,8 +3421,7 @@ TEST(DecodeTest, SkipFrameWithAlphaBlendingTest) {
 }
 
 TEST(DecodeTest, OrientedCroppedFrameTest) {
-  const auto test = [](bool keep_orientation, uint32_t orientation,
-                       uint32_t resampling) {
+  const auto test = [](bool keep_orientation, uint32_t orientation) {
     size_t xsize = 90, ysize = 120;
     JxlPixelFormat format = {4, JXL_TYPE_UINT16, JXL_BIG_ENDIAN, 0};
     size_t oxsize = (!keep_orientation && orientation > 4 ? ysize : xsize);
@@ -3481,7 +3459,6 @@ TEST(DecodeTest, OrientedCroppedFrameTest) {
     cparams
         .SetLossless();  // Lossless to verify pixels exactly after roundtrip.
     cparams.speed_tier = jxl::SpeedTier::kThunder;
-    cparams.resampling = resampling;
     jxl::AuxOut aux_out;
     jxl::PaddedBytes compressed;
     jxl::PassesEncoderState enc_state;
@@ -3574,13 +3551,10 @@ TEST(DecodeTest, OrientedCroppedFrameTest) {
 
   for (bool keep_orientation : {true, false}) {
     for (uint32_t orientation = 1; orientation <= 8; orientation++) {
-      for (uint32_t resampling : {1, 2, 4, 8}) {
-        SCOPED_TRACE(testing::Message()
-                     << "keep_orientation: " << keep_orientation << ", "
-                     << "orientation: " << orientation << ", "
-                     << "resampling: " << resampling);
-        test(keep_orientation, orientation, resampling);
-      }
+      SCOPED_TRACE(testing::Message()
+                   << "keep_orientation: " << keep_orientation << ", "
+                   << "orientation: " << orientation);
+      test(keep_orientation, orientation);
     }
   }
 }
@@ -4085,78 +4059,6 @@ TEST(DecodeTest, FlushTestLossyProgressiveAlpha) {
   EXPECT_LE(jxl::test::ComparePixels(pixels2.data(), pixels.data(), xsize,
                                      ysize, format, format, 2560.0),
             11000u);
-
-  JxlDecoderDestroy(dec);
-}
-TEST(DecodeTest, FlushTestLossyProgressiveAlphaUpsampling) {
-  size_t xsize = 533, ysize = 401;
-  uint32_t num_channels = 4;
-  std::vector<uint8_t> pixels =
-      jxl::test::GetSomeTestImage(xsize, ysize, num_channels, 0);
-  jxl::TestCodestreamParams params;
-  params.cparams.resampling = 2;
-  params.cparams.ec_resampling = 4;
-  params.add_preview = true;
-  jxl::PaddedBytes data = jxl::CreateTestJXLCodestream(
-      jxl::Span<const uint8_t>(pixels.data(), pixels.size()), xsize, ysize,
-      num_channels, params);
-  JxlPixelFormat format = {num_channels, JXL_TYPE_UINT16, JXL_BIG_ENDIAN, 0};
-
-  std::vector<uint8_t> pixels2;
-  pixels2.resize(pixels.size());
-
-  JxlDecoder* dec = JxlDecoderCreate(nullptr);
-
-  EXPECT_EQ(JXL_DEC_SUCCESS,
-            JxlDecoderSubscribeEvents(
-                dec, JXL_DEC_BASIC_INFO | JXL_DEC_FRAME | JXL_DEC_FULL_IMAGE));
-
-  // Ensure that the first part contains at least the full DC of the image,
-  // otherwise flush does not work.
-  size_t first_part = data.size() * 2 / 3;
-
-  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetInput(dec, data.data(), first_part));
-
-  EXPECT_EQ(JXL_DEC_BASIC_INFO, JxlDecoderProcessInput(dec));
-  JxlBasicInfo info;
-  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderGetBasicInfo(dec, &info));
-  EXPECT_EQ(info.xsize, xsize);
-  EXPECT_EQ(info.ysize, ysize);
-
-  EXPECT_EQ(JXL_DEC_FRAME, JxlDecoderProcessInput(dec));
-
-  // Output buffer not yet set
-  EXPECT_EQ(JXL_DEC_ERROR, JxlDecoderFlushImage(dec));
-
-  size_t buffer_size;
-  EXPECT_EQ(JXL_DEC_SUCCESS,
-            JxlDecoderImageOutBufferSize(dec, &format, &buffer_size));
-  EXPECT_EQ(pixels2.size(), buffer_size);
-  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetImageOutBuffer(
-                                 dec, &format, pixels2.data(), pixels2.size()));
-
-  // Must process input further until we get JXL_DEC_NEED_MORE_INPUT, even if
-  // data was already input before, since the processing of the frame only
-  // happens at the JxlDecoderProcessInput call after JXL_DEC_FRAME.
-  EXPECT_EQ(JXL_DEC_NEED_MORE_INPUT, JxlDecoderProcessInput(dec));
-
-  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderFlushImage(dec));
-
-  EXPECT_LE(jxl::test::ComparePixels(pixels2.data(), pixels.data(), xsize,
-                                     ysize, format, format, 2560.0),
-            125000u);
-
-  EXPECT_EQ(JXL_DEC_NEED_MORE_INPUT, JxlDecoderProcessInput(dec));
-
-  size_t consumed = first_part - JxlDecoderReleaseInput(dec);
-
-  EXPECT_EQ(JXL_DEC_SUCCESS, JxlDecoderSetInput(dec, data.data() + consumed,
-                                                data.size() - consumed));
-
-  EXPECT_EQ(JXL_DEC_FULL_IMAGE, JxlDecoderProcessInput(dec));
-  EXPECT_LE(jxl::test::ComparePixels(pixels2.data(), pixels.data(), xsize,
-                                     ysize, format, format, 2560.0),
-            70000u);
 
   JxlDecoderDestroy(dec);
 }

@@ -996,31 +996,8 @@ JxlEncoderStatus JxlEncoderFrameSettingsSetOption(
       frame_settings->values.cparams.decoding_speed_tier = value;
       return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_RESAMPLING:
-      if (value != -1 && value != 1 && value != 2 && value != 4 && value != 8) {
-        return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,
-                             "Resampling factor has to be 1, 2, 4 or 8");
-      }
-      frame_settings->values.cparams.resampling = value;
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_EXTRA_CHANNEL_RESAMPLING:
-      // TOOD(lode): the jxl codestream allows choosing a different resampling
-      // factor for each extra channel, independently per frame. Move this
-      // option to a JxlEncoderFrameSettings-option that can be set per extra
-      // channel, so needs its own function rather than
-      // JxlEncoderFrameSettingsSetOption due to the extra channel index
-      // argument required.
-      if (value != -1 && value != 1 && value != 2 && value != 4 && value != 8) {
-        return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,
-                             "Resampling factor has to be 1, 2, 4 or 8");
-      }
-      frame_settings->values.cparams.ec_resampling = value;
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_ALREADY_DOWNSAMPLED:
-      if (value < 0 || value > 1) {
-        return JXL_ENC_ERROR;
-      }
-      frame_settings->values.cparams.already_downsampled = (value == 1);
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_NOISE:
     case JXL_ENC_FRAME_SETTING_DOTS:
     case JXL_ENC_FRAME_SETTING_PATCHES:
@@ -1371,11 +1348,6 @@ JxlEncoderStatus GetCurrentDimensions(
   if (frame_settings->values.header.layer_info.have_crop) {
     xsize = frame_settings->values.header.layer_info.xsize;
     ysize = frame_settings->values.header.layer_info.ysize;
-  }
-  if (frame_settings->values.cparams.already_downsampled) {
-    size_t factor = frame_settings->values.cparams.resampling;
-    xsize = jxl::DivCeil(xsize, factor);
-    ysize = jxl::DivCeil(ysize, factor);
   }
   if (xsize == 0 || ysize == 0) {
     return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,
