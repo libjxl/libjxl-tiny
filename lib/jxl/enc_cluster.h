@@ -42,9 +42,6 @@ struct Histogram {
     }
     total_count_ += other.total_count_;
   }
-  float PopulationCost() const {
-    return ANSPopulationCost(data_.data(), data_.size());
-  }
   float ShannonEntropy() const;
 
   std::vector<ANSHistBin> data_;

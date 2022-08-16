@@ -194,8 +194,5 @@ HWY_TARGET_INSTANTIATE_TEST_SUITE_P_T(AcStrategyDownsample,
 
 TEST_P(AcStrategyDownsample, Test) { Run(); }
 
-class AcStrategyTargetTest : public ::hwy::TestWithParamTarget {};
-HWY_TARGET_INSTANTIATE_TEST_SUITE_P(AcStrategyTargetTest);
-
 }  // namespace
 }  // namespace jxl

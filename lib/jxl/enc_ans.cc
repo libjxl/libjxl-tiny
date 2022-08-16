@@ -428,45 +428,28 @@ uint32_t ComputeBestMethod(
 
 // Returns an estimate of the cost of encoding this histogram and the
 // corresponding data.
-size_t BuildAndStoreANSEncodingData(
+void BuildAndStoreANSEncodingData(
     HistogramParams::ANSHistogramStrategy ans_histogram_strategy,
     const ANSHistBin* histogram, size_t alphabet_size, size_t log_alpha_size,
     bool use_prefix_code, ANSEncSymbolInfo* info, BitWriter* writer) {
   if (use_prefix_code) {
-    if (alphabet_size <= 1) return 0;
+    if (alphabet_size <= 1) return;
     std::vector<uint32_t> histo(alphabet_size);
     for (size_t i = 0; i < alphabet_size; i++) {
       histo[i] = histogram[i];
       JXL_CHECK(histogram[i] >= 0);
     }
-    size_t cost = 0;
     {
       std::vector<uint8_t> depths(alphabet_size);
       std::vector<uint16_t> bits(alphabet_size);
-      if (writer == nullptr) {
-        BitWriter tmp_writer;
-        BitWriter::Allotment allotment(
-            &tmp_writer, 8 * alphabet_size + 8);  // safe upper bound
-        BuildAndStoreHuffmanTree(histo.data(), alphabet_size, depths.data(),
-                                 bits.data(), &tmp_writer);
-        ReclaimAndCharge(&tmp_writer, &allotment, 0, /*aux_out=*/nullptr);
-        cost = tmp_writer.BitsWritten();
-      } else {
-        size_t start = writer->BitsWritten();
-        BuildAndStoreHuffmanTree(histo.data(), alphabet_size, depths.data(),
-                                 bits.data(), writer);
-        cost = writer->BitsWritten() - start;
-      }
+      BuildAndStoreHuffmanTree(histo.data(), alphabet_size, depths.data(),
+                               bits.data(), writer);
       for (size_t i = 0; i < alphabet_size; i++) {
         info[i].bits = depths[i] == 0 ? 0 : bits[i];
         info[i].depth = depths[i];
       }
     }
-    // Estimate data cost.
-    for (size_t i = 0; i < alphabet_size; i++) {
-      cost += histogram[i] * info[i].depth;
-    }
-    return cost;
+    return;
   }
   JXL_ASSERT(alphabet_size <= ANS_TAB_SIZE);
   // Ensure we ignore trailing zeros in the histogram.
@@ -501,7 +484,7 @@ size_t BuildAndStoreANSEncodingData(
     if (writer != nullptr) {
       EncodeFlatHistogram(alphabet_size, writer);
     }
-    return cost;
+    return;
   }
   int omit_pos = 0;
   uint32_t shift = method - 1;
@@ -516,14 +499,7 @@ size_t BuildAndStoreANSEncodingData(
     (void)ok;
     JXL_DASSERT(ok);
   }
-  return cost;
-}
-
-float ANSPopulationCost(const ANSHistBin* data, size_t alphabet_size) {
-  float c;
-  ComputeBestMethod(data, alphabet_size, &c,
-                    HistogramParams::ANSHistogramStrategy::kFast);
-  return c;
+  return;
 }
 
 template <typename Writer>
@@ -573,112 +549,6 @@ void ChooseUintConfigs(const HistogramParams& params,
                               HybridUintConfig(2, 0, 1));
     return;
   }
-
-  // Brute-force method that tries a few options.
-  std::vector<HybridUintConfig> configs;
-  if (params.uint_method == HistogramParams::HybridUintMethod::kBest) {
-    configs = {
-        HybridUintConfig(4, 2, 0),  // default
-        HybridUintConfig(4, 1, 0),  // less precise
-        HybridUintConfig(4, 2, 1),  // add sign
-        HybridUintConfig(4, 2, 2),  // add sign+parity
-        HybridUintConfig(4, 1, 2),  // add parity but less msb
-        // Same as above, but more direct coding.
-        HybridUintConfig(5, 2, 0), HybridUintConfig(5, 1, 0),
-        HybridUintConfig(5, 2, 1), HybridUintConfig(5, 2, 2),
-        HybridUintConfig(5, 1, 2),
-        // Same as above, but less direct coding.
-        HybridUintConfig(3, 2, 0), HybridUintConfig(3, 1, 0),
-        HybridUintConfig(3, 2, 1), HybridUintConfig(3, 1, 2),
-        // For near-lossless.
-        HybridUintConfig(4, 1, 3), HybridUintConfig(5, 1, 4),
-        HybridUintConfig(5, 2, 3), HybridUintConfig(6, 1, 5),
-        HybridUintConfig(6, 2, 4), HybridUintConfig(6, 0, 0),
-        // Other
-        HybridUintConfig(0, 0, 0),   // varlenuint
-        HybridUintConfig(2, 0, 1),   // works well for ctx map
-        HybridUintConfig(7, 0, 0),   // direct coding
-        HybridUintConfig(8, 0, 0),   // direct coding
-        HybridUintConfig(9, 0, 0),   // direct coding
-        HybridUintConfig(10, 0, 0),  // direct coding
-        HybridUintConfig(11, 0, 0),  // direct coding
-        HybridUintConfig(12, 0, 0),  // direct coding
-    };
-  } else if (params.uint_method == HistogramParams::HybridUintMethod::kFast) {
-    configs = {
-        HybridUintConfig(4, 2, 0),  // default
-        HybridUintConfig(4, 1, 2),  // add parity but less msb
-        HybridUintConfig(0, 0, 0),  // smallest histograms
-        HybridUintConfig(2, 0, 1),  // works well for ctx map
-    };
-  }
-
-  std::vector<float> costs(clustered_histograms->size(),
-                           std::numeric_limits<float>::max());
-  std::vector<uint32_t> extra_bits(clustered_histograms->size());
-  std::vector<uint8_t> is_valid(clustered_histograms->size());
-  size_t max_alpha =
-      codes->use_prefix_code ? PREFIX_MAX_ALPHABET_SIZE : ANS_MAX_ALPHABET_SIZE;
-  for (HybridUintConfig cfg : configs) {
-    std::fill(is_valid.begin(), is_valid.end(), true);
-    std::fill(extra_bits.begin(), extra_bits.end(), 0);
-
-    for (size_t i = 0; i < clustered_histograms->size(); i++) {
-      (*clustered_histograms)[i].Clear();
-    }
-    for (size_t i = 0; i < tokens.size(); ++i) {
-      for (size_t j = 0; j < tokens[i].size(); ++j) {
-        const Token token = tokens[i][j];
-        // TODO(veluca): do not ignore lz77 commands.
-        if (token.is_lz77_length) continue;
-        size_t histo = context_map[token.context];
-        uint32_t tok, nbits, bits;
-        cfg.Encode(token.value, &tok, &nbits, &bits);
-        if (tok >= max_alpha ||
-            (codes->lz77.enabled && tok >= codes->lz77.min_symbol)) {
-          is_valid[histo] = false;
-          continue;
-        }
-        extra_bits[histo] += nbits;
-        (*clustered_histograms)[histo].Add(tok);
-      }
-    }
-
-    for (size_t i = 0; i < clustered_histograms->size(); i++) {
-      if (!is_valid[i]) continue;
-      float cost = (*clustered_histograms)[i].PopulationCost() + extra_bits[i];
-      // add signaling cost of the hybriduintconfig itself
-      cost += CeilLog2Nonzero(cfg.split_exponent + 1);
-      cost += CeilLog2Nonzero(cfg.split_exponent - cfg.msb_in_token + 1);
-      if (cost < costs[i]) {
-        codes->uint_config[i] = cfg;
-        costs[i] = cost;
-      }
-    }
-  }
-
-  // Rebuild histograms.
-  for (size_t i = 0; i < clustered_histograms->size(); i++) {
-    (*clustered_histograms)[i].Clear();
-  }
-  *log_alpha_size = 4;
-  for (size_t i = 0; i < tokens.size(); ++i) {
-    for (size_t j = 0; j < tokens[i].size(); ++j) {
-      const Token token = tokens[i][j];
-      uint32_t tok, nbits, bits;
-      size_t histo = context_map[token.context];
-      (token.is_lz77_length ? codes->lz77.length_uint_config
-                            : codes->uint_config[histo])
-          .Encode(token.value, &tok, &nbits, &bits);
-      tok += token.is_lz77_length ? codes->lz77.min_symbol : 0;
-      (*clustered_histograms)[histo].Add(tok);
-      while (tok >= (1u << *log_alpha_size)) (*log_alpha_size)++;
-    }
-  }
-#if JXL_ENABLE_ASSERT
-  size_t max_log_alpha_size = codes->use_prefix_code ? PREFIX_MAX_BITS : 8;
-  JXL_ASSERT(*log_alpha_size <= max_log_alpha_size);
-#endif
 }
 
 class HistogramBuilder {
@@ -692,12 +562,12 @@ class HistogramBuilder {
   }
 
   // NOTE: `layer` is only for clustered_entropy; caller does ReclaimAndCharge.
-  size_t BuildAndStoreEntropyCodes(
-      const HistogramParams& params,
-      const std::vector<std::vector<Token>>& tokens, EntropyEncodingData* codes,
-      std::vector<uint8_t>* context_map, bool use_prefix_code,
-      BitWriter* writer, size_t layer, AuxOut* aux_out) const {
-    size_t cost = 0;
+  void BuildAndStoreEntropyCodes(const HistogramParams& params,
+                                 const std::vector<std::vector<Token>>& tokens,
+                                 EntropyEncodingData* codes,
+                                 std::vector<uint8_t>* context_map,
+                                 bool use_prefix_code, BitWriter* writer,
+                                 size_t layer, AuxOut* aux_out) const {
     codes->encoding_info.clear();
     std::vector<Histogram> clustered_histograms(histograms_);
     context_map->resize(histograms_.size());
@@ -743,18 +613,12 @@ class HistogramBuilder {
                         codes, &log_alpha_size);
     }
     if (log_alpha_size < 5) log_alpha_size = 5;
-    SizeWriter size_writer;  // Used if writer == nullptr to estimate costs.
-    cost += 1;
     if (writer) writer->Write(1, use_prefix_code);
 
     if (use_prefix_code) {
       log_alpha_size = PREFIX_MAX_BITS;
-    } else {
-      cost += 2;
     }
-    if (writer == nullptr) {
-      EncodeUintConfigs(codes->uint_config, &size_writer, log_alpha_size);
-    } else {
+    if (writer) {
       if (!use_prefix_code) writer->Write(2, log_alpha_size - 5);
       EncodeUintConfigs(codes->uint_config, writer, log_alpha_size);
     }
@@ -766,12 +630,9 @@ class HistogramBuilder {
         }
         if (writer) {
           StoreVarLenUint16(num_symbol - 1, writer);
-        } else {
-          StoreVarLenUint16(num_symbol - 1, &size_writer);
         }
       }
     }
-    cost += size_writer.size;
     for (size_t c = 0; c < clustered_histograms.size(); ++c) {
       size_t num_symbol = 1;
       for (size_t i = 0; i < clustered_histograms[c].data_.size(); i++) {
@@ -781,14 +642,14 @@ class HistogramBuilder {
       codes->encoding_info.back().resize(std::max<size_t>(1, num_symbol));
 
       BitWriter::Allotment allotment(writer, 256 + num_symbol * 24);
-      cost += BuildAndStoreANSEncodingData(
-          params.ans_histogram_strategy, clustered_histograms[c].data_.data(),
-          num_symbol, log_alpha_size, use_prefix_code,
-          codes->encoding_info.back().data(), writer);
+      BuildAndStoreANSEncodingData(params.ans_histogram_strategy,
+                                   clustered_histograms[c].data_.data(),
+                                   num_symbol, log_alpha_size, use_prefix_code,
+                                   codes->encoding_info.back().data(), writer);
       allotment.FinishedHistogram(writer);
       ReclaimAndCharge(writer, &allotment, layer, aux_out);
     }
-    return cost;
+    return;
   }
 
   const Histogram& Histo(size_t i) const { return histograms_[i]; }
@@ -1467,14 +1328,13 @@ void ApplyLZ77(const HistogramParams& params, size_t num_contexts,
 }
 }  // namespace
 
-size_t BuildAndEncodeHistograms(const HistogramParams& params,
-                                size_t num_contexts,
-                                std::vector<std::vector<Token>>& tokens,
-                                EntropyEncodingData* codes,
-                                std::vector<uint8_t>* context_map,
-                                BitWriter* writer, size_t layer,
-                                AuxOut* aux_out) {
-  size_t total_bits = 0;
+void BuildAndEncodeHistograms(const HistogramParams& params,
+                              size_t num_contexts,
+                              std::vector<std::vector<Token>>& tokens,
+                              EntropyEncodingData* codes,
+                              std::vector<uint8_t>* context_map,
+                              BitWriter* writer, size_t layer,
+                              AuxOut* aux_out) {
   codes->lz77.nonserialized_distance_context = num_contexts;
   std::vector<std::vector<Token>> tokens_lz77;
   ApplyLZ77(params, num_contexts, tokens, codes->lz77, tokens_lz77);
@@ -1488,22 +1348,11 @@ size_t BuildAndEncodeHistograms(const HistogramParams& params,
                                  128 + num_contexts * 40 + max_contexts * 96);
   if (writer) {
     JXL_CHECK(Bundle::Write(codes->lz77, writer, layer, aux_out));
-  } else {
-    size_t ebits, bits;
-    JXL_CHECK(Bundle::CanEncode(codes->lz77, &ebits, &bits));
-    total_bits += bits;
   }
   if (codes->lz77.enabled) {
     if (writer) {
-      size_t b = writer->BitsWritten();
       EncodeUintConfig(codes->lz77.length_uint_config, writer,
                        /*log_alpha_size=*/8);
-      total_bits += writer->BitsWritten() - b;
-    } else {
-      SizeWriter size_writer;
-      EncodeUintConfig(codes->lz77.length_uint_config, &size_writer,
-                       /*log_alpha_size=*/8);
-      total_bits += size_writer.size;
     }
     num_contexts += 1;
     tokens = std::move(tokens_lz77);
@@ -1569,9 +1418,8 @@ size_t BuildAndEncodeHistograms(const HistogramParams& params,
   }
 
   // Encode histograms.
-  total_bits += builder.BuildAndStoreEntropyCodes(params, tokens, codes,
-                                                  context_map, use_prefix_code,
-                                                  writer, layer, aux_out);
+  builder.BuildAndStoreEntropyCodes(params, tokens, codes, context_map,
+                                    use_prefix_code, writer, layer, aux_out);
   allotment.FinishedHistogram(writer);
   ReclaimAndCharge(writer, &allotment, layer, aux_out);
 
@@ -1579,7 +1427,6 @@ size_t BuildAndEncodeHistograms(const HistogramParams& params,
     aux_out->layers[layer].num_clustered_histograms +=
         codes->encoding_info.size();
   }
-  return total_bits;
 }
 
 size_t WriteTokens(const std::vector<Token>& tokens,

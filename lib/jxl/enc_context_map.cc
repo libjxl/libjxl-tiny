@@ -21,41 +21,6 @@
 
 namespace jxl {
 
-namespace {
-
-size_t IndexOf(const std::vector<uint8_t>& v, uint8_t value) {
-  size_t i = 0;
-  for (; i < v.size(); ++i) {
-    if (v[i] == value) return i;
-  }
-  return i;
-}
-
-void MoveToFront(std::vector<uint8_t>* v, size_t index) {
-  uint8_t value = (*v)[index];
-  for (size_t i = index; i != 0; --i) {
-    (*v)[i] = (*v)[i - 1];
-  }
-  (*v)[0] = value;
-}
-
-std::vector<uint8_t> MoveToFrontTransform(const std::vector<uint8_t>& v) {
-  if (v.empty()) return v;
-  uint8_t max_value = *std::max_element(v.begin(), v.end());
-  std::vector<uint8_t> mtf(max_value + 1);
-  for (size_t i = 0; i <= max_value; ++i) mtf[i] = i;
-  std::vector<uint8_t> result(v.size());
-  for (size_t i = 0; i < v.size(); ++i) {
-    size_t index = IndexOf(mtf, v[i]);
-    JXL_ASSERT(index < mtf.size());
-    result[i] = static_cast<uint8_t>(index);
-    MoveToFront(&mtf, index);
-  }
-  return result;
-}
-
-}  // namespace
-
 void EncodeContextMap(const std::vector<uint8_t>& context_map,
                       size_t num_histograms, BitWriter* writer, size_t layer,
                       AuxOut* aux_out) {
@@ -67,44 +32,19 @@ void EncodeContextMap(const std::vector<uint8_t>& context_map,
     return;
   }
 
-  std::vector<uint8_t> transformed_symbols = MoveToFrontTransform(context_map);
-  std::vector<std::vector<Token>> tokens(1), mtf_tokens(1);
+  std::vector<std::vector<Token>> tokens(1);
   EntropyEncodingData codes;
   std::vector<uint8_t> dummy_context_map;
   for (size_t i = 0; i < context_map.size(); i++) {
     tokens[0].emplace_back(0, context_map[i]);
   }
-  for (size_t i = 0; i < transformed_symbols.size(); i++) {
-    mtf_tokens[0].emplace_back(0, transformed_symbols[i]);
-  }
   HistogramParams params;
   params.uint_method = HistogramParams::HybridUintMethod::kContextMap;
-  size_t ans_cost = BuildAndEncodeHistograms(
-      params, 1, tokens, &codes, &dummy_context_map, nullptr, 0, nullptr);
-  size_t mtf_cost = BuildAndEncodeHistograms(
-      params, 1, mtf_tokens, &codes, &dummy_context_map, nullptr, 0, nullptr);
-  bool use_mtf = mtf_cost < ans_cost;
-  // Rebuild token list.
-  tokens[0].clear();
-  for (size_t i = 0; i < transformed_symbols.size(); i++) {
-    tokens[0].emplace_back(0,
-                           use_mtf ? transformed_symbols[i] : context_map[i]);
-  }
-  size_t entry_bits = CeilLog2Nonzero(num_histograms);
-  size_t simple_cost = entry_bits * context_map.size();
-  if (entry_bits < 4 && simple_cost < ans_cost && simple_cost < mtf_cost) {
-    writer->Write(1, 1);
-    writer->Write(2, entry_bits);
-    for (size_t i = 0; i < context_map.size(); i++) {
-      writer->Write(entry_bits, context_map[i]);
-    }
-  } else {
-    writer->Write(1, 0);
-    writer->Write(1, use_mtf);  // Use/don't use MTF.
-    BuildAndEncodeHistograms(params, 1, tokens, &codes, &dummy_context_map,
-                             writer, layer, aux_out);
-    WriteTokens(tokens[0], codes, dummy_context_map, writer);
-  }
+  writer->Write(1, 0);
+  writer->Write(1, 0);  // Don't use MTF.
+  BuildAndEncodeHistograms(params, 1, tokens, &codes, &dummy_context_map,
+                           writer, layer, aux_out);
+  WriteTokens(tokens[0], codes, dummy_context_map, writer);
 }
 
 void EncodeBlockCtxMap(const BlockCtxMap& block_ctx_map, BitWriter* writer,
