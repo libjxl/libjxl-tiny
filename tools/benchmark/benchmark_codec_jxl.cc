@@ -52,8 +52,6 @@ struct JxlArgs {
   double xmul;
 
   bool use_ac_strategy;
-  bool qprogressive;  // progressive with shift-quantization.
-  bool progressive;
 
   std::string debug_image_dir;
 };
@@ -66,10 +64,6 @@ Status AddCommandLineOptionsJxlCodec(BenchmarkArgs* args) {
                   1.0);
   args->AddFlag(&jxlargs->use_ac_strategy, "use_ac_strategy",
                 "If true, AC strategy will be used.", false);
-  args->AddFlag(&jxlargs->qprogressive, "qprogressive",
-                "Enable quantized progressive mode for AC.", false);
-  args->AddFlag(&jxlargs->progressive, "progressive",
-                "Enable progressive mode for AC.", false);
 
   args->AddString(
       &jxlargs->debug_image_dir, "debug_image_dir",
@@ -196,9 +190,6 @@ class JxlCodec : public ImageCodec {
       JXL_RETURN_IF_ERROR(MakeDir(cinfo_.debug_prefix));
     }
     cparams_.butteraugli_distance = butteraugli_target_;
-
-    cparams_.progressive_mode = jxlargs->progressive;
-    cparams_.qprogressive_mode = jxlargs->qprogressive;
 
     cparams_.ba_params.hf_asymmetry = ba_params_.hf_asymmetry;
     cparams_.ba_params.xmul = static_cast<float>(jxlargs->xmul);

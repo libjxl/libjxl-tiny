@@ -327,8 +327,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/modular/transform/enc_transform.h
   jxl/optimize.cc
   jxl/optimize.h
-  jxl/progressive_split.cc
-  jxl/progressive_split.h
 )
 
 set(JPEGXL_DEC_INTERNAL_LIBS

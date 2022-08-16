@@ -1041,14 +1041,9 @@ JxlEncoderStatus JxlEncoderFrameSettingsSetOption(
       frame_settings->values.cparams.responsive = value;
       return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_PROGRESSIVE_AC:
-      frame_settings->values.cparams.progressive_mode = value;
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_QPROGRESSIVE_AC:
-      frame_settings->values.cparams.qprogressive_mode = value;
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_PROGRESSIVE_DC:
-      return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,
-                           "Progressive DC is not supported");
+      return JXL_ENC_ERROR;
     case JXL_ENC_FRAME_SETTING_PALETTE_COLORS:
       if (value < -1 || value > 70913) {
         return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,

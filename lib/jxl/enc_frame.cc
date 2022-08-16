@@ -107,7 +107,6 @@ Status LoopFilterFromParams(const CompressParams& cparams,
 }
 
 Status MakeFrameHeader(const CompressParams& cparams,
-                       const ProgressiveSplitter& progressive_splitter,
                        const FrameInfo& frame_info, const ImageBundle& ib,
                        FrameHeader* JXL_RESTRICT frame_header) {
   frame_header->nonserialized_is_preview = frame_info.is_preview;
@@ -116,8 +115,9 @@ Status MakeFrameHeader(const CompressParams& cparams,
       frame_info.save_before_color_transform;
   frame_header->frame_type = frame_info.frame_type;
   frame_header->name = ib.name;
-
-  progressive_splitter.InitPasses(&frame_header->passes);
+  frame_header->passes.num_passes = 1;
+  frame_header->passes.num_downsample = 0;
+  frame_header->passes.shift[0] = 0;
 
   if (cparams.modular_mode) {
     frame_header->encoding = FrameEncoding::kModular;
@@ -331,7 +331,7 @@ class LossyFrameEncoder {
 
     JXL_RETURN_IF_ERROR(InitializePassesEncoder(
         *opsin, cms, pool_, enc_state_, modular_frame_encoder, aux_out_));
-    enc_state_->passes.resize(enc_state_->progressive_splitter.GetNumPasses());
+    enc_state_->passes.resize(1);
     for (PassesEncoderState::PassData& pass : enc_state_->passes) {
       pass.ac_tokens.resize(shared.frame_dim.num_groups);
     }
@@ -396,36 +396,31 @@ class LossyFrameEncoder {
       ReclaimAndCharge(writer, &allotment, kLayerAC, aux_out_);
     }
 
-    for (size_t i = 0; i < enc_state_->progressive_splitter.GetNumPasses();
-         i++) {
-      // Encode coefficient orders.
-      size_t order_bits = 0;
-      JXL_RETURN_IF_ERROR(U32Coder::CanEncode(
-          kOrderEnc, enc_state_->used_orders[i], &order_bits));
-      BitWriter::Allotment allotment(writer, order_bits);
-      JXL_CHECK(U32Coder::Write(kOrderEnc, enc_state_->used_orders[i], writer));
-      ReclaimAndCharge(writer, &allotment, kLayerOrder, aux_out_);
-      EncodeCoeffOrders(
-          enc_state_->used_orders[i],
-          &enc_state_->shared
-               .coeff_orders[i * enc_state_->shared.coeff_order_size],
-          writer, kLayerOrder, aux_out_);
+    // Encode coefficient orders.
+    size_t order_bits = 0;
+    JXL_RETURN_IF_ERROR(U32Coder::CanEncode(
+        kOrderEnc, enc_state_->used_orders[0], &order_bits));
+    BitWriter::Allotment allotment(writer, order_bits);
+    JXL_CHECK(U32Coder::Write(kOrderEnc, enc_state_->used_orders[0], writer));
+    ReclaimAndCharge(writer, &allotment, kLayerOrder, aux_out_);
+    EncodeCoeffOrders(enc_state_->used_orders[0],
+                      &enc_state_->shared.coeff_orders[0], writer, kLayerOrder,
+                      aux_out_);
 
-      // Encode histograms.
-      HistogramParams hist_params(
-          enc_state_->cparams.speed_tier,
-          enc_state_->shared.block_ctx_map.NumACContexts());
-      hist_params.lz77_method = HistogramParams::LZ77Method::kNone;
-      if (enc_state_->cparams.decoding_speed_tier >= 1) {
-        hist_params.max_histograms = 6;
-      }
-      BuildAndEncodeHistograms(
-          hist_params,
-          enc_state_->shared.num_histograms *
-              enc_state_->shared.block_ctx_map.NumACContexts(),
-          enc_state_->passes[i].ac_tokens, &enc_state_->passes[i].codes,
-          &enc_state_->passes[i].context_map, writer, kLayerAC, aux_out_);
+    // Encode histograms.
+    HistogramParams hist_params(
+        enc_state_->cparams.speed_tier,
+        enc_state_->shared.block_ctx_map.NumACContexts());
+    hist_params.lz77_method = HistogramParams::LZ77Method::kNone;
+    if (enc_state_->cparams.decoding_speed_tier >= 1) {
+      hist_params.max_histograms = 6;
     }
+    BuildAndEncodeHistograms(
+        hist_params,
+        enc_state_->shared.num_histograms *
+            enc_state_->shared.block_ctx_map.NumACContexts(),
+        enc_state_->passes[0].ac_tokens, &enc_state_->passes[0].codes,
+        &enc_state_->passes[0].context_map, writer, kLayerAC, aux_out_);
 
     return true;
   }
@@ -447,18 +442,11 @@ class LossyFrameEncoder {
         enc_state_->cparams.speed_tier, enc_state_->shared.ac_strategy,
         Rect(enc_state_->shared.raw_quant_field));
     enc_state_->used_orders.clear();
-    enc_state_->used_orders.resize(
-        enc_state_->progressive_splitter.GetNumPasses(),
-        used_orders_info.second);
-    for (size_t i = 0; i < enc_state_->progressive_splitter.GetNumPasses();
-         i++) {
-      ComputeCoeffOrder(
-          enc_state_->cparams.speed_tier, *enc_state_->coeffs[i],
-          enc_state_->shared.ac_strategy, frame_dim, enc_state_->used_orders[i],
-          used_orders_info.first,
-          &enc_state_->shared
-               .coeff_orders[i * enc_state_->shared.coeff_order_size]);
-    }
+    enc_state_->used_orders.resize(1, used_orders_info.second);
+    ComputeCoeffOrder(enc_state_->cparams.speed_tier, *enc_state_->coeffs[0],
+                      enc_state_->shared.ac_strategy, frame_dim,
+                      enc_state_->used_orders[0], used_orders_info.first,
+                      &enc_state_->shared.coeff_orders[0]);
   }
 
   template <typename V, typename R>
@@ -533,7 +521,6 @@ Status EncodeFrame(const CompressParams& cparams_orig,
   std::unique_ptr<FrameHeader> frame_header =
       jxl::make_unique<FrameHeader>(metadata);
   JXL_RETURN_IF_ERROR(MakeFrameHeader(cparams,
-                                      passes_enc_state->progressive_splitter,
                                       frame_info, ib, frame_header.get()));
   // Check that if the codestream header says xyb_encoded, the color_transform
   // matches the requirement. This is checked from the cparams here, even though
@@ -664,8 +651,7 @@ Status EncodeFrame(const CompressParams& cparams_orig,
       FrameHeader::kSplines);
   JXL_RETURN_IF_ERROR(WriteFrameHeader(*frame_header, writer, aux_out));
 
-  const size_t num_passes =
-      passes_enc_state->progressive_splitter.GetNumPasses();
+  const size_t num_passes = 1;
 
   // DC global info + DC groups + AC global info + AC groups *
   // num_passes.
