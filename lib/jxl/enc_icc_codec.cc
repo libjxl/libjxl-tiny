@@ -394,8 +394,7 @@ Status WriteICC(const PaddedBytes& icc, BitWriter* JXL_RESTRICT writer,
         enc[i]);
   }
   HistogramParams params;
-  params.lz77_method = enc.size() < 4096 ? HistogramParams::LZ77Method::kOptimal
-                                         : HistogramParams::LZ77Method::kLZ77;
+  params.lz77_method = HistogramParams::LZ77Method::kRLE;
   EntropyEncodingData code;
   std::vector<uint8_t> context_map;
   params.force_huffman = true;

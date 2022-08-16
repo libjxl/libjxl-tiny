@@ -1118,9 +1118,7 @@ Status ModularFrameEncoder::EncodeGlobalInfo(BitWriter* writer,
           : HistogramParams::ANSHistogramStrategy::kApproximate;
   params.lz77_method =
       cparams_.decoding_speed_tier >= 3 && cparams_.modular_mode
-          ? (cparams_.speed_tier >= SpeedTier::kFalcon
-                 ? HistogramParams::LZ77Method::kRLE
-                 : HistogramParams::LZ77Method::kLZ77)
+          ? HistogramParams::LZ77Method::kRLE
           : HistogramParams::LZ77Method::kNone;
   // Near-lossless DC, as well as modular mode, require choosing hybrid uint
   // more carefully.
@@ -1134,9 +1132,7 @@ Status ModularFrameEncoder::EncodeGlobalInfo(BitWriter* writer,
     params.max_histograms = 12;
   }
   if (cparams_.decoding_speed_tier >= 1 && cparams_.responsive) {
-    params.lz77_method = cparams_.speed_tier >= SpeedTier::kCheetah
-                             ? HistogramParams::LZ77Method::kRLE
-                             : HistogramParams::LZ77Method::kLZ77;
+    params.lz77_method = HistogramParams::LZ77Method::kRLE;
   }
   if (cparams_.decoding_speed_tier >= 2 && cparams_.responsive) {
     params.uint_method = HistogramParams::HybridUintMethod::k000;

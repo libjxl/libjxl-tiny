@@ -118,7 +118,7 @@ TEST(ModularTest, RoundtripLossyDeltaPaletteWP) {
   io.ShrinkTo(300, 100);
 
   compressed_size = Roundtrip(&io, cparams, {}, pool, &io_out);
-  EXPECT_LE(compressed_size, 7000u);
+  EXPECT_LE(compressed_size, 8000u);
   cparams.ba_params.intensity_target = 80.0f;
   EXPECT_THAT(ButteraugliDistance(io, io_out, cparams.ba_params, GetJxlCms(),
                                   /*distmap=*/nullptr, pool),
