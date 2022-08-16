@@ -43,7 +43,6 @@
 #include "lib/jxl/enc_cache.h"
 #include "lib/jxl/enc_chroma_from_luma.h"
 #include "lib/jxl/enc_coeff_order.h"
-#include "lib/jxl/enc_context_map.h"
 #include "lib/jxl/enc_entropy_coder.h"
 #include "lib/jxl/enc_group.h"
 #include "lib/jxl/enc_modular.h"
@@ -407,9 +406,7 @@ class LossyFrameEncoder {
             &shared.coeff_orders[idx_pass * shared.coeff_order_size], rect,
             ac_rows, shared.ac_strategy, frame_header->chroma_subsampling,
             &group_caches_[thread].num_nzeroes,
-            &enc_state_->passes[idx_pass].ac_tokens[group_index],
-            enc_state_->shared.quant_dc, enc_state_->shared.raw_quant_field,
-            enc_state_->shared.block_ctx_map);
+            &enc_state_->passes[idx_pass].ac_tokens[group_index]);
       }
     };
     JXL_RETURN_IF_ERROR(RunOnPool(pool_, 0, shared.frame_dim.num_groups,
@@ -425,7 +422,7 @@ class LossyFrameEncoder {
     // Encode quantizer DC and global scale.
     JXL_RETURN_IF_ERROR(
         enc_state_->shared.quantizer.Encode(writer, kLayerQuant, aux_out_));
-    EncodeBlockCtxMap(enc_state_->shared.block_ctx_map, writer, aux_out_);
+    writer->Write(1, 1);  // default BlockCtxMap
     ColorCorrelationMapEncodeDC(&enc_state_->shared.cmap, writer, kLayerDC,
                                 aux_out_);
     return true;

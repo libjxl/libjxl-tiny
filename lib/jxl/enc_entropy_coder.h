@@ -38,9 +38,7 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
                           const AcStrategyImage& ac_strategy,
                           YCbCrChromaSubsampling cs,
                           Image3I* JXL_RESTRICT tmp_num_nzeroes,
-                          std::vector<Token>* JXL_RESTRICT output,
-                          const ImageB& qdc, const ImageI& qf,
-                          const BlockCtxMap& block_ctx_map);
+                          std::vector<Token>* JXL_RESTRICT output);
 
 }  // namespace jxl
 
