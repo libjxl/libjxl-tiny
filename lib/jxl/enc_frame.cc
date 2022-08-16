@@ -46,11 +46,8 @@
 #include "lib/jxl/enc_entropy_coder.h"
 #include "lib/jxl/enc_group.h"
 #include "lib/jxl/enc_modular.h"
-#include "lib/jxl/enc_noise.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_photon_noise.h"
 #include "lib/jxl/enc_quant_weights.h"
-#include "lib/jxl/enc_splines.h"
 #include "lib/jxl/enc_toc.h"
 #include "lib/jxl/enc_xyb.h"
 #include "lib/jxl/fields.h"
@@ -67,23 +64,6 @@
 
 namespace jxl {
 namespace {
-
-uint64_t FrameFlagsFromParams(const CompressParams& cparams) {
-  uint64_t flags = 0;
-
-  const float dist = cparams.butteraugli_distance;
-
-  // We don't add noise at low butteraugli distances because the original
-  // noise is stored within the compressed image and adding noise makes things
-  // worse.
-  if (ApplyOverride(cparams.noise, dist >= kMinButteraugliForNoise) ||
-      cparams.photon_noise_iso > 0 ||
-      cparams.manual_noise.size() == NoiseParams::kNumNoisePoints) {
-    flags |= FrameHeader::kNoise;
-  }
-
-  return flags;
-}
 
 Status LoopFilterFromParams(const CompressParams& cparams,
                             FrameHeader* JXL_RESTRICT frame_header) {
@@ -160,12 +140,7 @@ Status MakeFrameHeader(const CompressParams& cparams,
     }
   }
 
-  frame_header->flags = FrameFlagsFromParams(cparams);
-  // Non-photon noise is not supported in the Modular encoder for now.
-  if (frame_header->encoding != FrameEncoding::kVarDCT &&
-      cparams.photon_noise_iso == 0 && cparams.manual_noise.empty()) {
-    frame_header->UpdateFlag(false, FrameHeader::Flags::kNoise);
-  }
+  frame_header->flags = 0;
 
   JXL_RETURN_IF_ERROR(LoopFilterFromParams(cparams, frame_header));
 
@@ -532,10 +507,6 @@ class LossyFrameEncoder {
 };
 
 Status ParamsPostInit(CompressParams* p) {
-  if (!p->manual_noise.empty() &&
-      p->manual_noise.size() != NoiseParams::kNumNoisePoints) {
-    return JXL_FAILURE("Invalid number of noise lut entries");
-  }
   if (!p->manual_xyb_factors.empty() && p->manual_xyb_factors.size() != 3) {
     return JXL_FAILURE("Invalid number of XYB quantization factors");
   }
@@ -809,26 +780,6 @@ Status EncodeFrame(const CompressParams& cparams_orig,
     return get_output(AcGroupIndex(pass, group, frame_dim.num_groups,
                                    frame_dim.num_dc_groups, has_ac_global));
   };
-
-  if (frame_header->flags & FrameHeader::kSplines) {
-    EncodeSplines(lossy_frame_encoder.State()->shared.image_features.splines,
-                  get_output(0), kLayerSplines, HistogramParams(), aux_out);
-  }
-
-  if (cparams.photon_noise_iso > 0) {
-    lossy_frame_encoder.State()->shared.image_features.noise_params =
-        SimulatePhotonNoise(ib.xsize(), ib.ysize(), cparams.photon_noise_iso);
-  }
-  if (cparams.manual_noise.size() == NoiseParams::kNumNoisePoints) {
-    for (size_t i = 0; i < NoiseParams::kNumNoisePoints; i++) {
-      lossy_frame_encoder.State()->shared.image_features.noise_params.lut[i] =
-          cparams.manual_noise[i];
-    }
-  }
-  if (frame_header->flags & FrameHeader::kNoise) {
-    EncodeNoise(lossy_frame_encoder.State()->shared.image_features.noise_params,
-                get_output(0), kLayerNoise, aux_out);
-  }
 
   JXL_RETURN_IF_ERROR(
       DequantMatricesEncodeDC(&lossy_frame_encoder.State()->shared.matrices,

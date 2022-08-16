@@ -161,7 +161,6 @@ endif()  # JPEGXL_ENABLE_TOOLS
 # Other developer tools.
 if(JPEGXL_ENABLE_DEVTOOLS)
   list(APPEND INTERNAL_TOOL_BINARIES
-    fuzzer_corpus
     butteraugli_main
     decode_and_encode
     display_to_hlg
@@ -172,10 +171,7 @@ if(JPEGXL_ENABLE_DEVTOOLS)
     generate_lut_template
     ssimulacra_main
     xyb_range
-    jxl_from_tree
   )
-
-  add_executable(fuzzer_corpus fuzzer_corpus.cc)
 
   add_executable(ssimulacra_main ssimulacra_main.cc ssimulacra.cc)
   add_executable(butteraugli_main butteraugli_main.cc)
@@ -187,7 +183,6 @@ if(JPEGXL_ENABLE_DEVTOOLS)
   add_executable(texture_to_cube hdr/texture_to_cube.cc)
   add_executable(generate_lut_template hdr/generate_lut_template.cc)
   add_executable(xyb_range xyb_range.cc)
-  add_executable(jxl_from_tree jxl_from_tree.cc)
 endif()  # JPEGXL_ENABLE_DEVTOOLS
 
 # Benchmark tools.

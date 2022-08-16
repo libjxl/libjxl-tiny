@@ -368,19 +368,6 @@ TEST(EncodeTest, frame_settingsTest) {
     EXPECT_NE(nullptr, enc.get());
     JxlEncoderFrameSettings* frame_settings =
         JxlEncoderFrameSettingsCreate(enc.get(), NULL);
-    EXPECT_EQ(
-        JXL_ENC_SUCCESS,
-        JxlEncoderFrameSettingsSetFloatOption(
-            frame_settings, JXL_ENC_FRAME_SETTING_PHOTON_NOISE, 1777.777));
-    VerifyFrameEncoding(enc.get(), frame_settings);
-    EXPECT_NEAR(1777.777f, enc->last_used_cparams.photon_noise_iso, 1E-6);
-  }
-
-  {
-    JxlEncoderPtr enc = JxlEncoderMake(nullptr);
-    EXPECT_NE(nullptr, enc.get());
-    JxlEncoderFrameSettings* frame_settings =
-        JxlEncoderFrameSettingsCreate(enc.get(), NULL);
     EXPECT_EQ(JXL_ENC_SUCCESS,
               JxlEncoderFrameSettingsSetFloatOption(
                   frame_settings,

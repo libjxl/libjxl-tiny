@@ -288,15 +288,9 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_jxl_skcms.h
   jxl/enc_modular.cc
   jxl/enc_modular.h
-  jxl/enc_noise.cc
-  jxl/enc_noise.h
   jxl/enc_params.h
-  jxl/enc_photon_noise.cc
-  jxl/enc_photon_noise.h
   jxl/enc_quant_weights.cc
   jxl/enc_quant_weights.h
-  jxl/enc_splines.cc
-  jxl/enc_splines.h
   jxl/enc_toc.cc
   jxl/enc_toc.h
   jxl/enc_transforms-inl.h
