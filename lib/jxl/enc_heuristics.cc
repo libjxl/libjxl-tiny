@@ -18,10 +18,7 @@
 #include "lib/jxl/enc_cache.h"
 #include "lib/jxl/enc_chroma_from_luma.h"
 #include "lib/jxl/enc_modular.h"
-#include "lib/jxl/enc_noise.h"
-#include "lib/jxl/enc_photon_noise.h"
 #include "lib/jxl/enc_quant_weights.h"
-#include "lib/jxl/enc_splines.h"
 #include "lib/jxl/enc_xyb.h"
 #include "lib/jxl/gaborish.h"
 
@@ -38,8 +35,7 @@ void FindBestDequantMatrices(const CompressParams& cparams,
 
 bool DefaultEncoderHeuristics::HandlesColorConversion(
     const CompressParams& cparams, const ImageBundle& ib) {
-  return cparams.noise != Override::kOn && cparams.patches != Override::kOn &&
-         cparams.speed_tier >= SpeedTier::kWombat && cparams.resampling == 1 &&
+  return cparams.speed_tier >= SpeedTier::kWombat && cparams.resampling == 1 &&
          cparams.color_transform == ColorTransform::kXYB &&
          !cparams.modular_mode && !ib.HasAlpha();
 }
@@ -552,37 +548,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
   CompressParams& cparams = enc_state->cparams;
   PassesSharedState& shared = enc_state->shared;
 
-  // Compute parameters for noise synthesis.
-  if (shared.frame_header.flags & FrameHeader::kNoise) {
-    PROFILER_ZONE("enc GetNoiseParam");
-    if (cparams.photon_noise_iso == 0) {
-      // Don't start at zero amplitude since adding noise is expensive -- it
-      // significantly slows down decoding, and this is unlikely to
-      // completely go away even with advanced optimizations. After the
-      // kNoiseModelingRampUpDistanceRange we have reached the full level,
-      // i.e. noise is no longer represented by the compressed image, so we
-      // can add full noise by the noise modeling itself.
-      static const float kNoiseModelingRampUpDistanceRange = 0.6;
-      static const float kNoiseLevelAtStartOfRampUp = 0.25;
-      static const float kNoiseRampupStart = 1.0;
-      // TODO(user) test and properly select quality_coef with smooth
-      // filter
-      float quality_coef = 1.0f;
-      const float rampup = (cparams.butteraugli_distance - kNoiseRampupStart) /
-                           kNoiseModelingRampUpDistanceRange;
-      if (rampup < 1.0f) {
-        quality_coef = kNoiseLevelAtStartOfRampUp +
-                       (1.0f - kNoiseLevelAtStartOfRampUp) * rampup;
-      }
-      if (rampup < 0.0f) {
-        quality_coef = kNoiseRampupStart;
-      }
-      if (!GetNoiseParameter(*opsin, &shared.image_features.noise_params,
-                             quality_coef)) {
-        shared.frame_header.flags &= ~FrameHeader::kNoise;
-      }
-    }
-  }
   if (enc_state->shared.frame_header.upsampling != 1 &&
       !cparams.already_downsampled) {
     // In VarDCT mode, LossyFrameHeuristics takes care of running downsampling
@@ -607,17 +572,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
 
   if (cparams.butteraugli_distance < 0) {
     return JXL_FAILURE("Expected non-negative distance");
-  }
-
-  // Find and subtract splines.
-  if (cparams.speed_tier <= SpeedTier::kSquirrel) {
-    // If we do already have them, they were passed upstream to EncodeFile.
-    if (!shared.image_features.splines.HasAny()) {
-      shared.image_features.splines = FindSplines(*opsin);
-    }
-    JXL_RETURN_IF_ERROR(shared.image_features.splines.InitializeDrawCache(
-        opsin->xsize(), opsin->ysize(), shared.cmap));
-    shared.image_features.splines.SubtractFrom(opsin);
   }
 
   static const float kAcQuant = 0.79f;

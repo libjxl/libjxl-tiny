@@ -146,9 +146,6 @@ struct CompressParams {
   size_t modular_group_size_shift = 1;
 
   Override preview = Override::kDefault;
-  Override noise = Override::kDefault;
-  Override dots = Override::kDefault;
-  Override patches = Override::kDefault;
   Override gaborish = Override::kDefault;
   int epf = -1;
 
@@ -206,10 +203,6 @@ struct CompressParams {
   // allowing reconstruction of the original JPEG.
   bool force_cfl_jpeg_recompression = true;
 
-  // Set the noise to what it would approximately be if shooting at the nominal
-  // exposure for a given ISO setting on a 35mm camera.
-  float photon_noise_iso = 0;
-
   // modular mode options below
   ModularOptions options;
   int responsive = -1;
@@ -257,7 +250,6 @@ struct CompressParams {
   // -1: don't care
   int level = -1;
 
-  std::vector<float> manual_noise;
   std::vector<float> manual_xyb_factors;
 };
 
@@ -265,9 +257,6 @@ static constexpr float kMinButteraugliForDynamicAR = 0.5f;
 static constexpr float kMinButteraugliForDots = 3.0f;
 static constexpr float kMinButteraugliToSubtractOriginalPatches = 3.0f;
 static constexpr float kMinButteraugliDistanceForProgressiveDc = 4.5f;
-
-// Always off
-static constexpr float kMinButteraugliForNoise = 99.0f;
 
 // Minimum butteraugli distance the encoder accepts.
 static constexpr float kMinButteraugliDistance = 0.01f;

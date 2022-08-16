@@ -1022,15 +1022,9 @@ JxlEncoderStatus JxlEncoderFrameSettingsSetOption(
       frame_settings->values.cparams.already_downsampled = (value == 1);
       return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_NOISE:
-      frame_settings->values.cparams.noise = static_cast<jxl::Override>(value);
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_DOTS:
-      frame_settings->values.cparams.dots = static_cast<jxl::Override>(value);
-      return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_PATCHES:
-      frame_settings->values.cparams.patches =
-          static_cast<jxl::Override>(value);
-      return JXL_ENC_SUCCESS;
+      return JXL_ENC_ERROR;
     case JXL_ENC_FRAME_SETTING_EPF:
       if (value < -1 || value > 3) {
         return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,
@@ -1180,11 +1174,7 @@ JxlEncoderStatus JxlEncoderFrameSettingsSetFloatOption(
     float value) {
   switch (option) {
     case JXL_ENC_FRAME_SETTING_PHOTON_NOISE:
-      if (value < 0) return JXL_ENC_ERROR;
-      // TODO(lode): add encoder setting to set the 8 floating point values of
-      // the noise synthesis parameters per frame for more fine grained control.
-      frame_settings->values.cparams.photon_noise_iso = value;
-      return JXL_ENC_SUCCESS;
+      return JXL_ENC_ERROR;
     case JXL_ENC_FRAME_SETTING_MODULAR_MA_TREE_LEARNING_PERCENT:
       if (value < -1.f || value > 100.f) {
         return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_API_USAGE,

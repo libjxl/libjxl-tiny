@@ -1894,62 +1894,6 @@ TEST(DecodeTest, PixelTestOpaqueSrgbLossy) {
   }
 }
 
-// Opaque image with noise enabled, decoded to RGB8 and RGBA8.
-TEST(DecodeTest, PixelTestOpaqueSrgbLossyNoise) {
-  for (unsigned channels = 3; channels <= 4; channels++) {
-    JxlDecoder* dec = JxlDecoderCreate(NULL);
-
-    size_t xsize = 512, ysize = 300;
-    size_t num_pixels = xsize * ysize;
-    std::vector<uint8_t> pixels =
-        jxl::test::GetSomeTestImage(xsize, ysize, 3, 0);
-    JxlPixelFormat format_orig = {3, JXL_TYPE_UINT16, JXL_BIG_ENDIAN, 0};
-    jxl::TestCodestreamParams params;
-    params.cparams.noise = jxl::Override::kOn;
-    jxl::PaddedBytes compressed = jxl::CreateTestJXLCodestream(
-        jxl::Span<const uint8_t>(pixels.data(), pixels.size()), xsize, ysize, 3,
-        params);
-
-    JxlPixelFormat format = {channels, JXL_TYPE_UINT8, JXL_LITTLE_ENDIAN, 0};
-
-    std::vector<uint8_t> pixels2 = jxl::DecodeWithAPI(
-        dec, jxl::Span<const uint8_t>(compressed.data(), compressed.size()),
-        format, /*use_callback=*/false, /*set_buffer_early=*/true,
-        /*use_resizable_runner=*/false, /*require_boxes=*/false,
-        /*expect_success=*/true);
-    JxlDecoderReset(dec);
-    EXPECT_EQ(num_pixels * channels, pixels2.size());
-
-    jxl::ColorEncoding color_encoding0 = jxl::ColorEncoding::SRGB(false);
-    jxl::Span<const uint8_t> span0(pixels.data(), pixels.size());
-    jxl::CodecInOut io0;
-    io0.SetSize(xsize, ysize);
-    EXPECT_TRUE(ConvertFromExternal(
-        span0, xsize, ysize, color_encoding0, /*channels=*/3,
-        /*alpha_is_premultiplied=*/false, /*bits_per_sample=*/16,
-        format_orig.endianness,
-        /*pool=*/nullptr, &io0.Main(), /*float_in=*/false,
-        /*align=*/0));
-
-    jxl::ColorEncoding color_encoding1 = jxl::ColorEncoding::SRGB(false);
-    jxl::Span<const uint8_t> span1(pixels2.data(), pixels2.size());
-    jxl::CodecInOut io1;
-    EXPECT_TRUE(ConvertFromExternal(span1, xsize, ysize, color_encoding1,
-                                    channels, /*alpha_is_premultiplied=*/false,
-                                    /*bits_per_sample=*/8, format.endianness,
-                                    /*pool=*/nullptr, &io1.Main(),
-                                    /*float_in=*/false,
-                                    /*align=*/0));
-
-    jxl::ButteraugliParams ba;
-    EXPECT_THAT(ButteraugliDistance(io0, io1, ba, jxl::GetJxlCms(),
-                                    /*distmap=*/nullptr, nullptr),
-                IsSlightlyBelow(2.6f));
-
-    JxlDecoderDestroy(dec);
-  }
-}
-
 TEST(DecodeTest, ProcessEmptyInputWithBoxes) {
   size_t xsize = 123, ysize = 77;
   std::vector<uint8_t> pixels = jxl::test::GetSomeTestImage(xsize, ysize, 3, 0);

@@ -56,10 +56,6 @@ struct JxlArgs {
   bool qprogressive;  // progressive with shift-quantization.
   bool progressive;
 
-  Override noise;
-  Override dots;
-  Override patches;
-
   bool log_search_state;
   std::string debug_image_dir;
 };
@@ -78,13 +74,6 @@ Status AddCommandLineOptionsJxlCodec(BenchmarkArgs* args) {
                 "Enable quantized progressive mode for AC.", false);
   args->AddFlag(&jxlargs->progressive, "progressive",
                 "Enable progressive mode for AC.", false);
-
-  args->AddOverride(&jxlargs->noise, "noise",
-                    "Enable(1)/disable(0) noise generation.");
-  args->AddOverride(&jxlargs->dots, "dots",
-                    "Enable(1)/disable(0) dots generation.");
-  args->AddOverride(&jxlargs->patches, "patches",
-                    "Enable(1)/disable(0) patch dictionary.");
 
   args->AddFlag(&jxlargs->log_search_state, "log_search_state",
                 "Print out debug info for tortoise mode AQ loop.", false);
@@ -236,13 +225,8 @@ class JxlCodec : public ImageCodec {
     cparams_.butteraugli_distance = butteraugli_target_;
     cparams_.target_bitrate = bitrate_target_;
 
-    cparams_.dots = jxlargs->dots;
-    cparams_.patches = jxlargs->patches;
-
     cparams_.progressive_mode = jxlargs->progressive;
     cparams_.qprogressive_mode = jxlargs->qprogressive;
-
-    cparams_.noise = jxlargs->noise;
 
     cparams_.quant_border_bias = static_cast<float>(jxlargs->quant_bias);
     cparams_.ba_params.hf_asymmetry = ba_params_.hf_asymmetry;

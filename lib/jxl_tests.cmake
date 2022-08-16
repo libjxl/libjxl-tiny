@@ -25,7 +25,6 @@ set(TEST_FILES
   jxl/dct_test.cc
   jxl/decode_test.cc
   jxl/enc_external_image_test.cc
-  jxl/enc_photon_noise_test.cc
   jxl/encode_test.cc
   jxl/entropy_coder_test.cc
   jxl/fast_dct_test.cc
@@ -56,7 +55,6 @@ set(TEST_FILES
   jxl/roundtrip_test.cc
   jxl/simd_util_test.cc
   jxl/speed_tier_test.cc
-  jxl/splines_test.cc
   jxl/toc_test.cc
   jxl/xorshift128plus_test.cc
   threads/thread_parallel_runner_test.cc

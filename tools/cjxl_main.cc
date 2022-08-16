@@ -52,9 +52,6 @@ namespace jpegxl {
 namespace tools {
 
 namespace {
-inline bool ParsePhotonNoiseParameter(const char* arg, float* out) {
-  return strncmp(arg, "ISO", 3) == 0 && ParseFloat(arg + 3, out) && *out > 0;
-}
 inline bool ParseIntensityTarget(const char* arg, float* out) {
   return ParseFloat(arg, out) && *out > 0;
 }
@@ -231,14 +228,6 @@ struct CompressArgs {
     cmdline->AddOptionValue('\0', "num_reps", "N",
                             "How many times to compress. (For benchmarking).",
                             &num_reps, &ParseUnsigned, 1);
-
-    cmdline->AddOptionValue(
-        '\0', "photon_noise", "ISO3200",
-        "Adds noise to the image emulating photographic film noise. "
-        "The higher the given number, the grainier the image will be. "
-        "As an example, a value of 100 gives low noise whereas a value "
-        "of 3200 gives a lot of noise. The default value is 0.",
-        &photon_noise_iso, &ParsePhotonNoiseParameter, 1);
 
     cmdline->AddOptionValue(
         '\0', "dots", "0|1",
@@ -461,7 +450,6 @@ struct CompressArgs {
   int32_t modular_palette_colors = -1;
   int32_t modular_nb_prev_channels = -1;
   float modular_ma_tree_learning_percent = -1.f;
-  float photon_noise_iso = 0;
   int32_t codestream_level = -1;
   int32_t responsive = -1;
   float distance = 1.0;
@@ -841,9 +829,6 @@ int main(int argc, char** argv) {
                                 ? ""
                                 : "Valid values are {-1, 1, 2, 4, 8}.\n";
                    });
-      SetFlagFrameOptionOrDie("photon_noise_iso", args.photon_noise_iso,
-                              jxl_encoder_frame_settings,
-                              JXL_ENC_FRAME_SETTING_PHOTON_NOISE);
       SetFlagFrameOptionOrDie("already_downsampled",
                               static_cast<int32_t>(args.already_downsampled),
                               jxl_encoder_frame_settings,
