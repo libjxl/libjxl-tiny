@@ -1150,12 +1150,7 @@ JxlEncoderStatus JxlEncoderFrameSettingsSetOption(
       }
       return JXL_ENC_SUCCESS;
     case JXL_ENC_FRAME_SETTING_JPEG_RECON_CFL:
-      if (value == -1) {
-        frame_settings->values.cparams.force_cfl_jpeg_recompression = true;
-      } else {
-        frame_settings->values.cparams.force_cfl_jpeg_recompression = value;
-      }
-      return JXL_ENC_SUCCESS;
+      return JXL_ENC_ERROR;
     case JXL_ENC_FRAME_INDEX_BOX:
       frame_settings->values.frame_index_box = true;
       return JXL_ENC_SUCCESS;

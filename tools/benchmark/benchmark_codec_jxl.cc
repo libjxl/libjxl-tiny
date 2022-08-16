@@ -50,13 +50,11 @@ size_t OutputToBytes(void* data, const uint8_t* buf, size_t count) {
 
 struct JxlArgs {
   double xmul;
-  double quant_bias;
 
   bool use_ac_strategy;
   bool qprogressive;  // progressive with shift-quantization.
   bool progressive;
 
-  bool log_search_state;
   std::string debug_image_dir;
 };
 
@@ -66,17 +64,12 @@ Status AddCommandLineOptionsJxlCodec(BenchmarkArgs* args) {
   args->AddDouble(&jxlargs->xmul, "xmul",
                   "Multiplier for the difference in X channel in Butteraugli.",
                   1.0);
-  args->AddDouble(&jxlargs->quant_bias, "quant_bias",
-                  "Bias border pixels during quantization by this ratio.", 0.0);
   args->AddFlag(&jxlargs->use_ac_strategy, "use_ac_strategy",
                 "If true, AC strategy will be used.", false);
   args->AddFlag(&jxlargs->qprogressive, "qprogressive",
                 "Enable quantized progressive mode for AC.", false);
   args->AddFlag(&jxlargs->progressive, "progressive",
                 "Enable progressive mode for AC.", false);
-
-  args->AddFlag(&jxlargs->log_search_state, "log_search_state",
-                "Print out debug info for tortoise mode AQ loop.", false);
 
   args->AddString(
       &jxlargs->debug_image_dir, "debug_image_dir",
@@ -111,14 +104,6 @@ class JxlCodec : public ImageCodec {
       }
     } else if (param == "uint8") {
       uint8_ = true;
-    } else if (param[0] == 'u') {
-      char* end;
-      cparams_.uniform_quant = strtof(param.c_str() + 1, &end);
-      if (end == param.c_str() + 1 || *end != '\0') {
-        return JXL_FAILURE("failed to parse uniform quant parameter %s",
-                           param.c_str());
-      }
-      ba_params_.hf_asymmetry = args_.ba_params.hf_asymmetry;
     } else if (param.substr(0, kMaxPassesPrefix.size()) == kMaxPassesPrefix) {
       std::istringstream parser(param.substr(kMaxPassesPrefix.size()));
       parser >> dparams_.max_passes;
@@ -186,8 +171,6 @@ class JxlCodec : public ImageCodec {
       if (cparams_.epf > 3) {
         return JXL_FAILURE("Invalid epf value");
       }
-    } else if (param.substr(0, 2) == "nr") {
-      normalize_bitrate_ = true;
     } else if (param.substr(0, 16) == "faster_decoding=") {
       cparams_.decoding_speed_tier =
           strtol(param.substr(16).c_str(), nullptr, 10);
@@ -200,7 +183,6 @@ class JxlCodec : public ImageCodec {
   bool IsColorAware() const override {
     // Can't deal with negative values from color space conversion.
     if (cparams_.modular_mode) return false;
-    if (normalize_bitrate_) return false;
     // Otherwise, input may be in any color space.
     return true;
   }
@@ -223,12 +205,10 @@ class JxlCodec : public ImageCodec {
       JXL_RETURN_IF_ERROR(MakeDir(cinfo_.debug_prefix));
     }
     cparams_.butteraugli_distance = butteraugli_target_;
-    cparams_.target_bitrate = bitrate_target_;
 
     cparams_.progressive_mode = jxlargs->progressive;
     cparams_.qprogressive_mode = jxlargs->qprogressive;
 
-    cparams_.quant_border_bias = static_cast<float>(jxlargs->quant_bias);
     cparams_.ba_params.hf_asymmetry = ba_params_.hf_asymmetry;
     cparams_.ba_params.xmul = static_cast<float>(jxlargs->xmul);
 
@@ -237,26 +217,6 @@ class JxlCodec : public ImageCodec {
         cparams_.modular_mode && !has_ctransform_) {
       cparams_.color_transform = ColorTransform::kXYB;
     }
-
-    cparams_.log_search_state = jxlargs->log_search_state;
-
-#if JPEGXL_ENABLE_JPEG
-    if (normalize_bitrate_ && cparams_.butteraugli_distance > 0.0f) {
-      extras::PackedPixelFile ppf;
-      JxlPixelFormat format = {0, JXL_TYPE_UINT8, JXL_BIG_ENDIAN, 0};
-      JXL_RETURN_IF_ERROR(ConvertCodecInOutToPackedPixelFile(
-          *io, format, io->metadata.m.color_encoding, pool, &ppf));
-      extras::EncodedImage encoded;
-      std::unique_ptr<extras::Encoder> encoder = extras::GetJPEGEncoder();
-      encoder->SetOption("q", "95");
-      JXL_RETURN_IF_ERROR(encoder->Encode(ppf, &encoded, pool));
-      float jpeg_bits = encoded.bitstreams.back().size() * kBitsPerByte;
-      float jpeg_bitrate = jpeg_bits / (io->xsize() * io->ysize());
-      // Formula fitted on jyrki31 corpus for distances between 1.0 and 8.0.
-      cparams_.target_bitrate = (jpeg_bitrate * 0.36f /
-                                 (0.6f * cparams_.butteraugli_distance + 0.4f));
-    }
-#endif
 
     const double start = Now();
     PassesEncoderState passes_encoder_state;
@@ -309,7 +269,6 @@ class JxlCodec : public ImageCodec {
   bool has_ctransform_ = false;
   extras::JXLDecompressParams dparams_;
   bool uint8_ = false;
-  bool normalize_bitrate_ = false;
 };
 
 ImageCodec* CreateNewJxlCodec(const BenchmarkArgs& args) {

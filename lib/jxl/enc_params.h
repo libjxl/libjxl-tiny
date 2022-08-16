@@ -114,14 +114,6 @@ inline const char* SpeedTierName(SpeedTier speed_tier) {
 // NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
 struct CompressParams {
   float butteraugli_distance = 1.0f;
-  size_t target_size = 0;
-  float target_bitrate = 0.0f;
-
-  // 0.0 means search for the adaptive quantization map that matches the
-  // butteraugli distance, positive values mean quantize everywhere with that
-  // value.
-  float uniform_quant = 0.0f;
-  float quant_border_bias = 0.0f;
 
   SpeedTier speed_tier = SpeedTier::kSquirrel;
   int brotli_effort = -1;
@@ -131,10 +123,6 @@ struct CompressParams {
   // 4 = fastest speed, lowest quality
   // TODO(veluca): hook this up to the C API.
   size_t decoding_speed_tier = 0;
-
-  int max_butteraugli_iters = 4;
-
-  int max_butteraugli_iters_guetzli_mode = 100;
 
   ColorTransform color_transform = ColorTransform::kXYB;
   YCbCrChromaSubsampling chroma_subsampling;
@@ -184,24 +172,13 @@ struct CompressParams {
   // Saliency-map (owned by caller).
   ImageF* saliency_map = nullptr;
 
-  // Input and output file name. Will be used to provide pluggable saliency
-  // extractor with paths.
-  const char* file_in = nullptr;
-  const char* file_out = nullptr;
-
   // Currently unused as of 2020-01.
   bool clear_metadata = false;
 
   // Prints extra information during/after encoding.
   bool verbose = false;
-  bool log_search_state = false;
 
   ButteraugliParams ba_params;
-
-  // Force usage of CfL when doing JPEG recompression. This can have unexpected
-  // effects on the decoded pixels, while still being JPEG-compliant and
-  // allowing reconstruction of the original JPEG.
-  bool force_cfl_jpeg_recompression = true;
 
   // modular mode options below
   ModularOptions options;
@@ -243,8 +220,6 @@ struct CompressParams {
   // Butteraugli target distance on the original full size image, this can be
   // different from butteraugli_distance if resampling was used.
   float original_butteraugli_distance = -1.0f;
-
-  float quant_ac_rescale = 1.0;
 
   // Codestream level to conform to.
   // -1: don't care

@@ -422,30 +422,6 @@ TEST(EncodeTest, frame_settingsTest) {
     EXPECT_NEAR(0.77f, enc->last_used_cparams.options.nb_repeats, 1E-6);
     EXPECT_EQ(7, enc->last_used_cparams.options.max_properties);
   }
-
-  {
-    JxlEncoderPtr enc = JxlEncoderMake(nullptr);
-    EXPECT_NE(nullptr, enc.get());
-    JxlEncoderFrameSettings* frame_settings =
-        JxlEncoderFrameSettingsCreate(enc.get(), NULL);
-    EXPECT_EQ(JXL_ENC_SUCCESS,
-              JxlEncoderFrameSettingsSetOption(
-                  frame_settings, JXL_ENC_FRAME_SETTING_JPEG_RECON_CFL, 0));
-    VerifyFrameEncoding(enc.get(), frame_settings);
-    EXPECT_EQ(false, enc->last_used_cparams.force_cfl_jpeg_recompression);
-  }
-
-  {
-    JxlEncoderPtr enc = JxlEncoderMake(nullptr);
-    EXPECT_NE(nullptr, enc.get());
-    JxlEncoderFrameSettings* frame_settings =
-        JxlEncoderFrameSettingsCreate(enc.get(), NULL);
-    EXPECT_EQ(JXL_ENC_SUCCESS,
-              JxlEncoderFrameSettingsSetOption(
-                  frame_settings, JXL_ENC_FRAME_SETTING_JPEG_RECON_CFL, 1));
-    VerifyFrameEncoding(enc.get(), frame_settings);
-    EXPECT_EQ(true, enc->last_used_cparams.force_cfl_jpeg_recompression);
-  }
 }
 
 TEST(EncodeTest, LossyEncoderUseOriginalProfileTest) {

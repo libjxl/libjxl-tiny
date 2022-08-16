@@ -64,11 +64,6 @@ Status InitializePassesEncoder(const Image3F& opsin, const JxlCmsInterface& cms,
     enc_state->coeffs.pop_back();
   }
 
-  float scale =
-      shared.quantizer.ScaleGlobalScale(enc_state->cparams.quant_ac_rescale);
-  DequantMatricesScaleDC(&shared.matrices, scale);
-  shared.quantizer.RecomputeFromGlobalScale();
-
   Image3F dc(shared.frame_dim.xsize_blocks, shared.frame_dim.ysize_blocks);
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0, shared.frame_dim.num_groups, ThreadPool::NoInit,
