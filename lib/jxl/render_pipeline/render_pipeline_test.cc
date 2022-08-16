@@ -320,28 +320,6 @@ std::vector<RenderPipelineTestInputSettings> GeneratePipelineTests() {
       all_tests.push_back(s);
     }
 
-    {
-      auto s = settings;
-      s.cparams.epf = 3;
-      s.cparams_descr = "NoGabEpf3NoPatches";
-      all_tests.push_back(s);
-    }
-
-    {
-      auto s = settings;
-      s.cparams.gaborish = Override::kOn;
-      s.cparams.epf = 3;
-      s.cparams_descr = "GabEpf3NoPatches";
-      all_tests.push_back(s);
-    }
-
-    {
-      auto s = settings;
-      s.cparams_descr = "Splines";
-      s.splines = CreateTestSplines();
-      all_tests.push_back(s);
-    }
-
     for (size_t ups : {2, 4, 8}) {
       {
         auto s = settings;

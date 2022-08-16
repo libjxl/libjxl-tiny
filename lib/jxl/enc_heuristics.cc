@@ -15,7 +15,6 @@
 
 #include "lib/jxl/enc_ac_strategy.h"
 #include "lib/jxl/enc_adaptive_quantization.h"
-#include "lib/jxl/enc_ar_control_field.h"
 #include "lib/jxl/enc_cache.h"
 #include "lib/jxl/enc_chroma_from_luma.h"
 #include "lib/jxl/enc_modular.h"
@@ -645,7 +644,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
   //
   // output: Gaborished XYB, CfL, ACS, raw quant field, EPF control field.
 
-  ArControlFieldHeuristics ar_heuristics;
   AcStrategyHeuristics acs_heuristics;
   CfLHeuristics cfl_heuristics;
 
@@ -690,6 +688,7 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
 
   FindBestDequantMatrices(cparams, *opsin, modular_frame_encoder,
                           &enc_state->shared.matrices);
+  FillPlane(static_cast<uint8_t>(4), &enc_state->shared.epf_sharpness);
 
   cfl_heuristics.Init(*opsin);
   acs_heuristics.Init(*opsin, enc_state);
@@ -719,10 +718,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
     // Choose block sizes.
     acs_heuristics.ProcessRect(r);
 
-    // Choose amount of post-processing smoothing.
-    // TODO(veluca): should this go *after* AdjustQuantField?
-    ar_heuristics.RunRect(r, *opsin, enc_state, thread);
-
     // Always set the initial quant field, so we can compute the CfL map with
     // more accuracy. The initial quant field might change in slower modes, but
     // adjusting the quant field with butteraugli when all the other encoding
@@ -747,7 +742,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
           DivCeil(enc_state->shared.frame_dim.ysize_blocks,
                   kEncTileDimInBlocks),
       [&](const size_t num_threads) {
-        ar_heuristics.PrepareForThreads(num_threads);
         cfl_heuristics.PrepareForThreads(num_threads);
         return true;
       },
