@@ -157,34 +157,6 @@ TEST(ANSTest, RandomUnbalancedStreamRoundtripBig) {
   RoundtripRandomUnbalancedStream(ANS_MAX_ALPHABET_SIZE);
 }
 
-TEST(ANSTest, UintConfigRoundtrip) {
-  for (size_t log_alpha_size = 5; log_alpha_size <= 8; log_alpha_size++) {
-    std::vector<HybridUintConfig> uint_config, uint_config_dec;
-    for (size_t i = 0; i < log_alpha_size; i++) {
-      for (size_t j = 0; j <= i; j++) {
-        for (size_t k = 0; k <= i - j; k++) {
-          uint_config.emplace_back(i, j, k);
-        }
-      }
-    }
-    uint_config.emplace_back(log_alpha_size, 0, 0);
-    uint_config_dec.resize(uint_config.size());
-    BitWriter writer;
-    BitWriter::Allotment allotment(&writer, 10 * uint_config.size());
-    EncodeUintConfigs(uint_config, &writer, log_alpha_size);
-    ReclaimAndCharge(&writer, &allotment, 0, nullptr);
-    writer.ZeroPadToByte();
-    BitReader br(writer.GetSpan());
-    EXPECT_TRUE(DecodeUintConfigs(log_alpha_size, &uint_config_dec, &br));
-    EXPECT_TRUE(br.Close());
-    for (size_t i = 0; i < uint_config.size(); i++) {
-      EXPECT_EQ(uint_config[i].split_token, uint_config_dec[i].split_token);
-      EXPECT_EQ(uint_config[i].msb_in_token, uint_config_dec[i].msb_in_token);
-      EXPECT_EQ(uint_config[i].lsb_in_token, uint_config_dec[i].lsb_in_token);
-    }
-  }
-}
-
 void TestCheckpointing(bool ans, bool lz77) {
   std::vector<std::vector<Token>> input_values(1);
   for (size_t i = 0; i < 1024; i++) {

@@ -227,7 +227,7 @@ void VerifyFrameEncoding(size_t xsize, size_t ysize, JxlEncoder* enc,
 
 void VerifyFrameEncoding(JxlEncoder* enc,
                          const JxlEncoderFrameSettings* frame_settings) {
-  VerifyFrameEncoding(63, 129, enc, frame_settings, 2600,
+  VerifyFrameEncoding(63, 129, enc, frame_settings, 2700,
                       /*lossy_use_original_profile=*/false);
 }
 
@@ -242,13 +242,13 @@ TEST(EncodeTest, EncoderResetTest) {
   JxlEncoderPtr enc = JxlEncoderMake(nullptr);
   EXPECT_NE(nullptr, enc.get());
   VerifyFrameEncoding(50, 200, enc.get(),
-                      JxlEncoderFrameSettingsCreate(enc.get(), nullptr), 4300,
+                      JxlEncoderFrameSettingsCreate(enc.get(), nullptr), 4500,
                       false);
   // Encoder should become reusable for a new image from scratch after using
   // reset.
   JxlEncoderReset(enc.get());
   VerifyFrameEncoding(157, 77, enc.get(),
-                      JxlEncoderFrameSettingsCreate(enc.get(), nullptr), 2300,
+                      JxlEncoderFrameSettingsCreate(enc.get(), nullptr), 2500,
                       false);
 }
 
@@ -287,7 +287,7 @@ TEST(EncodeTest, frame_settingsTest) {
         JxlEncoderFrameSettingsCreate(enc.get(), NULL);
     EXPECT_EQ(JXL_ENC_SUCCESS,
               JxlEncoderSetFrameLossless(frame_settings, JXL_TRUE));
-    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 3750, false);
+    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 4100, false);
     EXPECT_EQ(true, enc->last_used_cparams.IsLossless());
   }
 
@@ -297,7 +297,7 @@ TEST(EncodeTest, frame_settingsTest) {
     JxlEncoderFrameSettings* frame_settings =
         JxlEncoderFrameSettingsCreate(enc.get(), NULL);
     EXPECT_EQ(JXL_ENC_SUCCESS, JxlEncoderSetFrameDistance(frame_settings, 0.5));
-    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 3000, false);
+    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 3100, false);
     EXPECT_EQ(0.5, enc->last_used_cparams.butteraugli_distance);
   }
 
@@ -467,7 +467,7 @@ TEST(EncodeTest, LossyEncoderUseOriginalProfileTest) {
     ASSERT_NE(nullptr, enc.get());
     JxlEncoderFrameSettings* frame_settings =
         JxlEncoderFrameSettingsCreate(enc.get(), NULL);
-    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 4100, true);
+    VerifyFrameEncoding(63, 129, enc.get(), frame_settings, 4200, true);
   }
   {
     JxlEncoderPtr enc = JxlEncoderMake(nullptr);

@@ -39,7 +39,6 @@ void EncodeContextMap(const std::vector<uint8_t>& context_map,
     tokens[0].emplace_back(0, context_map[i]);
   }
   HistogramParams params;
-  params.uint_method = HistogramParams::HybridUintMethod::kContextMap;
   writer->Write(1, 0);
   writer->Write(1, 0);  // Don't use MTF.
   BuildAndEncodeHistograms(params, 1, tokens, &codes, &dummy_context_map,
