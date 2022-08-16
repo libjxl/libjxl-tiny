@@ -24,7 +24,6 @@
 #include "lib/jxl/base/bits.h"
 #include "lib/jxl/dec_ans.h"
 #include "lib/jxl/enc_cluster.h"
-#include "lib/jxl/enc_context_map.h"
 #include "lib/jxl/fast_math-inl.h"
 #include "lib/jxl/fields.h"
 
@@ -32,6 +31,7 @@ namespace jxl {
 
 namespace {
 
+static const size_t kClustersLimit = 128;
 static const int kMaxNumSymbolsForSmallCode = 4;
 
 void ANSBuildInfoTable(const ANSHistBin* counts, const AliasTable::Entry* table,
@@ -379,8 +379,24 @@ class HistogramBuilder {
       for (size_t c = 0; c < histograms_.size(); ++c) {
         (*context_map)[c] = static_cast<uint8_t>(histogram_symbols[c]);
       }
-      EncodeContextMap(*context_map, clustered_histograms.size(), writer, layer,
-                       aux_out);
+      size_t num_histograms = clustered_histograms.size();
+      if (num_histograms == 1) {
+        writer->Write(1, 1);  // Simple code
+        writer->Write(2, 0);  // 0 bits per entry.
+      } else {
+        std::vector<std::vector<Token>> tokens(1);
+        EntropyEncodingData codes;
+        std::vector<uint8_t> dummy_context_map;
+        for (size_t i = 0; i < context_map->size(); i++) {
+          tokens[0].emplace_back(0, (*context_map)[i]);
+        }
+        HistogramParams params;
+        writer->Write(1, 0);
+        writer->Write(1, 0);  // Don't use MTF.
+        BuildAndEncodeHistograms(params, 1, tokens, &codes, &dummy_context_map,
+                                 writer, layer, aux_out);
+        WriteTokens(tokens[0], codes, dummy_context_map, writer);
+      }
     }
     if (aux_out != nullptr) {
       for (size_t i = 0; i < clustered_histograms.size(); ++i) {

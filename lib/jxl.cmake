@@ -270,8 +270,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_color_management.h
   jxl/enc_comparator.cc
   jxl/enc_comparator.h
-  jxl/enc_context_map.cc
-  jxl/enc_context_map.h
   jxl/enc_entropy_coder.cc
   jxl/enc_entropy_coder.h
   jxl/enc_external_image.cc

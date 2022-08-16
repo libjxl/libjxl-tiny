@@ -92,6 +92,7 @@ struct BlockCtxMap {
       7, 8, 9, 9, 10, 11, 12, 13, 14, 14, 14, 14, 14,  //
       7, 8, 9, 9, 10, 11, 12, 13, 14, 14, 14, 14, 14,  //
   };
+  static constexpr size_t kDefaultNumCtxs = 15;
   static_assert(3 * kNumOrders ==
                     sizeof(kDefaultCtxMap) / sizeof *kDefaultCtxMap,
                 "Update default context map");
@@ -112,6 +113,11 @@ struct BlockCtxMap {
   constexpr uint32_t ZeroDensityContextsOffset(uint32_t block_ctx) const {
     return num_ctxs * kNonZeroBuckets + kZeroDensityContextCount * block_ctx;
   }
+  static constexpr uint32_t DefaultZeroDensityContextsOffset(
+      uint32_t block_ctx) {
+    return kDefaultNumCtxs * kNonZeroBuckets +
+           kZeroDensityContextCount * block_ctx;
+  }
 
   // Context map for AC coefficients consists of 2 blocks:
   //  |num_ctxs x                : context for number of non-zeros in the block
@@ -123,6 +129,9 @@ struct BlockCtxMap {
   //                               index in scan order
   constexpr uint32_t NumACContexts() const {
     return num_ctxs * (kNonZeroBuckets + kZeroDensityContextCount);
+  }
+  static constexpr uint32_t DefaultNumACContexts() {
+    return kDefaultNumCtxs * (kNonZeroBuckets + kZeroDensityContextCount);
   }
 
   // Non-zero context is based on number of non-zeros and block context.
@@ -136,6 +145,17 @@ struct BlockCtxMap {
       ctx = 4 + non_zeros / 2;
     }
     return ctx * num_ctxs + block_ctx;
+  }
+  static inline uint32_t DefaultNonZeroContext(uint32_t non_zeros,
+                                               uint32_t block_ctx) {
+    uint32_t ctx;
+    if (non_zeros >= 64) non_zeros = 64;
+    if (non_zeros < 8) {
+      ctx = non_zeros;
+    } else {
+      ctx = 4 + non_zeros / 2;
+    }
+    return ctx * kDefaultNumCtxs + block_ctx;
   }
 
   BlockCtxMap() {
