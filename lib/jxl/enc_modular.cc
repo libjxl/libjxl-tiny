@@ -1120,23 +1120,11 @@ Status ModularFrameEncoder::EncodeGlobalInfo(BitWriter* writer,
       cparams_.decoding_speed_tier >= 3 && cparams_.modular_mode
           ? HistogramParams::LZ77Method::kRLE
           : HistogramParams::LZ77Method::kNone;
-  // Near-lossless DC, as well as modular mode, require choosing hybrid uint
-  // more carefully.
-  if ((!extra_dc_precision.empty() && extra_dc_precision[0] != 0) ||
-      (cparams_.modular_mode && cparams_.speed_tier < SpeedTier::kCheetah)) {
-    params.uint_method = HistogramParams::HybridUintMethod::kFast;
-  } else {
-    params.uint_method = HistogramParams::HybridUintMethod::kNone;
-  }
   if (cparams_.decoding_speed_tier >= 1) {
     params.max_histograms = 12;
   }
   if (cparams_.decoding_speed_tier >= 1 && cparams_.responsive) {
     params.lz77_method = HistogramParams::LZ77Method::kRLE;
-  }
-  if (cparams_.decoding_speed_tier >= 2 && cparams_.responsive) {
-    params.uint_method = HistogramParams::HybridUintMethod::k000;
-    params.force_huffman = true;
   }
   BuildAndEncodeHistograms(params, kNumTreeContexts, tree_tokens_, &code_,
                            &context_map_, writer, kLayerModularTree, aux_out);

@@ -391,7 +391,6 @@ int main(int argc, const char** argv) {
   // The ans_fuzzer_friendly setting is not thread safe and therefore done in
   // an outer loop. This determines whether to use fuzzer-friendly ANS encoding.
   for (uint32_t fuzzer_friendly = 0; fuzzer_friendly < 2; ++fuzzer_friendly) {
-    jxl::SetANSFuzzerFriendly(fuzzer_friendly);
     spec.fuzzer_friendly = fuzzer_friendly;
 
     std::vector<ImageSpec> specs;

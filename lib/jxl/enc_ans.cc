@@ -25,15 +25,12 @@
 #include "lib/jxl/dec_ans.h"
 #include "lib/jxl/enc_cluster.h"
 #include "lib/jxl/enc_context_map.h"
-#include "lib/jxl/enc_huffman.h"
 #include "lib/jxl/fast_math-inl.h"
 #include "lib/jxl/fields.h"
 
 namespace jxl {
 
 namespace {
-
-bool ans_fuzzer_friendly_ = false;
 
 static const int kMaxNumSymbolsForSmallCode = 4;
 
@@ -431,26 +428,7 @@ uint32_t ComputeBestMethod(
 void BuildAndStoreANSEncodingData(
     HistogramParams::ANSHistogramStrategy ans_histogram_strategy,
     const ANSHistBin* histogram, size_t alphabet_size, size_t log_alpha_size,
-    bool use_prefix_code, ANSEncSymbolInfo* info, BitWriter* writer) {
-  if (use_prefix_code) {
-    if (alphabet_size <= 1) return;
-    std::vector<uint32_t> histo(alphabet_size);
-    for (size_t i = 0; i < alphabet_size; i++) {
-      histo[i] = histogram[i];
-      JXL_CHECK(histogram[i] >= 0);
-    }
-    {
-      std::vector<uint8_t> depths(alphabet_size);
-      std::vector<uint16_t> bits(alphabet_size);
-      BuildAndStoreHuffmanTree(histo.data(), alphabet_size, depths.data(),
-                               bits.data(), writer);
-      for (size_t i = 0; i < alphabet_size; i++) {
-        info[i].bits = depths[i] == 0 ? 0 : bits[i];
-        info[i].depth = depths[i];
-      }
-    }
-    return;
-  }
+    ANSEncSymbolInfo* info, BitWriter* writer) {
   JXL_ASSERT(alphabet_size <= ANS_TAB_SIZE);
   // Ensure we ignore trailing zeros in the histogram.
   if (alphabet_size != 0) {
@@ -481,9 +459,7 @@ void BuildAndStoreANSEncodingData(
     AliasTable::Entry a[ANS_MAX_ALPHABET_SIZE];
     InitAliasTable(counts, ANS_TAB_SIZE, log_alpha_size, a);
     ANSBuildInfoTable(counts.data(), a, alphabet_size, log_alpha_size, info);
-    if (writer != nullptr) {
-      EncodeFlatHistogram(alphabet_size, writer);
-    }
+    EncodeFlatHistogram(alphabet_size, writer);
     return;
   }
   int omit_pos = 0;
@@ -493,12 +469,8 @@ void BuildAndStoreANSEncodingData(
   AliasTable::Entry a[ANS_MAX_ALPHABET_SIZE];
   InitAliasTable(counts, ANS_TAB_SIZE, log_alpha_size, a);
   ANSBuildInfoTable(counts.data(), a, alphabet_size, log_alpha_size, info);
-  if (writer != nullptr) {
-    bool ok = EncodeCounts(counts.data(), alphabet_size, omit_pos, num_symbols,
-                           shift, symbols, writer);
-    (void)ok;
-    JXL_DASSERT(ok);
-  }
+  EncodeCounts(counts.data(), alphabet_size, omit_pos, num_symbols, shift,
+               symbols, writer);
   return;
 }
 
@@ -535,20 +507,6 @@ void ChooseUintConfigs(const HistogramParams& params,
                        std::vector<Histogram>* clustered_histograms,
                        EntropyEncodingData* codes, size_t* log_alpha_size) {
   codes->uint_config.resize(clustered_histograms->size());
-
-  if (params.uint_method == HistogramParams::HybridUintMethod::kNone) return;
-  if (params.uint_method == HistogramParams::HybridUintMethod::k000) {
-    codes->uint_config.clear();
-    codes->uint_config.resize(clustered_histograms->size(),
-                              HybridUintConfig(0, 0, 0));
-    return;
-  }
-  if (params.uint_method == HistogramParams::HybridUintMethod::kContextMap) {
-    codes->uint_config.clear();
-    codes->uint_config.resize(clustered_histograms->size(),
-                              HybridUintConfig(2, 0, 1));
-    return;
-  }
 }
 
 class HistogramBuilder {
@@ -566,36 +524,20 @@ class HistogramBuilder {
                                  const std::vector<std::vector<Token>>& tokens,
                                  EntropyEncodingData* codes,
                                  std::vector<uint8_t>* context_map,
-                                 bool use_prefix_code, BitWriter* writer,
-                                 size_t layer, AuxOut* aux_out) const {
+                                 BitWriter* writer, size_t layer,
+                                 AuxOut* aux_out) const {
     codes->encoding_info.clear();
     std::vector<Histogram> clustered_histograms(histograms_);
     context_map->resize(histograms_.size());
     if (histograms_.size() > 1) {
-      if (!ans_fuzzer_friendly_) {
-        std::vector<uint32_t> histogram_symbols;
-        ClusterHistograms(params, histograms_, kClustersLimit,
-                          &clustered_histograms, &histogram_symbols);
-        for (size_t c = 0; c < histograms_.size(); ++c) {
-          (*context_map)[c] = static_cast<uint8_t>(histogram_symbols[c]);
-        }
-      } else {
-        fill(context_map->begin(), context_map->end(), 0);
-        size_t max_symbol = 0;
-        for (const Histogram& h : histograms_) {
-          max_symbol = std::max(h.data_.size(), max_symbol);
-        }
-        size_t num_symbols = 1 << CeilLog2Nonzero(max_symbol + 1);
-        clustered_histograms.resize(1);
-        clustered_histograms[0].Clear();
-        for (size_t i = 0; i < num_symbols; i++) {
-          clustered_histograms[0].Add(i);
-        }
+      std::vector<uint32_t> histogram_symbols;
+      ClusterHistograms(params, histograms_, kClustersLimit,
+                        &clustered_histograms, &histogram_symbols);
+      for (size_t c = 0; c < histograms_.size(); ++c) {
+        (*context_map)[c] = static_cast<uint8_t>(histogram_symbols[c]);
       }
-      if (writer != nullptr) {
-        EncodeContextMap(*context_map, clustered_histograms.size(), writer,
-                         layer, aux_out);
-      }
+      EncodeContextMap(*context_map, clustered_histograms.size(), writer, layer,
+                       aux_out);
     }
     if (aux_out != nullptr) {
       for (size_t i = 0; i < clustered_histograms.size(); ++i) {
@@ -603,38 +545,15 @@ class HistogramBuilder {
             clustered_histograms[i].ShannonEntropy();
       }
     }
-    codes->use_prefix_code = use_prefix_code;
     size_t log_alpha_size = codes->lz77.enabled ? 8 : 7;  // Sane default.
-    if (ans_fuzzer_friendly_) {
-      codes->uint_config.clear();
-      codes->uint_config.resize(1, HybridUintConfig(7, 0, 0));
-    } else {
-      ChooseUintConfigs(params, tokens, *context_map, &clustered_histograms,
-                        codes, &log_alpha_size);
-    }
+    ChooseUintConfigs(params, tokens, *context_map, &clustered_histograms,
+                      codes, &log_alpha_size);
     if (log_alpha_size < 5) log_alpha_size = 5;
-    if (writer) writer->Write(1, use_prefix_code);
-
-    if (use_prefix_code) {
-      log_alpha_size = PREFIX_MAX_BITS;
-    }
-    if (writer) {
-      if (!use_prefix_code) writer->Write(2, log_alpha_size - 5);
-      EncodeUintConfigs(codes->uint_config, writer, log_alpha_size);
-    }
-    if (use_prefix_code) {
-      for (size_t c = 0; c < clustered_histograms.size(); ++c) {
-        size_t num_symbol = 1;
-        for (size_t i = 0; i < clustered_histograms[c].data_.size(); i++) {
-          if (clustered_histograms[c].data_[i]) num_symbol = i + 1;
-        }
-        if (writer) {
-          StoreVarLenUint16(num_symbol - 1, writer);
-        }
-      }
-    }
+    writer->Write(1, 0);  // use_prefix_code
+    writer->Write(2, log_alpha_size - 5);
+    EncodeUintConfigs(codes->uint_config, writer, log_alpha_size);
     for (size_t c = 0; c < clustered_histograms.size(); ++c) {
-      size_t num_symbol = 1;
+      size_t num_symbol = 0;
       for (size_t i = 0; i < clustered_histograms[c].data_.size(); i++) {
         if (clustered_histograms[c].data_[i]) num_symbol = i + 1;
       }
@@ -644,7 +563,7 @@ class HistogramBuilder {
       BitWriter::Allotment allotment(writer, 256 + num_symbol * 24);
       BuildAndStoreANSEncodingData(params.ans_histogram_strategy,
                                    clustered_histograms[c].data_.data(),
-                                   num_symbol, log_alpha_size, use_prefix_code,
+                                   num_symbol, log_alpha_size,
                                    codes->encoding_info.back().data(), writer);
       allotment.FinishedHistogram(writer);
       ReclaimAndCharge(writer, &allotment, layer, aux_out);
@@ -660,7 +579,7 @@ class HistogramBuilder {
 
 class SymbolCostEstimator {
  public:
-  SymbolCostEstimator(size_t num_contexts, bool force_huffman,
+  SymbolCostEstimator(size_t num_contexts,
                       const std::vector<std::vector<Token>>& tokens,
                       const LZ77Params& lz77) {
     HistogramBuilder builder(num_contexts);
@@ -692,7 +611,6 @@ class SymbolCostEstimator {
         float cost = 0;
         if (cnt != 0 && cnt != builder.Histo(i).total_count_) {
           cost = -FastLog2f(cnt * inv_total);
-          if (force_huffman) cost = std::ceil(cost);
         } else if (cnt == 0) {
           cost = ANS_LOG_TAB_SIZE;  // Highest possible cost.
         }
@@ -732,7 +650,7 @@ void ApplyLZ77_RLE(const HistogramParams& params, size_t num_contexts,
                    LZ77Params& lz77,
                    std::vector<std::vector<Token>>& tokens_lz77) {
   // TODO(veluca): tune heuristics here.
-  SymbolCostEstimator sce(num_contexts, params.force_huffman, tokens, lz77);
+  SymbolCostEstimator sce(num_contexts, tokens, lz77);
   float bit_decrease = 0;
   size_t total_symbols = 0;
   tokens_lz77.resize(tokens.size());
@@ -803,11 +721,7 @@ void ApplyLZ77(const HistogramParams& params, size_t num_contexts,
                const std::vector<std::vector<Token>>& tokens, LZ77Params& lz77,
                std::vector<std::vector<Token>>& tokens_lz77) {
   lz77.enabled = false;
-  if (params.force_huffman) {
-    lz77.min_symbol = std::min(PREFIX_MAX_ALPHABET_SIZE - 32, 512);
-  } else {
-    lz77.min_symbol = 224;
-  }
+  lz77.min_symbol = 224;
   if (params.lz77_method == HistogramParams::LZ77Method::kNone) {
     return;
   }
@@ -825,22 +739,14 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
   codes->lz77.nonserialized_distance_context = num_contexts;
   std::vector<std::vector<Token>> tokens_lz77;
   ApplyLZ77(params, num_contexts, tokens, codes->lz77, tokens_lz77);
-  if (ans_fuzzer_friendly_) {
-    codes->lz77.length_uint_config = HybridUintConfig(10, 0, 0);
-    codes->lz77.min_symbol = 2048;
-  }
 
   const size_t max_contexts = std::min(num_contexts, kClustersLimit);
   BitWriter::Allotment allotment(writer,
                                  128 + num_contexts * 40 + max_contexts * 96);
-  if (writer) {
-    JXL_CHECK(Bundle::Write(codes->lz77, writer, layer, aux_out));
-  }
+  JXL_CHECK(Bundle::Write(codes->lz77, writer, layer, aux_out));
   if (codes->lz77.enabled) {
-    if (writer) {
-      EncodeUintConfig(codes->lz77.length_uint_config, writer,
-                       /*log_alpha_size=*/8);
-    }
+    EncodeUintConfig(codes->lz77.length_uint_config, writer,
+                     /*log_alpha_size=*/8);
     num_contexts += 1;
     tokens = std::move(tokens_lz77);
   }
@@ -848,16 +754,6 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
   // Build histograms.
   HistogramBuilder builder(num_contexts);
   HybridUintConfig uint_config;  //  Default config for clustering.
-  // Unless we are using the kContextMap histogram option.
-  if (params.uint_method == HistogramParams::HybridUintMethod::kContextMap) {
-    uint_config = HybridUintConfig(2, 0, 1);
-  }
-  if (params.uint_method == HistogramParams::HybridUintMethod::k000) {
-    uint_config = HybridUintConfig(0, 0, 0);
-  }
-  if (ans_fuzzer_friendly_) {
-    uint_config = HybridUintConfig(10, 0, 0);
-  }
   for (size_t i = 0; i < tokens.size(); ++i) {
     if (codes->lz77.enabled) {
       for (size_t j = 0; j < tokens[i].size(); ++j) {
@@ -888,25 +784,9 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
     }
   }
 
-  bool use_prefix_code =
-      params.force_huffman || total_tokens < 100 ||
-      params.clustering == HistogramParams::ClusteringType::kFastest ||
-      ans_fuzzer_friendly_;
-  if (!use_prefix_code) {
-    bool all_singleton = true;
-    for (size_t i = 0; i < num_contexts; i++) {
-      if (builder.Histo(i).ShannonEntropy() >= 1e-5) {
-        all_singleton = false;
-      }
-    }
-    if (all_singleton) {
-      use_prefix_code = true;
-    }
-  }
-
   // Encode histograms.
-  builder.BuildAndStoreEntropyCodes(params, tokens, codes, context_map,
-                                    use_prefix_code, writer, layer, aux_out);
+  builder.BuildAndStoreEntropyCodes(params, tokens, codes, context_map, writer,
+                                    layer, aux_out);
   allotment.FinishedHistogram(writer);
   ReclaimAndCharge(writer, &allotment, layer, aux_out);
 
@@ -920,26 +800,6 @@ size_t WriteTokens(const std::vector<Token>& tokens,
                    const EntropyEncodingData& codes,
                    const std::vector<uint8_t>& context_map, BitWriter* writer) {
   size_t num_extra_bits = 0;
-  if (codes.use_prefix_code) {
-    for (size_t i = 0; i < tokens.size(); i++) {
-      uint32_t tok, nbits, bits;
-      const Token& token = tokens[i];
-      size_t histo = context_map[token.context];
-      (token.is_lz77_length ? codes.lz77.length_uint_config
-                            : codes.uint_config[histo])
-          .Encode(token.value, &tok, &nbits, &bits);
-      tok += token.is_lz77_length ? codes.lz77.min_symbol : 0;
-      // Combine two calls to the BitWriter. Equivalent to:
-      // writer->Write(codes.encoding_info[histo][tok].depth,
-      //               codes.encoding_info[histo][tok].bits);
-      // writer->Write(nbits, bits);
-      uint64_t data = codes.encoding_info[histo][tok].bits;
-      data |= bits << codes.encoding_info[histo][tok].depth;
-      writer->Write(codes.encoding_info[histo][tok].depth + nbits, data);
-      num_extra_bits += nbits;
-    }
-    return num_extra_bits;
-  }
   std::vector<uint64_t> out;
   std::vector<uint8_t> out_nbits;
   out.reserve(tokens.size());
@@ -1013,9 +873,4 @@ void WriteTokens(const std::vector<Token>& tokens,
   }
 }
 
-void SetANSFuzzerFriendly(bool ans_fuzzer_friendly) {
-#if JXL_IS_DEBUG_BUILD  // Guard against accidental / malicious changes.
-  ans_fuzzer_friendly_ = ans_fuzzer_friendly;
-#endif
-}
 }  // namespace jxl

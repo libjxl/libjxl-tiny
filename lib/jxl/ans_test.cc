@@ -205,7 +205,6 @@ void TestCheckpointing(bool ans, bool lz77) {
   HistogramParams params;
   params.lz77_method = lz77 ? HistogramParams::LZ77Method::kRLE
                             : HistogramParams::LZ77Method::kNone;
-  params.force_huffman = !ans;
 
   BitWriter writer;
   {
