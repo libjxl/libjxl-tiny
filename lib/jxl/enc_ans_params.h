@@ -20,7 +20,6 @@ struct HistogramParams {
   enum class ClusteringType {
     kFastest,  // Only 4 clusters.
     kFast,
-    kBest,
   };
 
   enum class HybridUintMethod {
@@ -28,7 +27,6 @@ struct HistogramParams {
     k000,         // force the fastest option.
     kFast,        // just try a couple of options.
     kContextMap,  // fast choice for ctx map.
-    kBest,
   };
 
   enum class LZ77Method {

@@ -102,21 +102,16 @@ struct Token {
   uint32_t value;
 };
 
-// Returns an estimate of the number of bits required to encode the given
-// histogram (header bits plus data bits).
-float ANSPopulationCost(const ANSHistBin* data, size_t alphabet_size);
-
 // Apply context clustering, compute histograms and encode them. Returns an
 // estimate of the total bits used for encoding the stream. If `writer` ==
 // nullptr, the bit estimate will not take into account the context map (which
 // does not get written if `num_contexts` == 1).
-size_t BuildAndEncodeHistograms(const HistogramParams& params,
-                                size_t num_contexts,
-                                std::vector<std::vector<Token>>& tokens,
-                                EntropyEncodingData* codes,
-                                std::vector<uint8_t>* context_map,
-                                BitWriter* writer, size_t layer,
-                                AuxOut* aux_out);
+void BuildAndEncodeHistograms(const HistogramParams& params,
+                              size_t num_contexts,
+                              std::vector<std::vector<Token>>& tokens,
+                              EntropyEncodingData* codes,
+                              std::vector<uint8_t>* context_map,
+                              BitWriter* writer, size_t layer, AuxOut* aux_out);
 
 // Write the tokens to a string.
 void WriteTokens(const std::vector<Token>& tokens,

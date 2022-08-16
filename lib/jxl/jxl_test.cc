@@ -377,7 +377,7 @@ TEST(JxlTest, RoundtripRGBToGrayscale) {
 
   CodecInOut io2;
   EXPECT_FALSE(io.Main().IsGray());
-  EXPECT_LE(Roundtrip(&io, cparams, dparams, &pool, &io2), 55100u);
+  EXPECT_LE(Roundtrip(&io, cparams, dparams, &pool, &io2), 55500u);
   EXPECT_TRUE(io2.Main().IsGray());
 
   // Convert original to grayscale here, because TransformTo refuses to
@@ -1548,7 +1548,7 @@ TEST(JxlTest,
   const PaddedBytes orig =
       ReadTestData("jxl/flower/flower.png.im_q85_luma_subsample.jpg");
   // JPEG size is 400,724 bytes.
-  EXPECT_LE(RoundtripJpeg(orig, &pool), 334000u);
+  EXPECT_LE(RoundtripJpeg(orig, &pool), 334500u);
 }
 
 TEST(JxlTest, JXL_TRANSCODE_JPEG_TEST(RoundtripJpegRecompression444_12)) {
