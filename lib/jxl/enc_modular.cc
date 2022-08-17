@@ -280,11 +280,10 @@ ModularFrameEncoder::ModularFrameEncoder(const FrameHeader& frame_header,
   stream_options_.resize(num_streams, cparams_.options);
 }
 
-Status ModularFrameEncoder::ComputeEncodingData(
-    const FrameHeader& frame_header, const ImageMetadata& metadata,
-    Image3F* JXL_RESTRICT color, const std::vector<ImageF>& extra_channels,
-    PassesEncoderState* JXL_RESTRICT enc_state, const JxlCmsInterface& cms,
-    ThreadPool* pool, AuxOut* aux_out) {
+Status ModularFrameEncoder::ComputeEncodingData(const FrameHeader& frame_header,
+                                                const ImageMetadata& metadata,
+                                                ThreadPool* pool,
+                                                AuxOut* aux_out) {
   JXL_DEBUG_V(6, "Computing modular encoding data for frame %s",
               frame_header.DebugString().c_str());
 
@@ -420,9 +419,8 @@ Status ModularFrameEncoder::EncodeStream(BitWriter* writer, AuxOut* aux_out,
 }
 
 void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
-                                      PassesEncoderState* enc_state,
-                                      bool jpeg_transcode) {
-  const Rect r = enc_state->shared.DCGroupRect(group_index);
+                                      PassesSharedState* shared) {
+  const Rect r = shared->DCGroupRect(group_index);
   extra_dc_precision[group_index] = 0;
 
   size_t stream_id = ModularStreamId::VarDCTDC(group_index).ID(frame_dim_);
@@ -432,11 +430,11 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
       ModularOptions::TreeKind::kGradientFixedDC;
 
   stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 8, 3);
-  if (enc_state->shared.frame_header.chroma_subsampling.Is444()) {
+  if (shared->frame_header.chroma_subsampling.Is444()) {
     for (size_t c : {1, 0, 2}) {
-      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c);
-      float y_factor = enc_state->shared.quantizer.GetDcStep(1);
-      float cfl_factor = enc_state->shared.cmap.DCFactors()[c];
+      float inv_factor = shared->quantizer.GetInvDcStep(c);
+      float y_factor = shared->quantizer.GetDcStep(1);
+      float cfl_factor = shared->cmap.DCFactors()[c];
       for (size_t y = 0; y < r.ysize(); y++) {
         int32_t* quant_row =
             stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c].plane.Row(y);
@@ -458,14 +456,11 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
     }
   } else {
     for (size_t c : {1, 0, 2}) {
-      Rect rect(
-          r.x0() >> enc_state->shared.frame_header.chroma_subsampling.HShift(c),
-          r.y0() >> enc_state->shared.frame_header.chroma_subsampling.VShift(c),
-          r.xsize() >>
-              enc_state->shared.frame_header.chroma_subsampling.HShift(c),
-          r.ysize() >>
-              enc_state->shared.frame_header.chroma_subsampling.VShift(c));
-      float inv_factor = enc_state->shared.quantizer.GetInvDcStep(c);
+      Rect rect(r.x0() >> shared->frame_header.chroma_subsampling.HShift(c),
+                r.y0() >> shared->frame_header.chroma_subsampling.VShift(c),
+                r.xsize() >> shared->frame_header.chroma_subsampling.HShift(c),
+                r.ysize() >> shared->frame_header.chroma_subsampling.VShift(c));
+      float inv_factor = shared->quantizer.GetInvDcStep(c);
       size_t ys = rect.ysize();
       size_t xs = rect.xsize();
       Channel& ch = stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c];
@@ -482,16 +477,15 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
     }
   }
 
-  DequantDC(r, &enc_state->shared.dc_storage, &enc_state->shared.quant_dc,
-            stream_images_[stream_id], enc_state->shared.quantizer.MulDC(), 1.0,
-            enc_state->shared.cmap.DCFactors(),
-            enc_state->shared.frame_header.chroma_subsampling,
-            enc_state->shared.block_ctx_map);
+  DequantDC(r, &shared->dc_storage, &shared->quant_dc,
+            stream_images_[stream_id], shared->quantizer.MulDC(), 1.0,
+            shared->cmap.DCFactors(), shared->frame_header.chroma_subsampling,
+            shared->block_ctx_map);
 }
 
 void ModularFrameEncoder::AddACMetadata(size_t group_index,
-                                        PassesEncoderState* enc_state) {
-  const Rect r = enc_state->shared.DCGroupRect(group_index);
+                                        PassesSharedState* shared) {
+  const Rect r = shared->DCGroupRect(group_index);
   size_t stream_id = ModularStreamId::ACMetadata(group_index).ID(frame_dim_);
   stream_options_[stream_id].max_chan_size = 0xFFFFFF;
   stream_options_[stream_id].wp_tree_mode = ModularOptions::TreeMode::kNoWP;
@@ -509,15 +503,15 @@ void ModularFrameEncoder::AddACMetadata(size_t group_index,
   image.channel[0] = Channel(cr.xsize(), cr.ysize(), 3, 3);
   image.channel[1] = Channel(cr.xsize(), cr.ysize(), 3, 3);
   image.channel[2] = Channel(r.xsize() * r.ysize(), 2, 0, 0);
-  ConvertPlaneAndClamp(cr, enc_state->shared.cmap.ytox_map,
-                       Rect(image.channel[0].plane), &image.channel[0].plane);
-  ConvertPlaneAndClamp(cr, enc_state->shared.cmap.ytob_map,
-                       Rect(image.channel[1].plane), &image.channel[1].plane);
+  ConvertPlaneAndClamp(cr, shared->cmap.ytox_map, Rect(image.channel[0].plane),
+                       &image.channel[0].plane);
+  ConvertPlaneAndClamp(cr, shared->cmap.ytob_map, Rect(image.channel[1].plane),
+                       &image.channel[1].plane);
   size_t num = 0;
   for (size_t y = 0; y < r.ysize(); y++) {
-    AcStrategyRow row_acs = enc_state->shared.ac_strategy.ConstRow(r, y);
-    const int32_t* row_qf = r.ConstRow(enc_state->shared.raw_quant_field, y);
-    const uint8_t* row_epf = r.ConstRow(enc_state->shared.epf_sharpness, y);
+    AcStrategyRow row_acs = shared->ac_strategy.ConstRow(r, y);
+    const int32_t* row_qf = r.ConstRow(shared->raw_quant_field, y);
+    const uint8_t* row_epf = r.ConstRow(shared->epf_sharpness, y);
     int32_t* out_acs = image.channel[2].plane.Row(0);
     int32_t* out_qf = image.channel[2].plane.Row(1);
     int32_t* row_out_epf = image.channel[3].plane.Row(y);

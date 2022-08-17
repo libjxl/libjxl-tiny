@@ -42,9 +42,6 @@ struct PassesEncoderState {
   // Per-pass DCT coefficients for the image. One row per group.
   std::vector<std::unique_ptr<ACImage>> coeffs;
 
-  // Raw data for special (reference+DC) frames.
-  std::vector<std::unique_ptr<BitWriter>> special_frames;
-
   CompressParams cparams;
 
   struct PassData {
@@ -62,27 +59,6 @@ struct PassesEncoderState {
   // Multiplier to be applied to the quant matrices of the x channel.
   float x_qm_multiplier = 1.0f;
   float b_qm_multiplier = 1.0f;
-
-  // Heuristics to be used by the encoder.
-  std::unique_ptr<EncoderHeuristics> heuristics =
-      make_unique<DefaultEncoderHeuristics>();
-};
-
-// Initialize per-frame information.
-class ModularFrameEncoder;
-Status InitializePassesEncoder(const Image3F& opsin, const JxlCmsInterface& cms,
-                               ThreadPool* pool,
-                               PassesEncoderState* passes_enc_state,
-                               ModularFrameEncoder* modular_frame_encoder,
-                               AuxOut* aux_out);
-
-// Working area for ComputeCoefficients (per-group!)
-struct EncCache {
-  // Allocates memory when first called, shrinks images to current group size.
-  void InitOnce();
-
-  // TokenizeCoefficients
-  Image3I num_nzeroes;
 };
 
 }  // namespace jxl

@@ -23,22 +23,6 @@
 
 namespace jxl {
 
-void FindBestDequantMatrices(const CompressParams& cparams,
-                             const Image3F& opsin,
-                             ModularFrameEncoder* modular_frame_encoder,
-                             DequantMatrices* dequant_matrices) {
-  // TODO(veluca): quant matrices for no-gaborish.
-  // TODO(veluca): heuristics for in-bitstream quant tables.
-  *dequant_matrices = DequantMatrices();
-}
-
-bool DefaultEncoderHeuristics::HandlesColorConversion(
-    const CompressParams& cparams, const ImageBundle& ib) {
-  return cparams.speed_tier >= SpeedTier::kWombat &&
-         cparams.color_transform == ColorTransform::kXYB &&
-         !cparams.modular_mode && !ib.HasAlpha();
-}
-
 Status DefaultEncoderHeuristics::LossyFrameHeuristics(
     PassesEncoderState* enc_state, ModularFrameEncoder* modular_frame_encoder,
     const ImageBundle* original_pixels, Image3F* opsin,
@@ -79,14 +63,11 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
   AcStrategyHeuristics acs_heuristics;
   CfLHeuristics cfl_heuristics;
 
-  if (!opsin->xsize()) {
-    JXL_ASSERT(HandlesColorConversion(cparams, *original_pixels));
-    *opsin = Image3F(RoundUpToBlockDim(original_pixels->xsize()),
-                     RoundUpToBlockDim(original_pixels->ysize()));
-    opsin->ShrinkTo(original_pixels->xsize(), original_pixels->ysize());
-    ToXYB(*original_pixels, pool, opsin, cms, /*linear=*/nullptr);
-    PadImageToBlockMultipleInPlace(opsin);
-  }
+  *opsin = Image3F(RoundUpToBlockDim(original_pixels->xsize()),
+                   RoundUpToBlockDim(original_pixels->ysize()));
+  opsin->ShrinkTo(original_pixels->xsize(), original_pixels->ysize());
+  ToXYB(*original_pixels, pool, opsin, cms, /*linear=*/nullptr);
+  PadImageToBlockMultipleInPlace(opsin);
 
   // Compute an initial estimate of the quantization field.
   // Call InitialQuantField only in Hare mode or slower. Otherwise, rely
@@ -116,8 +97,6 @@ Status DefaultEncoderHeuristics::LossyFrameHeuristics(
     GaborishInverse(opsin, 0.9908511000000001f, pool);
   }
 
-  FindBestDequantMatrices(cparams, *opsin, modular_frame_encoder,
-                          &enc_state->shared.matrices);
   FillPlane(static_cast<uint8_t>(4), &enc_state->shared.epf_sharpness);
 
   cfl_heuristics.Init(*opsin);

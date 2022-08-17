@@ -256,7 +256,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_butteraugli_comparator.h
   jxl/enc_butteraugli_pnorm.cc
   jxl/enc_butteraugli_pnorm.h
-  jxl/enc_cache.cc
   jxl/enc_cache.h
   jxl/enc_chroma_from_luma.cc
   jxl/enc_chroma_from_luma.h

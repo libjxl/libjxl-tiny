@@ -59,15 +59,13 @@ Status EncodePreview(const CompressParams& cparams, const ImageBundle& ib,
   // TODO(janwas): also support generating preview by downsampling
   if (ib.HasColor()) {
     AuxOut aux_out;
-    PassesEncoderState passes_enc_state;
     // TODO(lode): check if we want all extra channels and matching xyb_encoded
     // for the preview, such that using the main ImageMetadata object for
     // encoding this frame is warrented.
     FrameInfo frame_info;
     frame_info.is_preview = true;
-    JXL_RETURN_IF_ERROR(EncodeFrame(cparams, frame_info, metadata, ib,
-                                    &passes_enc_state, cms, pool,
-                                    &preview_writer, &aux_out));
+    JXL_RETURN_IF_ERROR(EncodeFrame(cparams, frame_info, metadata, ib, cms,
+                                    pool, &preview_writer, &aux_out));
     preview_writer.ZeroPadToByte();
   }
 
@@ -101,9 +99,8 @@ Status WriteHeaders(CodecMetadata* metadata, BitWriter* writer,
 }
 
 Status EncodeFile(const CompressParams& params, const CodecInOut* io,
-                  PassesEncoderState* passes_enc_state, PaddedBytes* compressed,
-                  const JxlCmsInterface& cms, AuxOut* aux_out,
-                  ThreadPool* pool) {
+                  PaddedBytes* compressed, const JxlCmsInterface& cms,
+                  AuxOut* aux_out, ThreadPool* pool) {
   io->CheckMetadata();
   BitWriter writer;
 
@@ -140,14 +137,8 @@ Status EncodeFile(const CompressParams& params, const CodecInOut* io,
       info.save_as_reference = 1;
     }
     JXL_RETURN_IF_ERROR(EncodeFrame(cparams, info, metadata.get(),
-                                    io->frames[i], passes_enc_state, cms, pool,
-                                    &writer, aux_out));
-  }
-
-  // Clean up passes_enc_state in case it gets reused.
-  for (size_t i = 0; i < 4; i++) {
-    passes_enc_state->shared.dc_frames[i] = Image3F();
-    passes_enc_state->shared.reference_frames[i].storage = ImageBundle();
+                                    io->frames[i], cms, pool, &writer,
+                                    aux_out));
   }
 
   *compressed = std::move(writer).TakeBytes();
