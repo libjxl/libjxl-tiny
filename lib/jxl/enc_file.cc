@@ -113,8 +113,6 @@ Status EncodeFile(const CompressParams& params, const CodecInOut* io,
     cparams.color_transform = io->Main().color_transform;
   }
 
-  JXL_RETURN_IF_ERROR(ParamsPostInit(&cparams));
-
   std::unique_ptr<CodecMetadata> metadata = jxl::make_unique<CodecMetadata>();
   JXL_RETURN_IF_ERROR(PrepareCodecMetadataFromIO(cparams, io, metadata.get()));
   JXL_RETURN_IF_ERROR(WriteHeaders(metadata.get(), &writer, aux_out));

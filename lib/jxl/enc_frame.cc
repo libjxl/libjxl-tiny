@@ -47,7 +47,6 @@
 #include "lib/jxl/enc_group.h"
 #include "lib/jxl/enc_modular.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_quant_weights.h"
 #include "lib/jxl/enc_toc.h"
 #include "lib/jxl/enc_xyb.h"
 #include "lib/jxl/fields.h"
@@ -385,14 +384,14 @@ class LossyFrameEncoder {
 
   Status EncodeGlobalACInfo(BitWriter* writer,
                             ModularFrameEncoder* modular_frame_encoder) {
-    JXL_RETURN_IF_ERROR(DequantMatricesEncode(&enc_state_->shared.matrices,
-                                              writer, kLayerQuant, aux_out_,
-                                              modular_frame_encoder));
-    size_t num_histo_bits =
-        CeilLog2Nonzero(enc_state_->shared.frame_dim.num_groups);
-    if (num_histo_bits != 0) {
-      BitWriter::Allotment allotment(writer, num_histo_bits);
-      writer->Write(num_histo_bits, enc_state_->shared.num_histograms - 1);
+    {
+      BitWriter::Allotment allotment(writer, 1024);
+      writer->Write(1, 1);  // all default quant matrices
+      size_t num_histo_bits =
+          CeilLog2Nonzero(enc_state_->shared.frame_dim.num_groups);
+      if (num_histo_bits != 0) {
+        writer->Write(num_histo_bits, enc_state_->shared.num_histograms - 1);
+      }
       ReclaimAndCharge(writer, &allotment, kLayerAC, aux_out_);
     }
 
@@ -474,28 +473,22 @@ class LossyFrameEncoder {
   std::vector<EncCache> group_caches_;
 };
 
-Status ParamsPostInit(CompressParams* p) {
-  if (!p->manual_xyb_factors.empty() && p->manual_xyb_factors.size() != 3) {
-    return JXL_FAILURE("Invalid number of XYB quantization factors");
-  }
-  if (!p->modular_mode && p->butteraugli_distance == 0.0) {
-    p->butteraugli_distance = kMinButteraugliDistance;
-  }
-  return true;
-}
-
-Status EncodeFrame(const CompressParams& cparams_orig,
-                   const FrameInfo& frame_info, const CodecMetadata* metadata,
-                   const ImageBundle& ib, PassesEncoderState* passes_enc_state,
+Status EncodeFrame(const CompressParams& cparams, const FrameInfo& frame_info,
+                   const CodecMetadata* metadata, const ImageBundle& ib,
+                   PassesEncoderState* passes_enc_state,
                    const JxlCmsInterface& cms, ThreadPool* pool,
                    BitWriter* writer, AuxOut* aux_out) {
-  CompressParams cparams = cparams_orig;
   ib.VerifyMetadata();
 
   passes_enc_state->special_frames.clear();
 
-  JXL_RETURN_IF_ERROR(ParamsPostInit(&cparams));
+  if (cparams.IsLossless() || !metadata->m.xyb_encoded) {
+    return JXL_FAILURE("Lossless not implemented");
+  }
 
+  if (ib.extra_channels().size() > 0) {
+    return JXL_FAILURE("Extra channels not implemented.");
+  }
   if (frame_info.dc_level > 0) {
     return JXL_FAILURE("Too many levels of progressive DC");
   }
@@ -507,9 +500,7 @@ Status EncodeFrame(const CompressParams& cparams_orig,
   }
 
   if (ib.IsJPEG()) {
-    cparams.gaborish = Override::kOff;
-    cparams.epf = 0;
-    cparams.modular_mode = false;
+    return JXL_FAILURE("JPEG transcodeing not implemented");
   }
 
   if (ib.xsize() == 0 || ib.ysize() == 0) return JXL_FAILURE("Empty image");
@@ -528,7 +519,7 @@ Status EncodeFrame(const CompressParams& cparams_orig,
   // in the main codestream header, but since ib is a const object and the data
   // written to the main codestream header is (in modified form) in ib, the
   // encoder cannot indicate this fact in the ib's metadata.
-  if (cparams_orig.color_transform == ColorTransform::kXYB) {
+  if (cparams.color_transform == ColorTransform::kXYB) {
     if (frame_header->color_transform != ColorTransform::kXYB) {
       return JXL_FAILURE(
           "The color transform of frames must be xyb if the codestream is xyb "
@@ -642,8 +633,7 @@ Status EncodeFrame(const CompressParams& cparams_orig,
   // needs to happen *AFTER* VarDCT-ComputeEncodingData.
   JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(
       *frame_header, *ib.metadata(), &opsin, *extra_channels,
-      lossy_frame_encoder.State(), cms, pool, aux_out,
-      /* do_color=*/frame_header->encoding == FrameEncoding::kModular));
+      lossy_frame_encoder.State(), cms, pool, aux_out));
 
   writer->AppendByteAligned(lossy_frame_encoder.State()->special_frames);
   frame_header->UpdateFlag(
@@ -669,9 +659,12 @@ Status EncodeFrame(const CompressParams& cparams_orig,
                                    frame_dim.num_dc_groups, has_ac_global));
   };
 
-  JXL_RETURN_IF_ERROR(
-      DequantMatricesEncodeDC(&lossy_frame_encoder.State()->shared.matrices,
-                              get_output(0), kLayerQuant, aux_out));
+  {
+    BitWriter* writer = get_output(0);
+    BitWriter::Allotment allotment(writer, 2);
+    writer->Write(1, 1);  // default quant dc
+    ReclaimAndCharge(writer, &allotment, kLayerQuant, aux_out);
+  }
   if (frame_header->encoding == FrameEncoding::kVarDCT) {
     JXL_RETURN_IF_ERROR(
         lossy_frame_encoder.EncodeGlobalDCInfo(*frame_header, get_output(0)));

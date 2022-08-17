@@ -289,8 +289,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_modular.cc
   jxl/enc_modular.h
   jxl/enc_params.h
-  jxl/enc_quant_weights.cc
-  jxl/enc_quant_weights.h
   jxl/enc_toc.cc
   jxl/enc_toc.h
   jxl/enc_transforms-inl.h
@@ -317,14 +315,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/modular/encoding/enc_encoding.h
   jxl/modular/encoding/enc_ma.cc
   jxl/modular/encoding/enc_ma.h
-  jxl/modular/transform/enc_palette.cc
-  jxl/modular/transform/enc_palette.h
-  jxl/modular/transform/enc_rct.cc
-  jxl/modular/transform/enc_rct.h
-  jxl/modular/transform/enc_squeeze.cc
-  jxl/modular/transform/enc_squeeze.h
-  jxl/modular/transform/enc_transform.cc
-  jxl/modular/transform/enc_transform.h
   jxl/optimize.cc
   jxl/optimize.h
 )

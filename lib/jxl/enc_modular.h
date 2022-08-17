@@ -32,7 +32,7 @@ class ModularFrameEncoder {
                              const std::vector<ImageF>& extra_channels,
                              PassesEncoderState* JXL_RESTRICT enc_state,
                              const JxlCmsInterface& cms, ThreadPool* pool,
-                             AuxOut* aux_out, bool do_color);
+                             AuxOut* aux_out);
   // Encodes global info (tree + histograms) in the `writer`.
   Status EncodeGlobalInfo(BitWriter* writer, AuxOut* aux_out);
   // Encodes a specific modular image (identified by `stream`) in the `writer`,
@@ -47,29 +47,12 @@ class ModularFrameEncoder {
                    PassesEncoderState* enc_state, bool jpeg_transcode);
   // Creates a modular image for the AC metadata of the given group
   // (`group_index`).
-  void AddACMetadata(size_t group_index, bool jpeg_transcode,
-                     PassesEncoderState* enc_state);
-  // Encodes a RAW quantization table in `writer`. If `modular_frame_encoder` is
-  // null, the quantization table in `encoding` is used, with dimensions `size_x
-  // x size_y`. Otherwise, the table with ID `idx` is encoded from the given
-  // `modular_frame_encoder`.
-  static void EncodeQuantTable(size_t size_x, size_t size_y, BitWriter* writer,
-                               const QuantEncoding& encoding, size_t idx,
-                               ModularFrameEncoder* modular_frame_encoder);
-  // Stores a quantization table for future usage with `EncodeQuantTable`.
-  void AddQuantTable(size_t size_x, size_t size_y,
-                     const QuantEncoding& encoding, size_t idx);
+  void AddACMetadata(size_t group_index, PassesEncoderState* enc_state);
 
   std::vector<size_t> ac_metadata_size;
   std::vector<uint8_t> extra_dc_precision;
 
  private:
-  Status PrepareEncoding(const FrameHeader& frame_header, ThreadPool* pool,
-                         EncoderHeuristics* heuristics,
-                         AuxOut* aux_out = nullptr);
-  Status PrepareStreamParams(const Rect& rect, const CompressParams& cparams,
-                             int minShift, int maxShift,
-                             const ModularStreamId& stream, bool do_color);
   std::vector<Image> stream_images_;
   std::vector<ModularOptions> stream_options_;
 

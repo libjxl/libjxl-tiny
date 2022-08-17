@@ -29,21 +29,14 @@
 
 namespace jxl {
 
-Tree LearnTree(TreeSamples &&tree_samples, size_t total_pixels,
-               const ModularOptions &options,
-               const std::vector<ModularMultiplierInfo> &multiplier_info = {},
-               StaticPropRange static_prop_range = {});
-
-// TODO(veluca): make cleaner interfaces.
-
-Status ModularGenericCompress(
-    Image &image, const ModularOptions &opts, BitWriter *writer,
-    AuxOut *aux_out = nullptr, size_t layer = 0, size_t group_id = 0,
-    // For gathering data for producing a global tree.
-    TreeSamples *tree_samples = nullptr, size_t *total_pixels = nullptr,
-    // For encoding with global tree.
-    const Tree *tree = nullptr, GroupHeader *header = nullptr,
-    std::vector<Token> *tokens = nullptr, size_t *widths = nullptr);
+Status ModularGenericCompress(Image &image, const ModularOptions &opts,
+                              BitWriter *writer, AuxOut *aux_out = nullptr,
+                              size_t layer = 0, size_t group_id = 0,
+                              size_t *total_pixels = nullptr,
+                              const Tree *tree = nullptr,
+                              GroupHeader *header = nullptr,
+                              std::vector<Token> *tokens = nullptr,
+                              size_t *widths = nullptr);
 }  // namespace jxl
 
 #endif  // LIB_JXL_MODULAR_ENCODING_ENC_ENCODING_H_

@@ -23,7 +23,6 @@ set(TEST_FILES
   jxl/convolve_test.cc
   jxl/data_parallel_test.cc
   jxl/dct_test.cc
-  jxl/decode_test.cc
   jxl/enc_external_image_test.cc
   jxl/encode_test.cc
   jxl/entropy_coder_test.cc
@@ -41,16 +40,13 @@ set(TEST_FILES
   jxl/jxl_test.cc
   jxl/lehmer_code_test.cc
   jxl/linalg_test.cc
-  jxl/modular_test.cc
   jxl/opsin_image_test.cc
   jxl/opsin_inverse_test.cc
   jxl/optimize_test.cc
   jxl/padded_bytes_test.cc
   jxl/preview_test.cc
-  jxl/quant_weights_test.cc
   jxl/quantizer_test.cc
   jxl/rational_polynomial_test.cc
-  jxl/render_pipeline/render_pipeline_test.cc
   jxl/roundtrip_test.cc
   jxl/simd_util_test.cc
   jxl/speed_tier_test.cc
