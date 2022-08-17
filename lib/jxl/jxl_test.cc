@@ -84,11 +84,10 @@ TEST(JxlTest, RoundtripMarker) {
   AuxOut* aux_out = nullptr;
   ThreadPool* pool = nullptr;
 
-  PassesEncoderState enc_state;
   for (size_t i = 0; i < 2; ++i) {
     PaddedBytes compressed;
-    EXPECT_TRUE(EncodeFile(cparams, &io, &enc_state, &compressed, GetJxlCms(),
-                           aux_out, pool));
+    EXPECT_TRUE(
+        EncodeFile(cparams, &io, &compressed, GetJxlCms(), aux_out, pool));
     compressed[i] ^= 0xFF;
     CodecInOut io2;
     EXPECT_FALSE(test::DecodeFile({}, compressed, &io2, pool));
@@ -515,7 +514,6 @@ TEST(JxlTest, RoundtripGrayscale) {
   EXPECT_EQ(0u, io.metadata.m.bit_depth.exponent_bits_per_sample);
   EXPECT_TRUE(io.metadata.m.color_encoding.tf.IsSRGB());
 
-  PassesEncoderState enc_state;
   AuxOut* aux_out = nullptr;
 
   {
@@ -523,8 +521,8 @@ TEST(JxlTest, RoundtripGrayscale) {
     cparams.butteraugli_distance = 1.0;
 
     PaddedBytes compressed;
-    EXPECT_TRUE(EncodeFile(cparams, &io, &enc_state, &compressed, GetJxlCms(),
-                           aux_out, pool));
+    EXPECT_TRUE(
+        EncodeFile(cparams, &io, &compressed, GetJxlCms(), aux_out, pool));
     CodecInOut io2;
     EXPECT_TRUE(test::DecodeFile({}, compressed, &io2, pool));
     EXPECT_TRUE(io2.Main().IsGray());
@@ -542,8 +540,8 @@ TEST(JxlTest, RoundtripGrayscale) {
     cparams.butteraugli_distance = 8.0;
 
     PaddedBytes compressed;
-    EXPECT_TRUE(EncodeFile(cparams, &io, &enc_state, &compressed, GetJxlCms(),
-                           aux_out, pool));
+    EXPECT_TRUE(
+        EncodeFile(cparams, &io, &compressed, GetJxlCms(), aux_out, pool));
     CodecInOut io2;
     EXPECT_TRUE(test::DecodeFile({}, compressed, &io2, pool));
     EXPECT_TRUE(io2.Main().IsGray());
@@ -559,8 +557,8 @@ TEST(JxlTest, RoundtripGrayscale) {
     cparams.butteraugli_distance = 1.0;
 
     PaddedBytes compressed;
-    EXPECT_TRUE(EncodeFile(cparams, &io, &enc_state, &compressed, GetJxlCms(),
-                           aux_out, pool));
+    EXPECT_TRUE(
+        EncodeFile(cparams, &io, &compressed, GetJxlCms(), aux_out, pool));
 
     CodecInOut io2;
     extras::JXLDecompressParams dparams;

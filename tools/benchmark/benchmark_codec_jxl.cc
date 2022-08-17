@@ -201,11 +201,9 @@ class JxlCodec : public ImageCodec {
     }
 
     const double start = Now();
-    PassesEncoderState passes_encoder_state;
     PaddedBytes compressed_padded;
-    JXL_RETURN_IF_ERROR(EncodeFile(cparams_, io, &passes_encoder_state,
-                                   &compressed_padded, GetJxlCms(), &cinfo_,
-                                   pool));
+    JXL_RETURN_IF_ERROR(EncodeFile(cparams_, io, &compressed_padded,
+                                   GetJxlCms(), &cinfo_, pool));
     const double end = Now();
     compressed->assign(compressed_padded.begin(), compressed_padded.end());
     speed_stats->NotifyElapsed(end - start);

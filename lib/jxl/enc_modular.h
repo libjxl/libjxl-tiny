@@ -27,11 +27,7 @@ class ModularFrameEncoder {
   ModularFrameEncoder(const FrameHeader& frame_header,
                       const CompressParams& cparams_orig);
   Status ComputeEncodingData(const FrameHeader& frame_header,
-                             const ImageMetadata& metadata,
-                             Image3F* JXL_RESTRICT color,
-                             const std::vector<ImageF>& extra_channels,
-                             PassesEncoderState* JXL_RESTRICT enc_state,
-                             const JxlCmsInterface& cms, ThreadPool* pool,
+                             const ImageMetadata& metadata, ThreadPool* pool,
                              AuxOut* aux_out);
   // Encodes global info (tree + histograms) in the `writer`.
   Status EncodeGlobalInfo(BitWriter* writer, AuxOut* aux_out);
@@ -44,10 +40,10 @@ class ModularFrameEncoder {
   // `nl_dc` decides whether to apply a near-lossless processing to the DC or
   // not.
   void AddVarDCTDC(const Image3F& dc, size_t group_index,
-                   PassesEncoderState* enc_state, bool jpeg_transcode);
+                   PassesSharedState* shared);
   // Creates a modular image for the AC metadata of the given group
   // (`group_index`).
-  void AddACMetadata(size_t group_index, PassesEncoderState* enc_state);
+  void AddACMetadata(size_t group_index, PassesSharedState* shared);
 
   std::vector<size_t> ac_metadata_size;
   std::vector<uint8_t> extra_dc_precision;

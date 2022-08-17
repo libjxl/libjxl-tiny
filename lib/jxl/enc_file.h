@@ -33,9 +33,8 @@ Status WriteHeaders(CodecMetadata* metadata, BitWriter* writer,
 // Compresses pixels from `io` (given in any ColorEncoding).
 // `io->metadata.m.original` must be set.
 Status EncodeFile(const CompressParams& params, const CodecInOut* io,
-                  PassesEncoderState* passes_enc_state, PaddedBytes* compressed,
-                  const JxlCmsInterface& cms, AuxOut* aux_out = nullptr,
-                  ThreadPool* pool = nullptr);
+                  PaddedBytes* compressed, const JxlCmsInterface& cms,
+                  AuxOut* aux_out = nullptr, ThreadPool* pool = nullptr);
 
 // Backwards-compatible interface. Don't use in new code.
 // TODO(deymo): Remove this function once we migrate users to C encoder API.
@@ -46,9 +45,7 @@ JXL_INLINE Status EncodeFile(const CompressParams& params, const CodecInOut* io,
                              const JxlCmsInterface& cms,
                              AuxOut* aux_out = nullptr,
                              ThreadPool* pool = nullptr) {
-  PassesEncoderState passes_enc_state;
-  return EncodeFile(params, io, &passes_enc_state, compressed, cms, aux_out,
-                    pool);
+  return EncodeFile(params, io, compressed, cms, aux_out, pool);
 }
 
 }  // namespace jxl

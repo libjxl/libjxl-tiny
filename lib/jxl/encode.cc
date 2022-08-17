@@ -427,7 +427,6 @@ JxlEncoderStatus JxlEncoderStruct::RefillOutputByteQueue() {
     }
 
     jxl::BitWriter writer;
-    jxl::PassesEncoderState enc_state;
 
     // EncodeFrame creates jxl::FrameHeader object internally based on the
     // FrameInfo, imagebundle, cparams and metadata. Copy the information to
@@ -491,8 +490,8 @@ JxlEncoderStatus JxlEncoderStruct::RefillOutputByteQueue() {
     }
     JXL_ASSERT(writer.BitsWritten() == 0);
     if (!jxl::EncodeFrame(input_frame->option_values.cparams, frame_info,
-                          &metadata, input_frame->frame, &enc_state, cms,
-                          thread_pool.get(), &writer,
+                          &metadata, input_frame->frame, cms, thread_pool.get(),
+                          &writer,
                           /*aux_out=*/nullptr)) {
       return JXL_API_ERROR(this, JXL_ENC_ERR_GENERIC, "Failed to encode frame");
     }

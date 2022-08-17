@@ -146,10 +146,7 @@ size_t Roundtrip(const CodecInOut* io, const CompressParams& cparams,
     original_current_encodings.push_back(ib.c_current());
   }
 
-  std::unique_ptr<PassesEncoderState> enc_state =
-      jxl::make_unique<PassesEncoderState>();
-  EXPECT_TRUE(EncodeFile(cparams, io, enc_state.get(), &compressed, GetJxlCms(),
-                         aux_out, pool));
+  EXPECT_TRUE(EncodeFile(cparams, io, &compressed, GetJxlCms(), aux_out, pool));
 
   std::vector<ColorEncoding> metadata_encodings_1;
   for (const ImageBundle& ib1 : io->frames) {
