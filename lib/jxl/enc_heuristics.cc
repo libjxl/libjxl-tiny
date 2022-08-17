@@ -24,9 +24,9 @@
 namespace jxl {
 
 Status DefaultEncoderHeuristics::LossyFrameHeuristics(
-    PassesEncoderState* enc_state, ModularFrameEncoder* modular_frame_encoder,
-    const ImageBundle* original_pixels, Image3F* opsin,
-    const JxlCmsInterface& cms, ThreadPool* pool, AuxOut* aux_out) {
+    PassesEncoderState* enc_state, const ImageBundle* original_pixels,
+    Image3F* opsin, const JxlCmsInterface& cms, ThreadPool* pool,
+    AuxOut* aux_out) {
   PROFILER_ZONE("JxlLossyFrameHeuristics uninstrumented");
 
   CompressParams& cparams = enc_state->cparams;

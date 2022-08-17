@@ -42,10 +42,9 @@ using hwy::HWY_NAMESPACE::MaskFromVec;
 using hwy::HWY_NAMESPACE::Round;
 
 // NOTE: caller takes care of extracting quant from rect of RawQuantField.
-void QuantizeBlockAC(const Quantizer& quantizer, const bool error_diffusion,
-                     size_t c, int32_t quant, float qm_multiplier,
-                     size_t quant_kind, size_t xsize, size_t ysize,
-                     const float* JXL_RESTRICT block_in,
+void QuantizeBlockAC(const Quantizer& quantizer, size_t c, int32_t quant,
+                     float qm_multiplier, size_t quant_kind, size_t xsize,
+                     size_t ysize, const float* JXL_RESTRICT block_in,
                      int32_t* JXL_RESTRICT block_out) {
   PROFILER_FUNC;
   const float* JXL_RESTRICT qm = quantizer.InvDequantMatrix(quant_kind, c);
@@ -68,7 +67,7 @@ void QuantizeBlockAC(const Quantizer& quantizer, const bool error_diffusion,
     }
   }
 
-  if (!error_diffusion) {
+  {
     HWY_CAPPED(float, kBlockDim) df;
     HWY_CAPPED(int32_t, kBlockDim) di;
     HWY_CAPPED(uint32_t, kBlockDim) du;
@@ -102,75 +101,16 @@ void QuantizeBlockAC(const Quantizer& quantizer, const bool error_diffusion,
     }
     return;
   }
-
-retry:
-  int hfNonZeros[4] = {};
-  float hfError[4] = {};
-  float hfMaxError[4] = {};
-  size_t hfMaxErrorIx[4] = {};
-  for (size_t y = 0; y < ysize * kBlockDim; y++) {
-    for (size_t x = 0; x < xsize * kBlockDim; x++) {
-      const size_t pos = y * kBlockDim * xsize + x;
-      if (x < xsize && y < ysize) {
-        // Ensure block is initialized
-        block_out[pos] = 0;
-        continue;
-      }
-      const size_t hfix = (static_cast<size_t>(y >= ysize * kBlockDim / 2) * 2 +
-                           static_cast<size_t>(x >= xsize * kBlockDim / 2));
-      const float val = block_in[pos] * (qm[pos] * qac * qm_multiplier);
-      float v = (std::abs(val) < thres[hfix]) ? 0 : rintf(val);
-      const float error = std::abs(val) - std::abs(v);
-      hfError[hfix] += error * error;
-      if (hfMaxError[hfix] < error) {
-        hfMaxError[hfix] = error;
-        hfMaxErrorIx[hfix] = pos;
-      }
-      if (v != 0.0f) {
-        hfNonZeros[hfix] += std::abs(v);
-      }
-      block_out[pos] = static_cast<int32_t>(rintf(v));
-    }
-  }
-  if (c != 1) return;
-  constexpr size_t kPartialBlockKinds =
-      (1 << AcStrategy::Type::IDENTITY) | (1 << AcStrategy::Type::DCT2X2) |
-      (1 << AcStrategy::Type::DCT4X4) | (1 << AcStrategy::Type::DCT4X8) |
-      (1 << AcStrategy::Type::DCT8X4) | (1 << AcStrategy::Type::AFV0) |
-      (1 << AcStrategy::Type::AFV1) | (1 << AcStrategy::Type::AFV2) |
-      (1 << AcStrategy::Type::AFV3);
-  if ((1 << quant_kind) & kPartialBlockKinds) return;
-  float hfErrorLimit = 0.029f * (xsize * ysize) * kDCTBlockSize * 0.25f;
-  bool goretry = false;
-  for (int i = 1; i < 4; ++i) {
-    if (hfError[i] >= hfErrorLimit &&
-        hfNonZeros[i] <= (xsize + ysize) * 0.25f) {
-      if (thres[i] >= 0.4f) {
-        thres[i] -= 0.01f;
-        goretry = true;
-      }
-    }
-  }
-  if (goretry) goto retry;
-  for (int i = 1; i < 4; ++i) {
-    if (hfError[i] >= hfErrorLimit && hfNonZeros[i] == 0) {
-      const size_t pos = hfMaxErrorIx[i];
-      if (hfMaxError[i] >= 0.4f) {
-        block_out[pos] = block_in[pos] > 0.0f ? 1.0f : -1.0f;
-      }
-    }
-  }
 }
 
 // NOTE: caller takes care of extracting quant from rect of RawQuantField.
-void QuantizeRoundtripYBlockAC(const Quantizer& quantizer,
-                               const bool error_diffusion, int32_t quant,
+void QuantizeRoundtripYBlockAC(const Quantizer& quantizer, int32_t quant,
                                size_t quant_kind, size_t xsize, size_t ysize,
                                const float* JXL_RESTRICT biases,
                                float* JXL_RESTRICT inout,
                                int32_t* JXL_RESTRICT quantized) {
-  QuantizeBlockAC(quantizer, error_diffusion, 1, quant, 1.0f, quant_kind, xsize,
-                  ysize, inout, quantized);
+  QuantizeBlockAC(quantizer, 1, quant, 1.0f, quant_kind, xsize, ysize, inout,
+                  quantized);
 
   PROFILER_ZONE("enc quant adjust bias");
   const float* JXL_RESTRICT dequant_matrix =
@@ -205,7 +145,6 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
   const size_t opsin_stride = static_cast<size_t>(opsin.PixelsPerRow());
 
   const ImageI& full_quant_field = enc_state->shared.raw_quant_field;
-  const CompressParams& cparams = enc_state->cparams;
 
   // TODO(veluca): consider strategies to reduce this memory.
   auto mem = hwy::AllocateAligned<int32_t>(3 * AcStrategy::kMaxCoeffArea);
@@ -213,8 +152,6 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
   float* JXL_RESTRICT scratch_space =
       fmem.get() + 3 * AcStrategy::kMaxCoeffArea;
   {
-    // Only use error diffusion in Squirrel mode or slower.
-    const bool error_diffusion = cparams.speed_tier <= SpeedTier::kSquirrel;
     constexpr HWY_CAPPED(float, kDCTBlockSize) d;
 
     int32_t* JXL_RESTRICT coeffs[kMaxNumPasses][3] = {};
@@ -275,9 +212,8 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
           DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size,
                                   dc_rows[1] + bx, dc_stride);
           QuantizeRoundtripYBlockAC(
-              enc_state->shared.quantizer, error_diffusion, quant_ac,
-              acs.RawStrategy(), xblocks, yblocks, kDefaultQuantBias,
-              coeffs_in + size, quantized + size);
+              enc_state->shared.quantizer, quant_ac, acs.RawStrategy(), xblocks,
+              yblocks, kDefaultQuantBias, coeffs_in + size, quantized + size);
 
           // DCT X and B channels
           for (size_t c : {0, 2}) {
@@ -299,8 +235,7 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
 
           // Quantize X and B channels and set DC.
           for (size_t c : {0, 2}) {
-            QuantizeBlockAC(enc_state->shared.quantizer, error_diffusion, c,
-                            quant_ac,
+            QuantizeBlockAC(enc_state->shared.quantizer, c, quant_ac,
                             c == 0 ? enc_state->x_qm_multiplier
                                    : enc_state->b_qm_multiplier,
                             acs.RawStrategy(), xblocks, yblocks,

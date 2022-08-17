@@ -34,16 +34,16 @@ class EncoderHeuristics {
   // `opsin` image by applying Gaborish, and doing other modifications if
   // necessary. `pool` is used for running the computations on multiple threads.
   // `aux_out` collects statistics and can be used to print debug images.
-  virtual Status LossyFrameHeuristics(
-      PassesEncoderState* enc_state, ModularFrameEncoder* modular_frame_encoder,
-      const ImageBundle* original_pixels, Image3F* opsin,
-      const JxlCmsInterface& cms, ThreadPool* pool, AuxOut* aux_out) = 0;
+  virtual Status LossyFrameHeuristics(PassesEncoderState* enc_state,
+                                      const ImageBundle* original_pixels,
+                                      Image3F* opsin,
+                                      const JxlCmsInterface& cms,
+                                      ThreadPool* pool, AuxOut* aux_out) = 0;
 };
 
 class DefaultEncoderHeuristics : public EncoderHeuristics {
  public:
   Status LossyFrameHeuristics(PassesEncoderState* enc_state,
-                              ModularFrameEncoder* modular_frame_encoder,
                               const ImageBundle* original_pixels,
                               Image3F* opsin, const JxlCmsInterface& cms,
                               ThreadPool* pool, AuxOut* aux_out) override;

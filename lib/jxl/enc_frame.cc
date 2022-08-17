@@ -167,9 +167,8 @@ class LossyFrameEncoder {
       shared.frame_header.x_qm_scale++;
     }
     DefaultEncoderHeuristics heuristics;
-    JXL_RETURN_IF_ERROR(
-        heuristics.LossyFrameHeuristics(enc_state_, modular_frame_encoder,
-                                        linear, opsin, cms_, pool_, aux_out_));
+    JXL_RETURN_IF_ERROR(heuristics.LossyFrameHeuristics(
+        enc_state_, linear, opsin, cms_, pool_, aux_out_));
 
     enc_state_->histogram_idx.resize(shared.frame_dim.num_groups);
 
@@ -277,8 +276,7 @@ class LossyFrameEncoder {
     return true;
   }
 
-  Status EncodeGlobalACInfo(BitWriter* writer,
-                            ModularFrameEncoder* modular_frame_encoder) {
+  Status EncodeGlobalACInfo(BitWriter* writer) {
     {
       BitWriter::Allotment allotment(writer, 1024);
       writer->Write(1, 1);  // all default quant matrices
@@ -472,8 +470,8 @@ Status EncodeFrame(const CompressParams& cparams, const FrameInfo& frame_info,
                                 resize_aux_outs, process_dc_group,
                                 "EncodeDCGroup"));
 
-  JXL_RETURN_IF_ERROR(lossy_frame_encoder.EncodeGlobalACInfo(
-      get_output(global_ac_index), modular_frame_encoder.get()));
+  JXL_RETURN_IF_ERROR(
+      lossy_frame_encoder.EncodeGlobalACInfo(get_output(global_ac_index)));
 
   std::atomic<int> num_errors{0};
   const auto process_group = [&](const uint32_t group_index,
