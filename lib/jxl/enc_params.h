@@ -187,8 +187,6 @@ struct CompressParams {
   // Codestream level to conform to.
   // -1: don't care
   int level = -1;
-
-  std::vector<float> manual_xyb_factors;
 };
 
 static constexpr float kMinButteraugliForDynamicAR = 0.5f;

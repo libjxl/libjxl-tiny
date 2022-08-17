@@ -26,7 +26,6 @@
 #include "lib/jxl/enc_frame.h"
 #include "lib/jxl/enc_group.h"
 #include "lib/jxl/enc_modular.h"
-#include "lib/jxl/enc_quant_weights.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/image.h"
 #include "lib/jxl/image_bundle.h"
@@ -85,8 +84,7 @@ Status InitializePassesEncoder(const Image3F& opsin, const JxlCmsInterface& cms,
     AdaptiveDCSmoothing(shared.quantizer.MulDC(), &shared.dc_storage, pool);
   }
   auto compute_ac_meta = [&](int group_index, int /* thread */) {
-    modular_frame_encoder->AddACMetadata(group_index, /*jpeg_transcode=*/false,
-                                         enc_state);
+    modular_frame_encoder->AddACMetadata(group_index, enc_state);
   };
   JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, shared.frame_dim.num_dc_groups,
                                 ThreadPool::NoInit, compute_ac_meta,
