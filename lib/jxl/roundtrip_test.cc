@@ -403,8 +403,6 @@ void VerifyRoundtripCompression(
       ButteraugliDistance(original_io, decoded_io, ba, jxl::GetJxlCms(),
                           /*distmap=*/nullptr, nullptr);
   EXPECT_LE(butteraugli_score, 2.0f);
-  JxlPixelFormat extra_channel_output_pixel_format = output_pixel_format;
-  extra_channel_output_pixel_format.num_channels = 1;
   for (auto& extra_channel : extra_channel_decoded_bytes) {
     EXPECT_EQ(extra_channel.size(), extra_channel_bytes.size());
   }

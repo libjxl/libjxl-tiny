@@ -476,11 +476,6 @@ void ModularFrameEncoder::AddVarDCTDC(const Image3F& dc, size_t group_index,
       }
     }
   }
-
-  DequantDC(r, &shared->dc_storage, &shared->quant_dc,
-            stream_images_[stream_id], shared->quantizer.MulDC(), 1.0,
-            shared->cmap.DCFactors(), shared->frame_header.chroma_subsampling,
-            shared->block_ctx_map);
 }
 
 void ModularFrameEncoder::AddACMetadata(size_t group_index,

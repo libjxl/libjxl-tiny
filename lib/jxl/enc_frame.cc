@@ -110,7 +110,7 @@ Status MakeFrameHeader(const CompressParams& cparams,
   JXL_RETURN_IF_ERROR(LoopFilterFromParams(cparams, frame_header));
 
   frame_header->dc_level = 0;
-
+  frame_header->flags |= FrameHeader::kSkipAdaptiveDCSmoothing;
   frame_header->frame_origin = ib.origin;
   frame_header->frame_size.xsize = ib.xsize();
   frame_header->frame_size.ysize = ib.ysize();
@@ -205,10 +205,6 @@ class LossyFrameEncoder {
     JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, shared.frame_dim.num_dc_groups,
                                   ThreadPool::NoInit, compute_dc_coeffs,
                                   "Compute DC coeffs"));
-    // TODO(veluca): this is only useful in tests and if inspection is enabled.
-    if (!(shared.frame_header.flags & FrameHeader::kSkipAdaptiveDCSmoothing)) {
-      AdaptiveDCSmoothing(shared.quantizer.MulDC(), &shared.dc_storage, pool);
-    }
     auto compute_ac_meta = [&](int group_index, int /* thread */) {
       modular_frame_encoder->AddACMetadata(group_index, &shared);
     };
