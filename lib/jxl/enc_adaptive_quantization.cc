@@ -37,7 +37,6 @@
 #include "lib/jxl/enc_butteraugli_comparator.h"
 #include "lib/jxl/enc_cache.h"
 #include "lib/jxl/enc_group.h"
-#include "lib/jxl/enc_modular.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/enc_transforms-inl.h"
 #include "lib/jxl/epf.h"

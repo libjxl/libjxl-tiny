@@ -285,8 +285,6 @@ set(JPEGXL_INTERNAL_SOURCES_ENC
   jxl/enc_image_bundle.cc
   jxl/enc_image_bundle.h
   jxl/enc_jxl_skcms.h
-  jxl/enc_modular.cc
-  jxl/enc_modular.h
   jxl/enc_params.h
   jxl/enc_toc.cc
   jxl/enc_toc.h

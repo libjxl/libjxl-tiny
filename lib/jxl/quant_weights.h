@@ -313,7 +313,6 @@ const float kDCQuant[3] = {
     1.0f / kInvDCQuant[2],
 };
 
-class ModularFrameEncoder;
 class ModularFrameDecoder;
 
 class DequantMatrices {
