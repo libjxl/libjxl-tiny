@@ -17,7 +17,6 @@
 #include "lib/jxl/enc_adaptive_quantization.h"
 #include "lib/jxl/enc_cache.h"
 #include "lib/jxl/enc_chroma_from_luma.h"
-#include "lib/jxl/enc_modular.h"
 #include "lib/jxl/enc_xyb.h"
 #include "lib/jxl/gaborish.h"
 

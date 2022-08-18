@@ -24,7 +24,6 @@ namespace jxl {
 
 struct PassesEncoderState;
 class ImageBundle;
-class ModularFrameEncoder;
 
 class EncoderHeuristics {
  public:

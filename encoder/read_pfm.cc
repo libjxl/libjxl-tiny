@@ -31,7 +31,7 @@ class Parser {
 
     // The scale has no meaning as multiplier, only its sign is used to
     // indicate endianness. All software expects nominal range 0..1.
-    if (scale == 0.0 || std::abs(scale) != 1.0) {
+    if (scale != 1.0 && scale != -1.0) {
       fprintf(stderr, "PFM: bad scale factor value.\n");
       return false;
     }
