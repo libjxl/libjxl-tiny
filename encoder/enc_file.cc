@@ -14,7 +14,6 @@
 #include "encoder/enc_frame.h"
 #include "lib/jxl/color_encoding_internal.h"
 #include "lib/jxl/enc_bit_writer.h"
-#include "lib/jxl/enc_color_management.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/image_bundle.h"
 #include "lib/jxl/image_metadata.h"
@@ -53,10 +52,7 @@ bool EncodeFile(const Image3F& input, float distance,
 
   CompressParams cparams;
   cparams.butteraugli_distance = distance;
-  ImageBundle ib(&metadata.m);
-  ib.SetFromImage(CopyImage(input), metadata.m.color_encoding);
-  JXL_RETURN_IF_ERROR(
-      EncodeFrame(cparams, &metadata, ib, GetJxlCms(), nullptr, &writer));
+  JXL_RETURN_IF_ERROR(EncodeFrame(cparams, &metadata, input, nullptr, &writer));
 
   PaddedBytes compressed;
   compressed = std::move(writer).TakeBytes();

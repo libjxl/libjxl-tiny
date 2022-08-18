@@ -11,7 +11,7 @@
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/image_bundle.h"
+#include "lib/jxl/image.h"
 #include "lib/jxl/image_metadata.h"
 
 namespace jxl {
@@ -21,8 +21,7 @@ namespace jxl {
 // the codestream, and must be used for the FrameHeaders, do not use
 // ib.metadata.
 Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
-                   const ImageBundle& ib, const JxlCmsInterface& cms,
-                   ThreadPool* pool, BitWriter* writer);
+                   const Image3F& linear, ThreadPool* pool, BitWriter* writer);
 
 }  // namespace jxl
 

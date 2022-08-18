@@ -4,7 +4,7 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#include "lib/jxl/enc_frame.h"
+#include "encoder/enc_frame.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -18,6 +18,7 @@
 #include <queue>
 #include <vector>
 
+#include "encoder/enc_xyb.h"
 #include "lib/jxl/ac_context.h"
 #include "lib/jxl/ac_strategy.h"
 #include "lib/jxl/ans_params.h"
@@ -37,6 +38,7 @@
 #include "lib/jxl/compressed_dc.h"
 #include "lib/jxl/dct_util.h"
 #include "lib/jxl/dec_modular.h"
+#include "lib/jxl/enc_ac_strategy.h"
 #include "lib/jxl/enc_adaptive_quantization.h"
 #include "lib/jxl/enc_ans.h"
 #include "lib/jxl/enc_bit_writer.h"
@@ -47,7 +49,6 @@
 #include "lib/jxl/enc_group.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/enc_toc.h"
-#include "lib/jxl/enc_xyb.h"
 #include "lib/jxl/fields.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/gaborish.h"
@@ -302,7 +303,7 @@ class ModularFrameEncoder {
     stream_options_.resize(num_streams, cparams_.options);
   }
   Status ComputeEncodingData(const FrameHeader& frame_header,
-                             const ImageMetadata& metadata, ThreadPool* pool) {
+                             ThreadPool* pool) {
     JXL_DEBUG_V(6, "Computing modular encoding data for frame %s",
                 frame_header.DebugString().c_str());
 
@@ -539,10 +540,7 @@ class ModularFrameEncoder {
 }  // namespace
 
 Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
-                   const ImageBundle& ib, const JxlCmsInterface& cms,
-                   ThreadPool* pool, BitWriter* writer) {
-  ib.VerifyMetadata();
-
+                   const Image3F& linear, ThreadPool* pool, BitWriter* writer) {
   std::unique_ptr<FrameHeader> frame_header =
       jxl::make_unique<FrameHeader>(metadata);
   JXL_RETURN_IF_ERROR(
@@ -551,8 +549,6 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   FrameDimensions frame_dim = frame_header->ToFrameDimensions();
 
   const size_t num_groups = frame_dim.num_groups;
-
-  Image3F opsin;
 
   PassesEncoderState enc_state;
   PassesSharedState& shared = enc_state.shared;
@@ -563,10 +559,6 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
 
   std::unique_ptr<ModularFrameEncoder> modular_frame_encoder =
       jxl::make_unique<ModularFrameEncoder>(*frame_header, cparams);
-
-  if (ib.IsJPEG()) {
-    return JXL_FAILURE("JPEG transcoding not implemented");
-  }
 
   float x_qm_scale_steps[2] = {1.25f, 9.0f};
   shared.frame_header.x_qm_scale = 2;
@@ -580,9 +572,109 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     // faithful to original even with extreme (5-10x) zooming.
     shared.frame_header.x_qm_scale++;
   }
-  DefaultEncoderHeuristics heuristics;
-  JXL_RETURN_IF_ERROR(heuristics.LossyFrameHeuristics(&enc_state, &ib, &opsin,
-                                                      cms, pool, nullptr));
+
+  Image3F opsin(RoundUpToBlockDim(linear.xsize()),
+                RoundUpToBlockDim(linear.ysize()));
+  opsin.ShrinkTo(linear.xsize(), linear.ysize());
+  ToXYB(linear, pool, &opsin);
+  PadImageToBlockMultipleInPlace(&opsin);
+
+  // Dependency graph:
+  //
+  // input: either XYB or input image
+  //
+  // XYB -> initial quant field
+  // XYB -> Gaborished XYB
+  // Gaborished XYB -> CfL1
+  // initial quant field, Gaborished XYB, CfL1 -> ACS
+  // initial quant field, ACS, Gaborished XYB -> EPF control field
+  // initial quant field -> adjusted initial quant field
+  // adjusted initial quant field, ACS -> raw quant field
+  // raw quant field, ACS, Gaborished XYB -> CfL2
+  //
+  // output: Gaborished XYB, CfL, ACS, raw quant field, EPF control field.
+
+  // Compute adaptive quantization field, relies on pre-gaborish values.
+  float butteraugli_distance_for_iqf = cparams.butteraugli_distance;
+  if (!shared.frame_header.loop_filter.gab) {
+    butteraugli_distance_for_iqf *= 0.73f;
+  }
+  const float quant_dc = InitialQuantDC(cparams.butteraugli_distance);
+  enc_state.initial_quant_field =
+      InitialQuantField(butteraugli_distance_for_iqf, opsin, shared.frame_dim,
+                        pool, 1.0f, &enc_state.initial_quant_masking);
+  Quantizer& quantizer = shared.quantizer;
+  quantizer.SetQuantField(quant_dc, enc_state.initial_quant_field, nullptr);
+
+  // Apply inverse-gaborish.
+  if (shared.frame_header.loop_filter.gab) {
+    GaborishInverse(&opsin, 0.9908511000000001f, pool);
+  }
+
+  // Flat AR field.
+  FillPlane(static_cast<uint8_t>(4), &shared.epf_sharpness);
+
+  AcStrategyHeuristics acs_heuristics;
+  CfLHeuristics cfl_heuristics;
+  cfl_heuristics.Init(opsin);
+  acs_heuristics.Init(opsin, &enc_state);
+
+  auto process_tile = [&](const uint32_t tid, const size_t thread) {
+    size_t n_enc_tiles =
+        DivCeil(shared.frame_dim.xsize_blocks, kEncTileDimInBlocks);
+    size_t tx = tid % n_enc_tiles;
+    size_t ty = tid / n_enc_tiles;
+    size_t by0 = ty * kEncTileDimInBlocks;
+    size_t by1 =
+        std::min((ty + 1) * kEncTileDimInBlocks, shared.frame_dim.ysize_blocks);
+    size_t bx0 = tx * kEncTileDimInBlocks;
+    size_t bx1 =
+        std::min((tx + 1) * kEncTileDimInBlocks, shared.frame_dim.xsize_blocks);
+    Rect r(bx0, by0, bx1 - bx0, by1 - by0);
+
+    // For speeds up to Wombat, we only compute the color correlation map
+    // once we know the transform type and the quantization map.
+    if (cparams.speed_tier <= SpeedTier::kSquirrel) {
+      cfl_heuristics.ComputeTile(r, opsin, shared.matrices,
+                                 /*ac_strategy=*/nullptr,
+                                 /*quantizer=*/nullptr, /*fast=*/false, thread,
+                                 &shared.cmap);
+    }
+
+    // Choose block sizes.
+    acs_heuristics.ProcessRect(r);
+
+    // Always set the initial quant field, so we can compute the CfL map with
+    // more accuracy. The initial quant field might change in slower modes, but
+    // adjusting the quant field with butteraugli when all the other encoding
+    // parameters are fixed is likely a more reliable choice anyway.
+    AdjustQuantField(shared.ac_strategy, r, &enc_state.initial_quant_field);
+    quantizer.SetQuantFieldRect(enc_state.initial_quant_field, r,
+                                &shared.raw_quant_field);
+
+    // Compute a non-default CfL map if we are at Hare speed, or slower.
+    if (cparams.speed_tier <= SpeedTier::kHare) {
+      cfl_heuristics.ComputeTile(
+          r, opsin, shared.matrices, &shared.ac_strategy, &shared.quantizer,
+          /*fast=*/cparams.speed_tier >= SpeedTier::kWombat, thread,
+          &shared.cmap);
+    }
+  };
+  JXL_RETURN_IF_ERROR(RunOnPool(
+      pool, 0,
+      DivCeil(shared.frame_dim.xsize_blocks, kEncTileDimInBlocks) *
+          DivCeil(shared.frame_dim.ysize_blocks, kEncTileDimInBlocks),
+      [&](const size_t num_threads) {
+        cfl_heuristics.PrepareForThreads(num_threads);
+        return true;
+      },
+      process_tile, "Enc Heuristics"));
+
+  acs_heuristics.Finalize(nullptr);
+  if (cparams.speed_tier <= SpeedTier::kHare) {
+    cfl_heuristics.ComputeDC(/*fast=*/cparams.speed_tier >= SpeedTier::kWombat,
+                             &shared.cmap);
+  }
 
   enc_state.histogram_idx.resize(shared.frame_dim.num_groups);
 
@@ -672,8 +764,8 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
 
   *frame_header = shared.frame_header;
   // needs to happen *AFTER* VarDCT-ComputeEncodingData.
-  JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(
-      *frame_header, *ib.metadata(), pool));
+  JXL_RETURN_IF_ERROR(
+      modular_frame_encoder->ComputeEncodingData(*frame_header, pool));
 
   JXL_RETURN_IF_ERROR(WriteFrameHeader(*frame_header, writer, nullptr));
 
