@@ -11,10 +11,10 @@
 
 #include <vector>
 
+#include "encoder/enc_frame.h"
 #include "lib/jxl/color_encoding_internal.h"
 #include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_color_management.h"
-#include "lib/jxl/enc_frame.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/image_bundle.h"
 #include "lib/jxl/image_metadata.h"
@@ -23,6 +23,13 @@ namespace jxl {
 
 bool EncodeFile(const Image3F& input, float distance,
                 std::vector<uint8_t>* output) {
+  if (distance < kMinButteraugliDistance) {
+    return JXL_FAILURE("Butteraugli distance is too low (%f)", distance);
+  }
+  if (input.xsize() == 0 || input.ysize() == 0) {
+    return JXL_FAILURE("Empty image");
+  }
+
   BitWriter writer;
   CodecMetadata metadata;
   {
@@ -46,12 +53,10 @@ bool EncodeFile(const Image3F& input, float distance,
 
   CompressParams cparams;
   cparams.butteraugli_distance = distance;
-  FrameInfo info;
-  info.is_last = true;
   ImageBundle ib(&metadata.m);
   ib.SetFromImage(CopyImage(input), metadata.m.color_encoding);
-  JXL_RETURN_IF_ERROR(EncodeFrame(cparams, info, &metadata, ib, GetJxlCms(),
-                                  nullptr, &writer, nullptr));
+  JXL_RETURN_IF_ERROR(
+      EncodeFrame(cparams, &metadata, ib, GetJxlCms(), nullptr, &writer));
 
   PaddedBytes compressed;
   compressed = std::move(writer).TakeBytes();
