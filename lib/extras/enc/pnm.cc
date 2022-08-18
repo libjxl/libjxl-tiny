@@ -149,7 +149,7 @@ class PFMEncoder : public PNMEncoder {
     std::vector<JxlPixelFormat> formats;
     for (const uint32_t num_channels : {1, 3}) {
       for (const JxlDataType data_type : {JXL_TYPE_FLOAT16, JXL_TYPE_FLOAT}) {
-        for (JxlEndianness endianness : {JXL_BIG_ENDIAN, JXL_LITTLE_ENDIAN}) {
+        for (JxlEndianness endianness : {JXL_LITTLE_ENDIAN, JXL_BIG_ENDIAN}) {
           formats.push_back(JxlPixelFormat{/*num_channels=*/num_channels,
                                            /*data_type=*/data_type,
                                            /*endianness=*/endianness,

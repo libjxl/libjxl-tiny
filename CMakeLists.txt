@@ -453,3 +453,6 @@ endif ()
 
 # Binary tools
 add_subdirectory(tools)
+
+# Encoder only sources
+add_subdirectory(encoder)
