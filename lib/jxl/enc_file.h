@@ -36,17 +36,8 @@ Status EncodeFile(const CompressParams& params, const CodecInOut* io,
                   PaddedBytes* compressed, const JxlCmsInterface& cms,
                   AuxOut* aux_out = nullptr, ThreadPool* pool = nullptr);
 
-// Backwards-compatible interface. Don't use in new code.
-// TODO(deymo): Remove this function once we migrate users to C encoder API.
-struct FrameEncCache {};
-JXL_INLINE Status EncodeFile(const CompressParams& params, const CodecInOut* io,
-                             FrameEncCache* /* unused */,
-                             PaddedBytes* compressed,
-                             const JxlCmsInterface& cms,
-                             AuxOut* aux_out = nullptr,
-                             ThreadPool* pool = nullptr) {
-  return EncodeFile(params, io, compressed, cms, aux_out, pool);
-}
+Status EncodeFile(const Image3F& input, float distance,
+                  std::vector<uint8_t>* output);
 
 }  // namespace jxl
 
