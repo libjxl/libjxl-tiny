@@ -145,23 +145,4 @@ Status EncodeFile(const CompressParams& params, const CodecInOut* io,
   return true;
 }
 
-Status EncodeFile(const Image3F& input, float distance,
-                  std::vector<uint8_t>* output) {
-  CodecInOut io;
-  io.SetSize(input.xsize(), input.ysize());
-  io.metadata.m.SetFloat32Samples();
-  io.metadata.m.xyb_encoded = true;
-  io.metadata.m.color_encoding = ColorEncoding::LinearSRGB();
-  io.Main().SetFromImage(CopyImage(input), io.metadata.m.color_encoding);
-
-  CompressParams cparams;
-  cparams.butteraugli_distance = distance;
-  PaddedBytes compressed;
-  JXL_RETURN_IF_ERROR(
-      EncodeFile(cparams, &io, &compressed, GetJxlCms(), nullptr, nullptr));
-
-  output->assign(compressed.data(), compressed.data() + compressed.size());
-  return true;
-}
-
 }  // namespace jxl

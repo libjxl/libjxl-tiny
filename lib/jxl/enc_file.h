@@ -36,9 +36,6 @@ Status EncodeFile(const CompressParams& params, const CodecInOut* io,
                   PaddedBytes* compressed, const JxlCmsInterface& cms,
                   AuxOut* aux_out = nullptr, ThreadPool* pool = nullptr);
 
-Status EncodeFile(const Image3F& input, float distance,
-                  std::vector<uint8_t>* output);
-
 }  // namespace jxl
 
 #endif  // LIB_JXL_ENC_FILE_H_

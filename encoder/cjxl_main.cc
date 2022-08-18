@@ -6,9 +6,9 @@
 
 #include <stdio.h>
 
+#include "encoder/enc_file.h"
 #include "encoder/read_pfm.h"
 #include "lib/jxl/base/printf_macros.h"
-#include "lib/jxl/enc_file.h"
 #include "lib/jxl/image.h"
 #include "tools/cmdline.h"
 #include "tools/file_io.h"
