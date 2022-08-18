@@ -19,6 +19,7 @@
 #if JPEGXL_ENABLE_JPEG
 #include "lib/extras/enc/jpg.h"
 #endif
+#include "encoder/enc_file.h"
 #include "lib/extras/packed_image_convert.h"
 #include "lib/extras/time.h"
 #include "lib/jxl/aux_out.h"

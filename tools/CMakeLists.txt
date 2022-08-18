@@ -206,6 +206,7 @@ if(JPEGXL_ENABLE_BENCHMARK AND JPEGXL_ENABLE_TOOLS)
     ../third_party/dirent.cc
   )
   target_link_libraries(benchmark_xl Threads::Threads)
+  target_link_libraries(benchmark_xl jxl_tiny)
   if(MINGW)
   # MINGW doesn't support glob.h.
   target_compile_definitions(benchmark_xl PRIVATE "-DHAS_GLOB=0")

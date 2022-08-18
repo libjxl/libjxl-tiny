@@ -6,6 +6,7 @@
 
 add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   read_pfm.cc
+  enc_file.cc
 )
 target_compile_options(jxl_tiny PUBLIC "${JPEGXL_INTERNAL_FLAGS}")
 target_include_directories(jxl_tiny PUBLIC "${PROJECT_SOURCE_DIR}")
