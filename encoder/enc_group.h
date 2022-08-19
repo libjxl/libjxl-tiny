@@ -10,9 +10,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "encoder/enc_bit_writer.h"
 #include "encoder/enc_cache.h"
 #include "lib/jxl/base/status.h"
-#include "lib/jxl/enc_bit_writer.h"
 
 namespace jxl {
 

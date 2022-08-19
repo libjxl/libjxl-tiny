@@ -16,13 +16,13 @@
 #include <unordered_set>
 
 #include "encoder/enc_ans.h"
+#include "encoder/enc_bit_writer.h"
 #include "encoder/modular/encoding/enc_ma.h"
 #include "lib/jxl/base/printf_macros.h"
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/dec_ans.h"
 #include "lib/jxl/dec_bit_reader.h"
-#include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/entropy_coder.h"
 #include "lib/jxl/fields.h"
 #include "lib/jxl/image_ops.h"

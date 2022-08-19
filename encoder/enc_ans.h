@@ -20,12 +20,12 @@
 #include <vector>
 
 #include "encoder/enc_ans_params.h"
+#include "encoder/enc_bit_writer.h"
 #include "lib/jxl/ans_common.h"
 #include "lib/jxl/ans_params.h"
 #include "lib/jxl/base/compiler_specific.h"
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/dec_ans.h"
-#include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/huffman_table.h"
 
 namespace jxl {

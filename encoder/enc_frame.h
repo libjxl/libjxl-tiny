@@ -7,9 +7,9 @@
 #ifndef ENCODER_ENC_FRAME_H_
 #define ENCODER_ENC_FRAME_H_
 
+#include "encoder/enc_bit_writer.h"
 #include "lib/jxl/base/data_parallel.h"
 #include "lib/jxl/base/status.h"
-#include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/image.h"
 #include "lib/jxl/image_metadata.h"
