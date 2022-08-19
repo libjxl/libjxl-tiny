@@ -11,7 +11,7 @@
 #include "encoder/enc_coeff_order.h"
 #include "lib/jxl/aux_out_fwd.h"
 #include "lib/jxl/coeff_order.h"
-#include "lib/jxl/coeff_order_fwd.h"
+#include "encoder/coeff_order_fwd.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/field_encodings.h"
 #include "lib/jxl/fields.h"

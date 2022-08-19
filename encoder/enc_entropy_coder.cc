@@ -25,7 +25,7 @@
 #include "lib/jxl/base/profiler.h"
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/coeff_order.h"
-#include "lib/jxl/coeff_order_fwd.h"
+#include "encoder/coeff_order_fwd.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/dec_ans.h"
 #include "lib/jxl/dec_bit_reader.h"

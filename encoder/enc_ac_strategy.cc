@@ -25,10 +25,9 @@
 #include "lib/jxl/base/compiler_specific.h"
 #include "lib/jxl/base/profiler.h"
 #include "lib/jxl/base/status.h"
-#include "lib/jxl/coeff_order_fwd.h"
+#include "encoder/coeff_order_fwd.h"
 #include "lib/jxl/convolve.h"
 #include "lib/jxl/dct_scales.h"
-#include "lib/jxl/enc_params.h"
 #include "lib/jxl/entropy_coder.h"
 #include "lib/jxl/fast_math-inl.h"
 
@@ -523,7 +522,8 @@ void FindBestFirstLevelDivisionForSquareTiny(
 }
 
 void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
-                        const ACSConfig& config, const Rect& rect) {
+                        float butteraugli_target, const ACSConfig& config,
+                        const Rect& rect) {
   // Main philosophy here:
   // 1. First find best 8x8 transform for each area.
   // 2. Merging them into larger transforms where possibly, but
@@ -534,8 +534,6 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
   // maps happen to be at that resolution, and having
   // integral transforms cross these boundaries leads to
   // additional complications.
-  const CompressParams& cparams = enc_state->cparams;
-  const float butteraugli_target = cparams.butteraugli_distance;
   AcStrategyImage* ac_strategy = &enc_state->shared.ac_strategy;
   // TODO(veluca): reuse allocations
   auto mem = hwy::AllocateAligned<float>(5 * AcStrategy::kMaxCoeffArea);
@@ -556,7 +554,6 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
       enc_state->shared.cmap.YtoBRatio(
           enc_state->shared.cmap.ytob_map.ConstRow(ty)[tx]),
   };
-  if (cparams.speed_tier > SpeedTier::kHare) return;
   // First compute the best 8x8 transform for each square. Later, we do not
   // experiment with different combinations, but only use the best of the 8x8s
   // when DCT8X8 is specified in the tree search.
@@ -572,9 +569,8 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
     for (size_t ix = 0; ix < rect.xsize(); ix++) {
       float entropy = 0.0;
       const uint8_t best_of_8x8s = FindBest8x8TransformTiny(
-          8 * (bx + ix), 8 * (by + iy), static_cast<int>(cparams.speed_tier),
-          config, cmap_factors, ac_strategy, block, scratch_space, quantized,
-          &entropy);
+          8 * (bx + ix), 8 * (by + iy), /*speed=*/3, config, cmap_factors,
+          ac_strategy, block, scratch_space, quantized, &entropy);
       ac_strategy->Set(bx + ix, by + iy,
                        static_cast<AcStrategy::Type>(best_of_8x8s));
       entropy_estimate[iy * 8 + ix] = entropy * mul8x8;
@@ -651,9 +647,6 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
   // don't overlap.
   uint8_t priority[64] = {};
   for (auto tx : kTransformsForMerge) {
-    if (tx.decoding_speed_tier_max_limit < cparams.decoding_speed_tier) {
-      continue;
-    }
     AcStrategy acs = AcStrategy::FromRawStrategy(tx.type);
 
     for (size_t cy = 0; cy + acs.covered_blocks_y() - 1 < rect.ysize();
@@ -661,8 +654,7 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
       for (size_t cx = 0; cx + acs.covered_blocks_x() - 1 < rect.xsize();
            cx += acs.covered_blocks_x()) {
         if (cy + 7 < rect.ysize() && cx + 7 < rect.xsize()) {
-          if (cparams.decoding_speed_tier < 4 &&
-              tx.type == AcStrategy::Type::DCT32X64) {
+          if (tx.type == AcStrategy::Type::DCT32X64) {
             // We handle both DCT8X16 and DCT16X8 at the same time.
             if ((cy | cx) % 8 == 0) {
               FindBestFirstLevelDivisionForSquareTiny(
@@ -688,12 +680,11 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
         if (cy + 3 < rect.ysize() && cx + 3 < rect.xsize()) {
           if (tx.type == AcStrategy::Type::DCT16X32) {
             // We handle both DCT8X16 and DCT16X8 at the same time.
-            bool enable_32x32 = cparams.decoding_speed_tier < 4;
             if ((cy | cx) % 4 == 0) {
               FindBestFirstLevelDivisionForSquareTiny(
-                  4, enable_32x32, bx, by, cx, cy, config, cmap_factors,
-                  ac_strategy, tx.entropy_mul, entropy_mul32X32,
-                  entropy_estimate, block, scratch_space, quantized);
+                  4, true, bx, by, cx, cy, config, cmap_factors, ac_strategy,
+                  tx.entropy_mul, entropy_mul32X32, entropy_estimate, block,
+                  scratch_space, quantized);
             }
             continue;
           } else if (tx.type == AcStrategy::Type::DCT32X16) {
@@ -745,9 +736,7 @@ void ProcessRectACSTiny(PassesEncoderState* JXL_RESTRICT enc_state,
   }
   // Here we still try to do some non-aligned matching, find a few more
   // 16X8, 8X16 and 16X16s between the non-2-aligned blocks.
-  if (cparams.speed_tier >= SpeedTier::kHare) {
-    return;
-  }
+  // return;
   for (int ii = 0; ii < 3; ++ii) {
     for (size_t cy = 1 - (ii == 1); cy + 1 < rect.ysize(); cy += 2) {
       for (size_t cx = 1 - (ii == 2); cx + 1 < rect.xsize(); cx += 2) {
@@ -769,23 +758,18 @@ HWY_AFTER_NAMESPACE();
 namespace jxl {
 HWY_EXPORT(ProcessRectACSTiny);
 
-void AcStrategyHeuristicsTiny::Init(const Image3F& src,
+void AcStrategyHeuristicsTiny::Init(const Image3F& src, float distance,
                                     PassesEncoderState* enc_state) {
   this->enc_state = enc_state;
   config.dequant = &enc_state->shared.matrices;
-  const CompressParams& cparams = enc_state->cparams;
-  const float butteraugli_target = cparams.butteraugli_distance;
+  butteraugli_target = distance;
 
-  if (cparams.speed_tier >= SpeedTier::kCheetah) {
-    JXL_CHECK(enc_state->shared.matrices.EnsureComputed(1));  // DCT8 only
-  } else {
-    uint32_t acs_mask = 0;
-    // All transforms up to 64x64.
-    for (size_t i = 0; i < AcStrategy::DCT128X128; i++) {
-      acs_mask |= (1 << i);
-    }
-    JXL_CHECK(enc_state->shared.matrices.EnsureComputed(acs_mask));
+  uint32_t acs_mask = 0;
+  // All transforms up to 64x64.
+  for (size_t i = 0; i < AcStrategy::DCT128X128; i++) {
+    acs_mask |= (1 << i);
   }
+  JXL_CHECK(enc_state->shared.matrices.EnsureComputed(acs_mask));
 
   // Image row pointers and strides.
   config.quant_field_row = enc_state->initial_quant_field.Row(0);
@@ -827,14 +811,11 @@ void AcStrategyHeuristicsTiny::Init(const Image3F& src,
 
 void AcStrategyHeuristicsTiny::ProcessRect(const Rect& rect) {
   PROFILER_FUNC;
-  const CompressParams& cparams = enc_state->cparams;
   // In Falcon mode, use DCT8 everywhere and uniform quantization.
-  if (cparams.speed_tier >= SpeedTier::kCheetah) {
-    enc_state->shared.ac_strategy.FillDCT8(rect);
-    return;
-  }
+  // enc_state->shared.ac_strategy.FillDCT8(rect);
+  // return;
   HWY_DYNAMIC_DISPATCH(ProcessRectACSTiny)
-  (enc_state, config, rect);
+  (enc_state, butteraugli_target, config, rect);
 }
 
 }  // namespace jxl

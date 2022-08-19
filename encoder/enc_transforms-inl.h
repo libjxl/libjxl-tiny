@@ -16,7 +16,7 @@
 #include <hwy/highway.h>
 
 #include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/coeff_order_fwd.h"
+#include "encoder/coeff_order_fwd.h"
 #include "lib/jxl/dct-inl.h"
 #include "lib/jxl/dct_scales.h"
 HWY_BEFORE_NAMESPACE();

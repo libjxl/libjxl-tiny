@@ -27,14 +27,13 @@
 #include "lib/jxl/base/profiler.h"
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/butteraugli/butteraugli.h"
-#include "lib/jxl/coeff_order_fwd.h"
+#include "encoder/coeff_order_fwd.h"
 #include "lib/jxl/color_encoding_internal.h"
 #include "lib/jxl/color_management.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/convolve.h"
 #include "lib/jxl/dec_cache.h"
 #include "lib/jxl/dec_group.h"
-#include "lib/jxl/enc_params.h"
 #include "lib/jxl/epf.h"
 #include "lib/jxl/fast_math-inl.h"
 #include "lib/jxl/gauss_blur.h"
@@ -433,10 +432,10 @@ struct AdaptiveQuantizationImplTiny {
     aq_map = ImageF(xsize / kBlockDim, ysize / kBlockDim);
   }
   void PrepareBuffers(size_t num_threads) {
-    diff_buffer = ImageF(kEncTileDim + 8, num_threads);
+    diff_buffer = ImageF(kColorTileDim + 8, num_threads);
     for (size_t i = pre_erosion.size(); i < num_threads; i++) {
-      pre_erosion.emplace_back(kEncTileDimInBlocks * 2 + 2,
-                               kEncTileDimInBlocks * 2 + 2);
+      pre_erosion.emplace_back(kColorTileDimInBlocks * 2 + 2,
+                               kColorTileDimInBlocks * 2 + 2);
     }
   }
 
@@ -585,23 +584,23 @@ ImageF AdaptiveQuantizationMapTiny(const float butteraugli_target,
   *mask = ImageF(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
   JXL_CHECK(RunOnPool(
       pool, 0,
-      DivCeil(frame_dim.xsize_blocks, kEncTileDimInBlocks) *
-          DivCeil(frame_dim.ysize_blocks, kEncTileDimInBlocks),
+      DivCeil(frame_dim.xsize_blocks, kColorTileDimInBlocks) *
+          DivCeil(frame_dim.ysize_blocks, kColorTileDimInBlocks),
       [&](const size_t num_threads) {
         impl.PrepareBuffers(num_threads);
         return true;
       },
       [&](const uint32_t tid, const size_t thread) {
         size_t n_enc_tiles =
-            DivCeil(frame_dim.xsize_blocks, kEncTileDimInBlocks);
+            DivCeil(frame_dim.xsize_blocks, kColorTileDimInBlocks);
         size_t tx = tid % n_enc_tiles;
         size_t ty = tid / n_enc_tiles;
-        size_t by0 = ty * kEncTileDimInBlocks;
+        size_t by0 = ty * kColorTileDimInBlocks;
         size_t by1 =
-            std::min((ty + 1) * kEncTileDimInBlocks, frame_dim.ysize_blocks);
-        size_t bx0 = tx * kEncTileDimInBlocks;
+            std::min((ty + 1) * kColorTileDimInBlocks, frame_dim.ysize_blocks);
+        size_t bx0 = tx * kColorTileDimInBlocks;
         size_t bx1 =
-            std::min((tx + 1) * kEncTileDimInBlocks, frame_dim.xsize_blocks);
+            std::min((tx + 1) * kColorTileDimInBlocks, frame_dim.xsize_blocks);
         Rect r(bx0, by0, bx1 - bx0, by1 - by0);
         impl.ComputeTile(butteraugli_target, scale, xyb, r, thread, mask);
       },
