@@ -18,6 +18,7 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/enc_transforms-inl.h"
 #include "lib/jxl/ac_strategy.h"
 #include "lib/jxl/ans_params.h"
 #include "lib/jxl/base/bits.h"
@@ -28,7 +29,6 @@
 #include "lib/jxl/convolve.h"
 #include "lib/jxl/dct_scales.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_transforms-inl.h"
 #include "lib/jxl/entropy_coder.h"
 #include "lib/jxl/fast_math-inl.h"
 
@@ -129,8 +129,8 @@ float EstimateEntropyTiny(const AcStrategy& acs, size_t x, size_t y,
   // Apply transform.
   for (size_t c = 0; c < 3; c++) {
     float* JXL_RESTRICT block_c = block + size * c;
-    TransformFromPixels(acs.Strategy(), &config.Pixel(c, x, y),
-                        config.src_stride, block_c, scratch_space);
+    TransformFromPixelsTiny(acs.Strategy(), &config.Pixel(c, x, y),
+                            config.src_stride, block_c, scratch_space);
   }
 
   HWY_FULL(float) df;

@@ -16,6 +16,7 @@
 #include <hwy/highway.h>
 
 #include "encoder/enc_bit_writer.h"
+#include "encoder/enc_transforms-inl.h"
 #include "lib/jxl/ac_strategy.h"
 #include "lib/jxl/base/bits.h"
 #include "lib/jxl/base/compiler_specific.h"
@@ -24,7 +25,6 @@
 #include "lib/jxl/dct_util.h"
 #include "lib/jxl/dec_transforms-inl.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_transforms-inl.h"
 #include "lib/jxl/image.h"
 #include "lib/jxl/quantizer-inl.h"
 #include "lib/jxl/quantizer.h"
@@ -207,19 +207,20 @@ void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
 
           // DCT Y channel, roundtrip-quantize it and set DC.
           const int32_t quant_ac = row_quant_ac[bx];
-          TransformFromPixels(acs.Strategy(), opsin_rows[1] + bx * kBlockDim,
-                              opsin_stride, coeffs_in + size, scratch_space);
-          DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size,
-                                  dc_rows[1] + bx, dc_stride);
+          TransformFromPixelsTiny(acs.Strategy(),
+                                  opsin_rows[1] + bx * kBlockDim, opsin_stride,
+                                  coeffs_in + size, scratch_space);
+          DCFromLowestFrequenciesTiny(acs.Strategy(), coeffs_in + size,
+                                      dc_rows[1] + bx, dc_stride);
           QuantizeRoundtripYBlockACTiny(
               enc_state->shared.quantizer, quant_ac, acs.RawStrategy(), xblocks,
               yblocks, kDefaultQuantBias, coeffs_in + size, quantized + size);
 
           // DCT X and B channels
           for (size_t c : {0, 2}) {
-            TransformFromPixels(acs.Strategy(), opsin_rows[c] + bx * kBlockDim,
-                                opsin_stride, coeffs_in + c * size,
-                                scratch_space);
+            TransformFromPixelsTiny(
+                acs.Strategy(), opsin_rows[c] + bx * kBlockDim, opsin_stride,
+                coeffs_in + c * size, scratch_space);
           }
 
           // Unapply color correlation
@@ -240,8 +241,8 @@ void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
                                        : enc_state->b_qm_multiplier,
                                 acs.RawStrategy(), xblocks, yblocks,
                                 coeffs_in + c * size, quantized + c * size);
-            DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size,
-                                    dc_rows[c] + bx, dc_stride);
+            DCFromLowestFrequenciesTiny(acs.Strategy(), coeffs_in + c * size,
+                                        dc_rows[c] + bx, dc_stride);
           }
           for (size_t c = 0; c < 3; c++) {
             memcpy(coeffs[0][c] + offset, quantized + c * size,
