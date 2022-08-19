@@ -223,8 +223,6 @@ void ComputeTileTiny(const Image3F& opsin, const DequantMatrices& dequant,
   float* HWY_RESTRICT coeffs_yb = coeffs_x + kColorTileDim * kColorTileDim;
   float* HWY_RESTRICT coeffs_b = coeffs_yb + kColorTileDim * kColorTileDim;
   float* HWY_RESTRICT scratch_space = coeffs_b + kColorTileDim * kColorTileDim;
-  JXL_DASSERT(scratch_space + 2 * AcStrategy::kMaxCoeffArea ==
-              block_y + CfLHeuristics::kItemsPerThread);
 
   // Small (~256 bytes each)
   HWY_ALIGN_MAX float

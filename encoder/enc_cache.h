@@ -21,7 +21,6 @@
 #include "lib/jxl/coeff_order_fwd.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/dct_util.h"
-#include "lib/jxl/enc_params.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/image.h"
 #include "lib/jxl/passes_state.h"
@@ -39,8 +38,6 @@ struct PassesEncoderState {
 
   // Per-pass DCT coefficients for the image. One row per group.
   std::vector<std::unique_ptr<ACImage>> coeffs;
-
-  CompressParams cparams;
 
   struct PassData {
     std::vector<std::vector<Token>> ac_tokens;

@@ -16,7 +16,6 @@
 #include "lib/jxl/chroma_from_luma.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/dec_ans.h"
-#include "lib/jxl/enc_params.h"
 #include "lib/jxl/image.h"
 #include "lib/jxl/quant_weights.h"
 
@@ -58,10 +57,11 @@ struct ACSConfig {
 };
 
 struct AcStrategyHeuristicsTiny {
-  void Init(const Image3F& src, PassesEncoderState* enc_state);
+  void Init(const Image3F& src, float distance, PassesEncoderState* enc_state);
   void ProcessRect(const Rect& rect);
   ACSConfig config;
   PassesEncoderState* enc_state;
+  float butteraugli_target;
 };
 
 }  // namespace jxl

@@ -28,11 +28,7 @@
 namespace jxl {
 
 std::pair<uint32_t, uint32_t> ComputeUsedOrdersTiny(
-    const SpeedTier speed, const AcStrategyImage& ac_strategy,
-    const Rect& rect) {
-  // Only uses DCT8 = 0, so bitfield = 1.
-  if (speed >= SpeedTier::kFalcon) return {1, 1};
-
+    const AcStrategyImage& ac_strategy, const Rect& rect) {
   uint32_t ret = 0;
   uint32_t ret_customize = 0;
   size_t xsize_blocks = rect.xsize();
@@ -55,7 +51,7 @@ std::pair<uint32_t, uint32_t> ComputeUsedOrdersTiny(
   return {ret, ret_customize};
 }
 
-void ComputeCoeffOrderTiny(SpeedTier speed, const ACImage& acs,
+void ComputeCoeffOrderTiny(const ACImage& acs,
                            const AcStrategyImage& ac_strategy,
                            const FrameDimensions& frame_dim,
                            uint32_t& used_orders, uint16_t used_acs,

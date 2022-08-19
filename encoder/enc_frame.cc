@@ -48,7 +48,6 @@
 #include "lib/jxl/compressed_dc.h"
 #include "lib/jxl/dct_util.h"
 #include "lib/jxl/dec_modular.h"
-#include "lib/jxl/enc_params.h"
 #include "lib/jxl/fields.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/gaborish.h"
@@ -235,37 +234,37 @@ struct EncCache {
 
 class ModularFrameEncoder {
  public:
-  ModularFrameEncoder(const FrameDimensions& frame_dim,
-                      const CompressParams& cparams)
-      : frame_dim_(frame_dim), cparams_(cparams) {
+  ModularFrameEncoder(const FrameDimensions& frame_dim)
+      : frame_dim_(frame_dim) {
     size_t num_streams = ModularStreamId::Num(frame_dim_, 1);
+    ModularOptions options;
     stream_images_.resize(num_streams);
-    cparams_.options.splitting_heuristics_node_threshold = 192;
+    options.splitting_heuristics_node_threshold = 192;
     // Set properties.
     std::vector<uint32_t> prop_order;
     prop_order = {0, 1, 15, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7, 8};
-    cparams_.options.splitting_heuristics_properties.assign(
-        prop_order.begin(), prop_order.begin() + 8);
-    cparams_.options.max_property_values = 32;
+    options.splitting_heuristics_properties.assign(prop_order.begin(),
+                                                   prop_order.begin() + 8);
+    options.max_property_values = 32;
     // Gradient in previous channels.
-    for (int i = 0; i < cparams_.options.max_properties; i++) {
-      cparams_.options.splitting_heuristics_properties.push_back(
-          kNumNonrefProperties + i * 4 + 3);
+    for (int i = 0; i < options.max_properties; i++) {
+      options.splitting_heuristics_properties.push_back(kNumNonrefProperties +
+                                                        i * 4 + 3);
     }
 
-    if (cparams_.options.predictor == static_cast<Predictor>(-1)) {
+    if (options.predictor == static_cast<Predictor>(-1)) {
       // no explicit predictor(s) given, set a good default
-      cparams_.options.predictor = Predictor::Gradient;
+      options.predictor = Predictor::Gradient;
     } else {
-      delta_pred_ = cparams_.options.predictor;
+      delta_pred_ = options.predictor;
     }
-    if (cparams_.options.predictor == Predictor::Weighted ||
-        cparams_.options.predictor == Predictor::Variable ||
-        cparams_.options.predictor == Predictor::Best) {
-      cparams_.options.predictor = Predictor::Zero;
+    if (options.predictor == Predictor::Weighted ||
+        options.predictor == Predictor::Variable ||
+        options.predictor == Predictor::Best) {
+      options.predictor = Predictor::Zero;
     }
     tree_splits_.push_back(0);
-    cparams_.options.fast_decode_multiplier = 1.0f;
+    options.fast_decode_multiplier = 1.0f;
     tree_splits_.push_back(ModularStreamId::VarDCTDC(0).ID(frame_dim_));
     tree_splits_.push_back(ModularStreamId::ModularDC(0).ID(frame_dim_));
     tree_splits_.push_back(ModularStreamId::ACMetadata(0).ID(frame_dim_));
@@ -274,15 +273,13 @@ class ModularFrameEncoder {
     ac_metadata_size.resize(frame_dim_.num_dc_groups);
     extra_dc_precision.resize(frame_dim_.num_dc_groups);
     tree_splits_.push_back(num_streams);
-    cparams_.options.max_chan_size = frame_dim_.group_dim;
-    cparams_.options.group_dim = frame_dim_.group_dim;
+    options.max_chan_size = frame_dim_.group_dim;
+    options.group_dim = frame_dim_.group_dim;
 
     // TODO(veluca): figure out how to use different predictor sets per channel.
-    stream_options_.resize(num_streams, cparams_.options);
+    stream_options_.resize(num_streams, options);
   }
   Status ComputeEncodingData(ThreadPool* pool) {
-    stream_options_[0] = cparams_.options;
-
     if (!tree_.empty()) return true;
 
     // Compute tree.
@@ -479,7 +476,6 @@ class ModularFrameEncoder {
   EntropyEncodingData code_;
   std::vector<uint8_t> context_map_;
   FrameDimensions frame_dim_;
-  CompressParams cparams_;
   std::vector<size_t> tree_splits_;
   std::vector<ModularMultiplierInfo> multiplier_info_;
   std::vector<std::vector<uint32_t>> gi_channel_;
@@ -489,13 +485,12 @@ class ModularFrameEncoder {
 
 }  // namespace
 
-Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
+Status EncodeFrame(const float distance, const CodecMetadata* metadata,
                    const Image3F& linear, ThreadPool* pool, BitWriter* writer) {
   PassesEncoderState enc_state;
   PassesSharedState& shared = enc_state.shared;
   shared.frame_header = FrameHeader(metadata);
-  JXL_RETURN_IF_ERROR(
-      MakeFrameHeader(cparams.butteraugli_distance, &shared.frame_header));
+  JXL_RETURN_IF_ERROR(MakeFrameHeader(distance, &shared.frame_header));
   shared.frame_dim = shared.frame_header.ToFrameDimensions();
   shared.image_features.patches.SetPassesSharedState(&shared);
 
@@ -519,20 +514,19 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   shared.dc_storage = Image3F(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
   shared.dc = &shared.dc_storage;
 
-  enc_state.cparams = cparams;
   enc_state.passes.clear();
 
   std::unique_ptr<ModularFrameEncoder> modular_frame_encoder =
-      jxl::make_unique<ModularFrameEncoder>(frame_dim, cparams);
+      jxl::make_unique<ModularFrameEncoder>(frame_dim);
 
   float x_qm_scale_steps[2] = {1.25f, 9.0f};
   shared.frame_header.x_qm_scale = 2;
   for (float x_qm_scale_step : x_qm_scale_steps) {
-    if (cparams.butteraugli_distance > x_qm_scale_step) {
+    if (distance > x_qm_scale_step) {
       shared.frame_header.x_qm_scale++;
     }
   }
-  if (cparams.butteraugli_distance < 0.299f) {
+  if (distance < 0.299f) {
     // Favor chromacity preservation for making images appear more
     // faithful to original even with extreme (5-10x) zooming.
     shared.frame_header.x_qm_scale++;
@@ -560,11 +554,11 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   // output: Gaborished XYB, CfL, ACS, raw quant field, EPF control field.
 
   // Compute adaptive quantization field, relies on pre-gaborish values.
-  float butteraugli_distance_for_iqf = cparams.butteraugli_distance;
+  float butteraugli_distance_for_iqf = distance;
   if (!shared.frame_header.loop_filter.gab) {
     butteraugli_distance_for_iqf *= 0.73f;
   }
-  const float quant_dc = InitialQuantDC(cparams.butteraugli_distance);
+  const float quant_dc = InitialQuantDC(distance);
   enc_state.initial_quant_field =
       InitialQuantField(butteraugli_distance_for_iqf, opsin, shared.frame_dim,
                         pool, 1.0f, &enc_state.initial_quant_masking);
@@ -582,7 +576,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   AcStrategyHeuristicsTiny acs_heuristics;
   CfLHeuristicsTiny cfl_heuristics;
   cfl_heuristics.Init(opsin);
-  acs_heuristics.Init(opsin, &enc_state);
+  acs_heuristics.Init(opsin, distance, &enc_state);
 
   auto process_tile = [&](const uint32_t tid, const size_t thread) {
     size_t n_enc_tiles =
@@ -661,14 +655,13 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     pass.ac_tokens.resize(shared.frame_dim.num_groups);
   }
 
-  auto used_orders_info =
-      ComputeUsedOrdersTiny(cparams.speed_tier, enc_state.shared.ac_strategy,
-                            Rect(enc_state.shared.raw_quant_field));
+  auto used_orders_info = ComputeUsedOrdersTiny(
+      enc_state.shared.ac_strategy, Rect(enc_state.shared.raw_quant_field));
   enc_state.used_orders.clear();
   enc_state.used_orders.resize(1, used_orders_info.second);
-  ComputeCoeffOrderTiny(cparams.speed_tier, *enc_state.coeffs[0],
-                        enc_state.shared.ac_strategy, shared.frame_dim,
-                        enc_state.used_orders[0], used_orders_info.first,
+  ComputeCoeffOrderTiny(*enc_state.coeffs[0], enc_state.shared.ac_strategy,
+                        shared.frame_dim, enc_state.used_orders[0],
+                        used_orders_info.first,
                         &enc_state.shared.coeff_orders[0]);
   shared.num_histograms = 1;
 
