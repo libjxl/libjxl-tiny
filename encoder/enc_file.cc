@@ -11,11 +11,11 @@
 
 #include <vector>
 
+#include "encoder/enc_bit_writer.h"
 #include "encoder/enc_frame.h"
 #include "lib/jxl/color_encoding_internal.h"
-#include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/image_bundle.h"
+#include "lib/jxl/image.h"
 #include "lib/jxl/image_metadata.h"
 
 namespace jxl {

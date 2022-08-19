@@ -41,7 +41,6 @@
 #include "lib/jxl/fast_math-inl.h"
 #include "lib/jxl/gauss_blur.h"
 #include "lib/jxl/image.h"
-#include "lib/jxl/image_bundle.h"
 #include "lib/jxl/image_ops.h"
 #include "lib/jxl/opsin_params.h"
 #include "lib/jxl/quant_weights.h"

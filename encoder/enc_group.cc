@@ -15,6 +15,7 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/enc_bit_writer.h"
 #include "lib/jxl/ac_strategy.h"
 #include "lib/jxl/base/bits.h"
 #include "lib/jxl/base/compiler_specific.h"
@@ -22,7 +23,6 @@
 #include "lib/jxl/common.h"
 #include "lib/jxl/dct_util.h"
 #include "lib/jxl/dec_transforms-inl.h"
-#include "lib/jxl/enc_bit_writer.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/enc_transforms-inl.h"
 #include "lib/jxl/image.h"

@@ -8,6 +8,7 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_adaptive_quantization.cc
   enc_ac_strategy.cc
   enc_ans.cc
+  enc_bit_writer.cc
   enc_chroma_from_luma.cc
   enc_cluster.cc
   enc_entropy_coder.cc

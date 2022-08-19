@@ -17,7 +17,6 @@
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/image.h"
-#include "lib/jxl/image_bundle.h"
 #include "lib/jxl/loop_filter.h"
 #include "lib/jxl/quant_weights.h"
 #include "lib/jxl/quantizer.h"
