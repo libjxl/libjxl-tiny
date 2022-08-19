@@ -19,6 +19,7 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/enc_transforms-inl.h"
 #include "lib/jxl/base/bits.h"
 #include "lib/jxl/base/padded_bytes.h"
 #include "lib/jxl/base/profiler.h"
@@ -26,7 +27,6 @@
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/dec_transforms-inl.h"
-#include "lib/jxl/enc_transforms-inl.h"
 #include "lib/jxl/entropy_coder.h"
 #include "lib/jxl/image_ops.h"
 #include "lib/jxl/modular/encoding/encoding.h"
@@ -247,15 +247,15 @@ void ComputeTileTiny(const Image3F& opsin, const DequantMatrices& dequant,
                            : ac_strategy->ConstRow(y)[x];
       if (!acs.IsFirstBlock()) continue;
       size_t xs = acs.covered_blocks_x();
-      TransformFromPixels(acs.Strategy(), row_y + x * kBlockDim, stride,
-                          block_y, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), block_y, dc_y, xs);
-      TransformFromPixels(acs.Strategy(), row_x + x * kBlockDim, stride,
-                          block_x, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), block_x, dc_x, xs);
-      TransformFromPixels(acs.Strategy(), row_b + x * kBlockDim, stride,
-                          block_b, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), block_b, dc_b, xs);
+      TransformFromPixelsTiny(acs.Strategy(), row_y + x * kBlockDim, stride,
+                              block_y, scratch_space);
+      DCFromLowestFrequenciesTiny(acs.Strategy(), block_y, dc_y, xs);
+      TransformFromPixelsTiny(acs.Strategy(), row_x + x * kBlockDim, stride,
+                              block_x, scratch_space);
+      DCFromLowestFrequenciesTiny(acs.Strategy(), block_x, dc_x, xs);
+      TransformFromPixelsTiny(acs.Strategy(), row_b + x * kBlockDim, stride,
+                              block_b, scratch_space);
+      DCFromLowestFrequenciesTiny(acs.Strategy(), block_b, dc_b, xs);
       const float* const JXL_RESTRICT qm_x =
           dequant.InvMatrix(acs.Strategy(), 0);
       const float* const JXL_RESTRICT qm_b =
