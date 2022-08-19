@@ -12,10 +12,10 @@
 
 #include <vector>
 
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/status.h"
+#include "encoder/coeff_order_fwd.h"
 #include "encoder/enc_bit_writer.h"
-#include "lib/jxl/aux_out.h"
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/status.h"
 
 namespace jxl {
 
@@ -23,7 +23,7 @@ namespace jxl {
 // permutation will be used.
 Status WriteGroupOffsets(const std::vector<BitWriter>& group_codes,
                          const std::vector<coeff_order_t>* permutation,
-                         BitWriter* JXL_RESTRICT writer, AuxOut* aux_out);
+                         BitWriter* JXL_RESTRICT writer);
 
 }  // namespace jxl
 

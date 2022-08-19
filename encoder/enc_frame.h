@@ -7,12 +7,11 @@
 #ifndef ENCODER_ENC_FRAME_H_
 #define ENCODER_ENC_FRAME_H_
 
+#include "encoder/base/data_parallel.h"
+#include "encoder/base/status.h"
 #include "encoder/enc_bit_writer.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/image_metadata.h"
+#include "encoder/image.h"
+#include "encoder/image_metadata.h"
 
 namespace jxl {
 
@@ -20,7 +19,7 @@ namespace jxl {
 // be processed in parallel by `pool`. metadata is the ImageMetadata encoded in
 // the codestream, and must be used for the FrameHeaders, do not use
 // ib.metadata.
-Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
+Status EncodeFrame(const float distance, const CodecMetadata* metadata,
                    const Image3F& linear, ThreadPool* pool, BitWriter* writer);
 
 }  // namespace jxl

@@ -17,12 +17,12 @@
 #include <utility>
 #include <vector>
 
+#include "encoder/ac_context.h"  // BlockCtxMap
+#include "encoder/ac_strategy.h"
 #include "encoder/enc_ans.h"
-#include "lib/jxl/ac_context.h"  // BlockCtxMap
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/field_encodings.h"
-#include "lib/jxl/frame_header.h"  // YCbCrChromaSubsampling
-#include "lib/jxl/image.h"
+#include "encoder/field_encodings.h"
+#include "encoder/frame_header.h"  // YCbCrChromaSubsampling
+#include "encoder/image.h"
 
 // Entropy coding and context modeling of DC and AC coefficients, as well as AC
 // strategy and quantization field.

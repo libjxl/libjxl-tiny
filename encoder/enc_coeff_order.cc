@@ -9,30 +9,33 @@
 #include <algorithm>
 #include <vector>
 
+#include "encoder/ans_params.h"
+#include "encoder/base/padded_bytes.h"
+#include "encoder/base/profiler.h"
+#include "encoder/base/span.h"
+#include "encoder/coeff_order.h"
+#include "encoder/coeff_order_fwd.h"
+#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
+#include "encoder/entropy_coder.h"
+#include "encoder/lehmer_code.h"
+#include "encoder/modular/encoding/encoding.h"
+#include "encoder/modular/modular_image.h"
 #include "hwy/aligned_allocator.h"
-#include "lib/jxl/ans_params.h"
-#include "lib/jxl/base/padded_bytes.h"
-#include "lib/jxl/base/profiler.h"
-#include "lib/jxl/base/span.h"
-#include "lib/jxl/coeff_order.h"
-#include "lib/jxl/coeff_order_fwd.h"
-#include "lib/jxl/dec_ans.h"
-#include "lib/jxl/dec_bit_reader.h"
-#include "lib/jxl/entropy_coder.h"
-#include "lib/jxl/lehmer_code.h"
-#include "lib/jxl/modular/encoding/encoding.h"
-#include "lib/jxl/modular/modular_image.h"
 
 namespace jxl {
 
-std::pair<uint32_t, uint32_t> ComputeUsedOrdersTiny(
-    const SpeedTier speed, const AcStrategyImage& ac_strategy,
-    const Rect& rect) {
-  // Only uses DCT8 = 0, so bitfield = 1.
-  if (speed >= SpeedTier::kFalcon) return {1, 1};
+namespace {
+uint32_t CoeffOrderContext(uint32_t val) {
+  uint32_t token, nbits, bits;
+  HybridUintConfig(0, 0, 0).Encode(val, &token, &nbits, &bits);
+  return std::min(token, kPermutationContexts - 1);
+}
+}  // namespace
 
+std::pair<uint32_t, uint32_t> ComputeUsedOrders(
+    const AcStrategyImage& ac_strategy, const Rect& rect) {
   uint32_t ret = 0;
   uint32_t ret_customize = 0;
   size_t xsize_blocks = rect.xsize();
@@ -55,11 +58,9 @@ std::pair<uint32_t, uint32_t> ComputeUsedOrdersTiny(
   return {ret, ret_customize};
 }
 
-void ComputeCoeffOrderTiny(SpeedTier speed, const ACImage& acs,
-                           const AcStrategyImage& ac_strategy,
-                           const FrameDimensions& frame_dim,
-                           uint32_t& used_orders, uint16_t used_acs,
-                           coeff_order_t* JXL_RESTRICT order) {
+void ComputeCoeffOrder(const ACImage& acs, const AcStrategyImage& ac_strategy,
+                       const FrameDimensions& frame_dim, uint32_t& used_orders,
+                       uint16_t used_acs, coeff_order_t* JXL_RESTRICT order) {
   std::vector<int32_t> num_zeros(kCoeffOrderMaxSize);
   // If compressing at high speed and only using 8x8 DCTs, only consider a
   // subset of blocks.
@@ -238,7 +239,7 @@ void EncodePermutation(const coeff_order_t* JXL_RESTRICT order, size_t skip,
   EntropyEncodingData codes;
   BuildAndEncodeHistograms(HistogramParams(), kPermutationContexts, tokens,
                            &codes, &context_map, writer);
-  WriteTokensTiny(tokens[0], codes, context_map, writer);
+  WriteTokens(tokens[0], codes, context_map, writer);
 }
 
 namespace {
@@ -282,7 +283,7 @@ void EncodeCoeffOrders(uint16_t used_orders,
     EntropyEncodingData codes;
     BuildAndEncodeHistograms(HistogramParams(), kPermutationContexts, tokens,
                              &codes, &context_map, writer);
-    WriteTokensTiny(tokens[0], codes, context_map, writer);
+    WriteTokens(tokens[0], codes, context_map, writer);
   }
 }
 

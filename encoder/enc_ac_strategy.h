@@ -9,16 +9,14 @@
 
 #include <stdint.h>
 
+#include "encoder/ac_strategy.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/base/status.h"
+#include "encoder/chroma_from_luma.h"
+#include "encoder/common.h"
 #include "encoder/enc_cache.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/chroma_from_luma.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dec_ans.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/quant_weights.h"
+#include "encoder/image.h"
+#include "encoder/quant_weights.h"
 
 // `FindBestAcStrategy` uses heuristics to choose which AC strategy should be
 // used in each block, as well as the initial quantization field.
@@ -57,11 +55,12 @@ struct ACSConfig {
   }
 };
 
-struct AcStrategyHeuristicsTiny {
-  void Init(const Image3F& src, PassesEncoderState* enc_state);
+struct AcStrategyHeuristics {
+  void Init(const Image3F& src, float distance, PassesEncoderState* enc_state);
   void ProcessRect(const Rect& rect);
   ACSConfig config;
   PassesEncoderState* enc_state;
+  float butteraugli_target;
 };
 
 }  // namespace jxl

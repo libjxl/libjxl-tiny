@@ -7,7 +7,7 @@
 #ifndef ENCODER_READ_PFM_H_
 #define ENCODER_READ_PFM_H_
 
-#include "lib/jxl/image.h"
+#include "encoder/image.h"
 
 namespace jxl {
 

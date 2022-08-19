@@ -11,10 +11,10 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/fast_math-inl.h"
-#include "lib/jxl/image.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/base/status.h"
+#include "encoder/fast_math-inl.h"
+#include "encoder/image.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {

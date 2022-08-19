@@ -15,27 +15,27 @@
 
 #include <vector>
 
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/base/status.h"
+#include "encoder/chroma_from_luma.h"
+#include "encoder/common.h"
+#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/chroma_from_luma.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dec_ans.h"
-#include "lib/jxl/dec_bit_reader.h"
-#include "lib/jxl/entropy_coder.h"
-#include "lib/jxl/field_encodings.h"
-#include "lib/jxl/fields.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/opsin_params.h"
-#include "lib/jxl/quant_weights.h"
+#include "encoder/entropy_coder.h"
+#include "encoder/field_encodings.h"
+#include "encoder/fields.h"
+#include "encoder/image.h"
+#include "encoder/opsin_params.h"
+#include "encoder/quant_weights.h"
+#include "encoder/quantizer.h"
 
 namespace jxl {
 
 void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer);
 
-struct CfLHeuristicsTiny {
+struct CfLHeuristics {
   void Init(const Image3F& opsin);
 
   void PrepareForThreads(size_t num_threads) {

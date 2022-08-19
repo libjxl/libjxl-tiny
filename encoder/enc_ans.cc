@@ -18,13 +18,11 @@
 #include <utility>
 #include <vector>
 
+#include "encoder/ans_common.h"
+#include "encoder/base/bits.h"
 #include "encoder/enc_cluster.h"
-#include "lib/jxl/ans_common.h"
-#include "lib/jxl/aux_out_fwd.h"
-#include "lib/jxl/base/bits.h"
-#include "lib/jxl/dec_ans.h"
-#include "lib/jxl/fast_math-inl.h"
-#include "lib/jxl/fields.h"
+#include "encoder/fast_math-inl.h"
+#include "encoder/fields.h"
 
 namespace jxl {
 
@@ -357,7 +355,6 @@ class HistogramBuilder {
     histograms_[histo_idx].Add(symbol);
   }
 
-  // NOTE: `layer` is only for clustered_entropy; caller does ReclaimAndCharge.
   void BuildAndStoreEntropyCodes(const HistogramParams& params,
                                  const std::vector<std::vector<Token>>& tokens,
                                  EntropyEncodingData* codes,
@@ -389,7 +386,7 @@ class HistogramBuilder {
         writer->Write(1, 0);  // Don't use MTF.
         BuildAndEncodeHistograms(params, 1, tokens, &codes, &dummy_context_map,
                                  writer);
-        WriteTokensTiny(tokens[0], codes, dummy_context_map, writer);
+        WriteTokens(tokens[0], codes, dummy_context_map, writer);
       }
     }
     codes->uint_config.resize(clustered_histograms.size());
@@ -413,7 +410,7 @@ class HistogramBuilder {
                                    num_symbol, /*log_alpha_size=*/8,
                                    codes->encoding_info.back().data(), writer);
       allotment.FinishedHistogram(writer);
-      ReclaimAndCharge(writer, &allotment, 0, nullptr);
+      allotment.Reclaim(writer);
     }
     return;
   }
@@ -522,8 +519,6 @@ void ApplyLZ77_RLE(const HistogramParams& params, size_t num_contexts,
       size_t distance_symbol = 0;  // 1 for RLE.
       if (distance_multiplier != 0) {
         distance_symbol = 1;  // Special distance 1 if enabled.
-        JXL_DASSERT(kSpecialDistances[1][0] == 1);
-        JXL_DASSERT(kSpecialDistances[1][1] == 0);
       }
       if (i > 0) {
         for (; i + num_to_copy < in.size(); num_to_copy++) {
@@ -589,7 +584,7 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
   const size_t max_contexts = std::min(num_contexts, kClustersLimit);
   BitWriter::Allotment allotment(writer,
                                  128 + num_contexts * 40 + max_contexts * 96);
-  JXL_CHECK(Bundle::Write(codes->lz77, writer, 0, nullptr));
+  JXL_CHECK(Bundle::Write(codes->lz77, writer));
   if (codes->lz77.enabled) {
     writer->Write(4, 0);  // uint config 0,0,0
     num_contexts += 1;
@@ -632,13 +627,12 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
   // Encode histograms.
   builder.BuildAndStoreEntropyCodes(params, tokens, codes, context_map, writer);
   allotment.FinishedHistogram(writer);
-  ReclaimAndCharge(writer, &allotment, 0, nullptr);
+  allotment.Reclaim(writer);
 }
 
-void WriteTokensTiny(const std::vector<Token>& tokens,
-                     const EntropyEncodingData& codes,
-                     const std::vector<uint8_t>& context_map,
-                     BitWriter* writer) {
+void WriteTokens(const std::vector<Token>& tokens,
+                 const EntropyEncodingData& codes,
+                 const std::vector<uint8_t>& context_map, BitWriter* writer) {
   BitWriter::Allotment allotment(writer, 32 * tokens.size() + 32 * 1024 * 4);
   std::vector<uint64_t> out;
   std::vector<uint8_t> out_nbits;
@@ -696,7 +690,7 @@ void WriteTokensTiny(const std::vector<Token>& tokens,
   for (int i = out.size(); i > 0; --i) {
     writer->Write(out_nbits[i - 1], out[i - 1]);
   }
-  ReclaimAndCharge(writer, &allotment, 0, nullptr);
+  allotment.Reclaim(writer);
 }
 
 }  // namespace jxl

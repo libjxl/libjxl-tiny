@@ -10,15 +10,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "encoder/base/status.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_cache.h"
-#include "lib/jxl/base/status.h"
 
 namespace jxl {
 
 // Fills DC
-void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
-                             const Image3F& opsin, Image3F* dc);
+void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
+                         const Image3F& opsin, Image3F* dc);
 
 Status EncodeGroupTokenizedCoefficients(size_t group_idx, size_t pass_idx,
                                         size_t histogram_idx,

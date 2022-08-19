@@ -6,12 +6,12 @@
 
 #include <stdio.h>
 
+#include "encoder/base/printf_macros.h"
+#include "encoder/cmdline.h"
 #include "encoder/enc_file.h"
+#include "encoder/file_io.h"
+#include "encoder/image.h"
 #include "encoder/read_pfm.h"
-#include "lib/jxl/base/printf_macros.h"
-#include "lib/jxl/image.h"
-#include "tools/cmdline.h"
-#include "tools/file_io.h"
 
 namespace {
 struct CompressArgs {

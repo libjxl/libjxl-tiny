@@ -10,10 +10,10 @@
 #include <numeric>
 
 #include "encoder/enc_ans.h"
-#include "lib/jxl/entropy_coder.h"
-#include "lib/jxl/modular/encoding/dec_ma.h"
-#include "lib/jxl/modular/modular_image.h"
-#include "lib/jxl/modular/options.h"
+#include "encoder/entropy_coder.h"
+#include "encoder/modular/encoding/dec_ma.h"
+#include "encoder/modular/modular_image.h"
+#include "encoder/modular/options.h"
 
 namespace jxl {
 
