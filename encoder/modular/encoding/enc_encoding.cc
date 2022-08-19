@@ -15,31 +15,28 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "encoder/base/printf_macros.h"
+#include "encoder/base/status.h"
+#include "encoder/common.h"
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
+#include "encoder/entropy_coder.h"
+#include "encoder/fields.h"
+#include "encoder/image_ops.h"
+#include "encoder/modular/encoding/context_predict.h"
 #include "encoder/modular/encoding/enc_ma.h"
-#include "lib/jxl/base/printf_macros.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dec_ans.h"
-#include "lib/jxl/dec_bit_reader.h"
-#include "lib/jxl/entropy_coder.h"
-#include "lib/jxl/fields.h"
-#include "lib/jxl/image_ops.h"
-#include "lib/jxl/modular/encoding/context_predict.h"
-#include "lib/jxl/modular/encoding/encoding.h"
-#include "lib/jxl/modular/encoding/ma_common.h"
-#include "lib/jxl/modular/options.h"
-#include "lib/jxl/modular/transform/transform.h"
-#include "lib/jxl/toc.h"
+#include "encoder/modular/encoding/encoding.h"
+#include "encoder/modular/encoding/ma_common.h"
+#include "encoder/modular/options.h"
+#include "encoder/modular/transform/transform.h"
+#include "encoder/toc.h"
 
 namespace jxl {
 
 Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
                                  const weighted::Header &wp_header,
                                  const Tree &global_tree, Token **tokenpp,
-                                 AuxOut *aux_out, size_t group_id,
-                                 bool skip_encoder_fast_path) {
+                                 size_t group_id, bool skip_encoder_fast_path) {
   const Channel &channel = image.channel[chan];
   Token *tokenp = *tokenpp;
   JXL_ASSERT(channel.w != 0 && channel.h != 0);
@@ -198,10 +195,9 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
 }
 
 Status ModularEncode(const Image &image, const ModularOptions &options,
-                     BitWriter *writer, AuxOut *aux_out, size_t layer,
-                     size_t group_id, size_t *total_pixels, const Tree *tree,
-                     GroupHeader *header, std::vector<Token> *tokens,
-                     size_t *width) {
+                     BitWriter *writer, size_t group_id, size_t *total_pixels,
+                     const Tree *tree, GroupHeader *header,
+                     std::vector<Token> *tokens, size_t *width) {
   if (image.error) return JXL_FAILURE("Invalid image");
   size_t nb_channels = image.channel.size();
   JXL_DEBUG_V(
@@ -258,9 +254,9 @@ Status ModularEncode(const Image &image, const ModularOptions &options,
            image.channel[i].h > options.max_chan_size)) {
         break;
       }
-      JXL_RETURN_IF_ERROR(EncodeModularChannelMAANS(
-          image, i, header->wp_header, *tree, &tokenp, aux_out, group_id,
-          options.skip_encoder_fast_path));
+      JXL_RETURN_IF_ERROR(
+          EncodeModularChannelMAANS(image, i, header->wp_header, *tree, &tokenp,
+                                    group_id, options.skip_encoder_fast_path));
     }
     // Make sure we actually wrote all tokens
     JXL_CHECK(tokenp == tokens->data() + tokens->size());
@@ -274,7 +270,7 @@ Status ModularEncode(const Image &image, const ModularOptions &options,
     histo_params.image_widths.push_back(image_width);
     BuildAndEncodeHistograms(histo_params, (tree->size() + 1) / 2,
                              tokens_storage, &code, &context_map, writer);
-    WriteTokensTiny(tokens_storage[0], code, context_map, writer);
+    WriteTokens(tokens_storage[0], code, context_map, writer);
   } else {
     *width = image_width;
   }
@@ -282,10 +278,10 @@ Status ModularEncode(const Image &image, const ModularOptions &options,
 }
 
 Status ModularGenericCompress(Image &image, const ModularOptions &opts,
-                              BitWriter *writer, AuxOut *aux_out, size_t layer,
-                              size_t group_id, size_t *total_pixels,
-                              const Tree *tree, GroupHeader *header,
-                              std::vector<Token> *tokens, size_t *width) {
+                              BitWriter *writer, size_t group_id,
+                              size_t *total_pixels, const Tree *tree,
+                              GroupHeader *header, std::vector<Token> *tokens,
+                              size_t *width) {
   if (image.w == 0 || image.h == 0) return true;
   ModularOptions options = opts;  // Make a copy to modify it.
 
@@ -294,9 +290,8 @@ Status ModularGenericCompress(Image &image, const ModularOptions &opts,
   }
 
   size_t bits = writer ? writer->BitsWritten() : 0;
-  JXL_RETURN_IF_ERROR(ModularEncode(image, options, writer, aux_out, layer,
-                                    group_id, total_pixels, tree, header,
-                                    tokens, width));
+  JXL_RETURN_IF_ERROR(ModularEncode(image, options, writer, group_id,
+                                    total_pixels, tree, header, tokens, width));
   bits = writer ? writer->BitsWritten() - bits : 0;
   if (writer) {
     JXL_DEBUG_V(4,

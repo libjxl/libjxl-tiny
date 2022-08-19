@@ -12,8 +12,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "lib/jxl/enc_params.h"
-
 namespace jxl {
 
 struct HistogramParams {
@@ -28,13 +26,6 @@ struct HistogramParams {
   };
 
   HistogramParams() = default;
-
-  HistogramParams(SpeedTier tier, size_t num_ctx) {
-    if (tier > SpeedTier::kFalcon) {
-      clustering = ClusteringType::kFastest;
-      lz77_method = LZ77Method::kNone;
-    }
-  }
 
   ClusteringType clustering = ClusteringType::kFast;
   LZ77Method lz77_method = LZ77Method::kRLE;

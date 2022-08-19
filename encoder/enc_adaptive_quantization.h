@@ -9,18 +9,16 @@
 
 #include <stddef.h>
 
+#include "encoder/ac_strategy.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/chroma_from_luma.h"
+#include "encoder/common.h"
 #include "encoder/enc_cache.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/chroma_from_luma.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/frame_header.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/loop_filter.h"
-#include "lib/jxl/quant_weights.h"
-#include "lib/jxl/quantizer.h"
-#include "lib/jxl/splines.h"
+#include "encoder/frame_header.h"
+#include "encoder/image.h"
+#include "encoder/loop_filter.h"
+#include "encoder/quant_weights.h"
+#include "encoder/quantizer.h"
 
 // Heuristics to find a good quantizer for a given image. InitialQuantField
 // produces a quantization field (i.e. relative quantization amounts for each

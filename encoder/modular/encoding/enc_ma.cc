@@ -13,12 +13,12 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "encoder/base/random.h"
 #include "encoder/enc_ans.h"
-#include "lib/jxl/base/random.h"
-#include "lib/jxl/fast_math-inl.h"
-#include "lib/jxl/modular/encoding/context_predict.h"
-#include "lib/jxl/modular/encoding/ma_common.h"
-#include "lib/jxl/modular/options.h"
+#include "encoder/fast_math-inl.h"
+#include "encoder/modular/encoding/context_predict.h"
+#include "encoder/modular/encoding/ma_common.h"
+#include "encoder/modular/options.h"
 
 namespace jxl {
 

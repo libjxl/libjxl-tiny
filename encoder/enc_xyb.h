@@ -9,8 +9,8 @@
 
 // Converts to XYB color space.
 
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/image.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/image.h"
 
 namespace jxl {
 

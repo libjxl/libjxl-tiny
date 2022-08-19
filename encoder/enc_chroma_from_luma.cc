@@ -19,18 +19,19 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/base/bits.h"
+#include "encoder/base/padded_bytes.h"
+#include "encoder/base/profiler.h"
+#include "encoder/base/span.h"
+#include "encoder/base/status.h"
+#include "encoder/common.h"
+#include "encoder/dec_transforms-inl.h"
 #include "encoder/enc_transforms-inl.h"
-#include "lib/jxl/base/bits.h"
-#include "lib/jxl/base/padded_bytes.h"
-#include "lib/jxl/base/profiler.h"
-#include "lib/jxl/base/span.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dec_transforms-inl.h"
-#include "lib/jxl/entropy_coder.h"
-#include "lib/jxl/image_ops.h"
-#include "lib/jxl/modular/encoding/encoding.h"
-#include "lib/jxl/quantizer.h"
+#include "encoder/entropy_coder.h"
+#include "encoder/image_ops.h"
+#include "encoder/modular/encoding/encoding.h"
+#include "encoder/quantizer.h"
+
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -44,12 +45,12 @@ using hwy::HWY_NAMESPACE::Lt;
 
 static HWY_FULL(float) df;
 
-struct CFLFunctionTiny {
+struct CFLFunction {
   static constexpr float kCoeff = 1.f / 3;
   static constexpr float kThres = 100.0f;
   static constexpr float kInvColorFactor = 1.0f / kDefaultColorFactor;
-  CFLFunctionTiny(const float* values_m, const float* values_s, size_t num,
-                  float base, float distance_mul)
+  CFLFunction(const float* values_m, const float* values_s, size_t num,
+              float base, float distance_mul)
       : values_m(values_m),
         values_s(values_s),
         num(num),
@@ -114,9 +115,9 @@ struct CFLFunctionTiny {
   float distance_mul;
 };
 
-int32_t FindBestMultiplierTiny(const float* values_m, const float* values_s,
-                               size_t num, float base, float distance_mul,
-                               bool fast) {
+int32_t FindBestMultiplier(const float* values_m, const float* values_s,
+                           size_t num, float base, float distance_mul,
+                           bool fast) {
   if (num == 0) {
     return 0;
   }
@@ -141,7 +142,7 @@ int32_t FindBestMultiplierTiny(const float* values_m, const float* values_s,
   } else {
     constexpr float eps = 1;
     constexpr float kClamp = 20.0f;
-    CFLFunctionTiny fn(values_m, values_s, num, base, distance_mul);
+    CFLFunction fn(values_m, values_s, num, base, distance_mul);
     x = 0;
     // Up to 20 Newton iterations, with approximate derivatives.
     // Derivatives are approximate due to the high amount of noise in the exact
@@ -158,7 +159,7 @@ int32_t FindBestMultiplierTiny(const float* values_m, const float* values_s,
   return std::max(-128.0f, std::min(127.0f, roundf(x)));
 }
 
-void InitDCStorageTiny(size_t num_blocks, ImageF* dc_values) {
+void InitDCStorage(size_t num_blocks, ImageF* dc_values) {
   // First row: Y channel
   // Second row: X channel
   // Third row: Y channel
@@ -175,26 +176,23 @@ void InitDCStorageTiny(size_t num_blocks, ImageF* dc_values) {
   }
 }
 
-void ComputeDCTiny(const ImageF& dc_values, bool fast, int32_t* dc_x,
-                   int32_t* dc_b) {
+void ComputeDC(const ImageF& dc_values, bool fast, int32_t* dc_x,
+               int32_t* dc_b) {
   constexpr float kDistanceMultiplierDC = 1e-5f;
   const float* JXL_RESTRICT dc_values_yx = dc_values.Row(0);
   const float* JXL_RESTRICT dc_values_x = dc_values.Row(1);
   const float* JXL_RESTRICT dc_values_yb = dc_values.Row(2);
   const float* JXL_RESTRICT dc_values_b = dc_values.Row(3);
-  *dc_x = FindBestMultiplierTiny(dc_values_yx, dc_values_x, dc_values.xsize(),
-                                 0.0f, kDistanceMultiplierDC, fast);
-  *dc_b = FindBestMultiplierTiny(dc_values_yb, dc_values_b, dc_values.xsize(),
-                                 kYToBRatio, kDistanceMultiplierDC, fast);
+  *dc_x = FindBestMultiplier(dc_values_yx, dc_values_x, dc_values.xsize(), 0.0f,
+                             kDistanceMultiplierDC, fast);
+  *dc_b = FindBestMultiplier(dc_values_yb, dc_values_b, dc_values.xsize(),
+                             kYToBRatio, kDistanceMultiplierDC, fast);
 }
 
-void ComputeTileTiny(const Image3F& opsin, const DequantMatrices& dequant,
-                     const AcStrategyImage* ac_strategy,
-                     const Quantizer* quantizer, const Rect& r, bool fast,
-                     bool use_dct8, ImageSB* map_x, ImageSB* map_b,
-                     ImageF* dc_values, float* mem) {
-  static_assert(kEncTileDimInBlocks == kColorTileDimInBlocks,
-                "Invalid color tile dim");
+void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
+                 const AcStrategyImage* ac_strategy, const Quantizer* quantizer,
+                 const Rect& r, bool fast, bool use_dct8, ImageSB* map_x,
+                 ImageSB* map_b, ImageF* dc_values, float* mem) {
   size_t xsize_blocks = opsin.xsize() / kBlockDim;
   constexpr float kDistanceMultiplierAC = 1e-3f;
 
@@ -223,8 +221,6 @@ void ComputeTileTiny(const Image3F& opsin, const DequantMatrices& dequant,
   float* HWY_RESTRICT coeffs_yb = coeffs_x + kColorTileDim * kColorTileDim;
   float* HWY_RESTRICT coeffs_b = coeffs_yb + kColorTileDim * kColorTileDim;
   float* HWY_RESTRICT scratch_space = coeffs_b + kColorTileDim * kColorTileDim;
-  JXL_DASSERT(scratch_space + 2 * AcStrategy::kMaxCoeffArea ==
-              block_y + CfLHeuristics::kItemsPerThread);
 
   // Small (~256 bytes each)
   HWY_ALIGN_MAX float
@@ -247,15 +243,15 @@ void ComputeTileTiny(const Image3F& opsin, const DequantMatrices& dequant,
                            : ac_strategy->ConstRow(y)[x];
       if (!acs.IsFirstBlock()) continue;
       size_t xs = acs.covered_blocks_x();
-      TransformFromPixelsTiny(acs.Strategy(), row_y + x * kBlockDim, stride,
-                              block_y, scratch_space);
-      DCFromLowestFrequenciesTiny(acs.Strategy(), block_y, dc_y, xs);
-      TransformFromPixelsTiny(acs.Strategy(), row_x + x * kBlockDim, stride,
-                              block_x, scratch_space);
-      DCFromLowestFrequenciesTiny(acs.Strategy(), block_x, dc_x, xs);
-      TransformFromPixelsTiny(acs.Strategy(), row_b + x * kBlockDim, stride,
-                              block_b, scratch_space);
-      DCFromLowestFrequenciesTiny(acs.Strategy(), block_b, dc_b, xs);
+      TransformFromPixels(acs.Strategy(), row_y + x * kBlockDim, stride,
+                          block_y, scratch_space);
+      DCFromLowestFrequencies(acs.Strategy(), block_y, dc_y, xs);
+      TransformFromPixels(acs.Strategy(), row_x + x * kBlockDim, stride,
+                          block_x, scratch_space);
+      DCFromLowestFrequencies(acs.Strategy(), block_x, dc_x, xs);
+      TransformFromPixels(acs.Strategy(), row_b + x * kBlockDim, stride,
+                          block_b, scratch_space);
+      DCFromLowestFrequencies(acs.Strategy(), block_b, dc_b, xs);
       const float* const JXL_RESTRICT qm_x =
           dequant.InvMatrix(acs.Strategy(), 0);
       const float* const JXL_RESTRICT qm_b =
@@ -317,10 +313,10 @@ void ComputeTileTiny(const Image3F& opsin, const DequantMatrices& dequant,
     }
   }
   JXL_CHECK(num_ac % Lanes(df) == 0);
-  row_out_x[tx] = FindBestMultiplierTiny(coeffs_yx, coeffs_x, num_ac, 0.0f,
-                                         kDistanceMultiplierAC, fast);
-  row_out_b[tx] = FindBestMultiplierTiny(
-      coeffs_yb, coeffs_b, num_ac, kYToBRatio, kDistanceMultiplierAC, fast);
+  row_out_x[tx] = FindBestMultiplier(coeffs_yx, coeffs_x, num_ac, 0.0f,
+                                     kDistanceMultiplierAC, fast);
+  row_out_b[tx] = FindBestMultiplier(coeffs_yb, coeffs_b, num_ac, kYToBRatio,
+                                     kDistanceMultiplierAC, fast);
 }
 
 // NOLINTNEXTLINE(google-readability-namespace-comments)
@@ -331,32 +327,32 @@ HWY_AFTER_NAMESPACE();
 #if HWY_ONCE
 namespace jxl {
 
-HWY_EXPORT(InitDCStorageTiny);
-HWY_EXPORT(ComputeDCTiny);
-HWY_EXPORT(ComputeTileTiny);
+HWY_EXPORT(InitDCStorage);
+HWY_EXPORT(ComputeDC);
+HWY_EXPORT(ComputeTile);
 
-void CfLHeuristicsTiny::Init(const Image3F& opsin) {
+void CfLHeuristics::Init(const Image3F& opsin) {
   size_t xsize_blocks = opsin.xsize() / kBlockDim;
   size_t ysize_blocks = opsin.ysize() / kBlockDim;
-  HWY_DYNAMIC_DISPATCH(InitDCStorageTiny)
+  HWY_DYNAMIC_DISPATCH(InitDCStorage)
   (xsize_blocks * ysize_blocks, &dc_values);
 }
 
-void CfLHeuristicsTiny::ComputeTile(const Rect& r, const Image3F& opsin,
-                                    const DequantMatrices& dequant,
-                                    const AcStrategyImage* ac_strategy,
-                                    const Quantizer* quantizer, bool fast,
-                                    size_t thread, ColorCorrelationMap* cmap) {
+void CfLHeuristics::ComputeTile(const Rect& r, const Image3F& opsin,
+                                const DequantMatrices& dequant,
+                                const AcStrategyImage* ac_strategy,
+                                const Quantizer* quantizer, bool fast,
+                                size_t thread, ColorCorrelationMap* cmap) {
   bool use_dct8 = ac_strategy == nullptr;
-  HWY_DYNAMIC_DISPATCH(ComputeTileTiny)
+  HWY_DYNAMIC_DISPATCH(ComputeTile)
   (opsin, dequant, ac_strategy, quantizer, r, fast, use_dct8, &cmap->ytox_map,
    &cmap->ytob_map, &dc_values, mem.get() + thread * kItemsPerThread);
 }
 
-void CfLHeuristicsTiny::ComputeDC(bool fast, ColorCorrelationMap* cmap) {
+void CfLHeuristics::ComputeDC(bool fast, ColorCorrelationMap* cmap) {
   int32_t ytob_dc = 0;
   int32_t ytox_dc = 0;
-  HWY_DYNAMIC_DISPATCH(ComputeDCTiny)(dc_values, fast, &ytox_dc, &ytob_dc);
+  HWY_DYNAMIC_DISPATCH(ComputeDC)(dc_values, fast, &ytox_dc, &ytob_dc);
   cmap->SetYToBDC(ytob_dc);
   cmap->SetYToXDC(ytox_dc);
 }
@@ -372,7 +368,7 @@ void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer) {
   if (ytox_dc == 0 && ytob_dc == 0 && color_factor == kDefaultColorFactor &&
       base_correlation_x == 0.0f && base_correlation_b == kYToBRatio) {
     writer->Write(1, 1);
-    ReclaimAndCharge(writer, &allotment, 0, nullptr);
+    allotment.Reclaim(writer);
     return;
   }
   writer->Write(1, 0);
@@ -381,7 +377,7 @@ void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer) {
   JXL_CHECK(F16Coder::Write(base_correlation_b, writer));
   writer->Write(kBitsPerByte, ytox_dc - std::numeric_limits<int8_t>::min());
   writer->Write(kBitsPerByte, ytob_dc - std::numeric_limits<int8_t>::min());
-  ReclaimAndCharge(writer, &allotment, 0, nullptr);
+  allotment.Reclaim(writer);
 }
 
 }  // namespace jxl

@@ -11,7 +11,7 @@
 
 #include <vector>
 
-#include "lib/jxl/image.h"
+#include "encoder/image.h"
 
 namespace jxl {
 

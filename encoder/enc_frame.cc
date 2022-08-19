@@ -18,6 +18,22 @@
 #include <queue>
 #include <vector>
 
+#include "encoder/ac_context.h"
+#include "encoder/ac_strategy.h"
+#include "encoder/ans_params.h"
+#include "encoder/base/bits.h"
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/base/override.h"
+#include "encoder/base/padded_bytes.h"
+#include "encoder/base/profiler.h"
+#include "encoder/base/status.h"
+#include "encoder/chroma_from_luma.h"
+#include "encoder/coeff_order.h"
+#include "encoder/coeff_order_fwd.h"
+#include "encoder/color_encoding_internal.h"
+#include "encoder/common.h"
+#include "encoder/dct_util.h"
 #include "encoder/enc_ac_strategy.h"
 #include "encoder/enc_adaptive_quantization.h"
 #include "encoder/enc_ans.h"
@@ -29,44 +45,87 @@
 #include "encoder/enc_group.h"
 #include "encoder/enc_toc.h"
 #include "encoder/enc_xyb.h"
+#include "encoder/fields.h"
+#include "encoder/frame_header.h"
+#include "encoder/gaborish.h"
+#include "encoder/image.h"
+#include "encoder/image_ops.h"
+#include "encoder/loop_filter.h"
+#include "encoder/modular/encoding/context_predict.h"
 #include "encoder/modular/encoding/enc_encoding.h"
-#include "lib/jxl/ac_context.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/ans_params.h"
-#include "lib/jxl/base/bits.h"
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/override.h"
-#include "lib/jxl/base/padded_bytes.h"
-#include "lib/jxl/base/profiler.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/chroma_from_luma.h"
-#include "lib/jxl/coeff_order.h"
-#include "lib/jxl/coeff_order_fwd.h"
-#include "lib/jxl/color_encoding_internal.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/compressed_dc.h"
-#include "lib/jxl/dct_util.h"
-#include "lib/jxl/dec_modular.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/fields.h"
-#include "lib/jxl/frame_header.h"
-#include "lib/jxl/gaborish.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/image_ops.h"
-#include "lib/jxl/loop_filter.h"
-#include "lib/jxl/modular/encoding/context_predict.h"
-#include "lib/jxl/modular/encoding/encoding.h"
-#include "lib/jxl/modular/encoding/ma_common.h"
-#include "lib/jxl/modular/modular_image.h"
-#include "lib/jxl/modular/options.h"
-#include "lib/jxl/quant_weights.h"
-#include "lib/jxl/quantizer.h"
-#include "lib/jxl/splines.h"
-#include "lib/jxl/toc.h"
+#include "encoder/modular/encoding/encoding.h"
+#include "encoder/modular/encoding/ma_common.h"
+#include "encoder/modular/modular_image.h"
+#include "encoder/modular/options.h"
+#include "encoder/quant_weights.h"
+#include "encoder/quantizer.h"
+#include "encoder/toc.h"
 
 namespace jxl {
 namespace {
+
+struct ModularStreamId {
+  enum Kind {
+    kGlobalData,
+    kVarDCTDC,
+    kModularDC,
+    kACMetadata,
+    kQuantTable,
+    kModularAC
+  };
+  Kind kind;
+  size_t quant_table_id;
+  size_t group_id;  // DC or AC group id.
+  size_t pass_id;   // Only for kModularAC.
+  size_t ID(const FrameDimensions& frame_dim) const {
+    size_t id = 0;
+    switch (kind) {
+      case kGlobalData:
+        id = 0;
+        break;
+      case kVarDCTDC:
+        id = 1 + group_id;
+        break;
+      case kModularDC:
+        id = 1 + frame_dim.num_dc_groups + group_id;
+        break;
+      case kACMetadata:
+        id = 1 + 2 * frame_dim.num_dc_groups + group_id;
+        break;
+      case kQuantTable:
+        id = 1 + 3 * frame_dim.num_dc_groups + quant_table_id;
+        break;
+      case kModularAC:
+        id = 1 + 3 * frame_dim.num_dc_groups + DequantMatrices::kNum +
+             frame_dim.num_groups * pass_id + group_id;
+        break;
+    };
+    return id;
+  }
+  static ModularStreamId Global() {
+    return ModularStreamId{kGlobalData, 0, 0, 0};
+  }
+  static ModularStreamId VarDCTDC(size_t group_id) {
+    return ModularStreamId{kVarDCTDC, 0, group_id, 0};
+  }
+  static ModularStreamId ModularDC(size_t group_id) {
+    return ModularStreamId{kModularDC, 0, group_id, 0};
+  }
+  static ModularStreamId ACMetadata(size_t group_id) {
+    return ModularStreamId{kACMetadata, 0, group_id, 0};
+  }
+  static ModularStreamId QuantTable(size_t quant_table_id) {
+    JXL_ASSERT(quant_table_id < DequantMatrices::kNum);
+    return ModularStreamId{kQuantTable, quant_table_id, 0, 0};
+  }
+  static ModularStreamId ModularAC(size_t group_id, size_t pass_id) {
+    return ModularStreamId{kModularAC, 0, group_id, pass_id};
+  }
+  static size_t Num(const FrameDimensions& frame_dim, size_t passes) {
+    return ModularAC(0, passes).ID(frame_dim);
+  }
+  std::string DebugString() const;
+};
 
 Status MakeFrameHeader(const float distance,
                        FrameHeader* JXL_RESTRICT frame_header) {
@@ -235,37 +294,37 @@ struct EncCache {
 
 class ModularFrameEncoder {
  public:
-  ModularFrameEncoder(const FrameDimensions& frame_dim,
-                      const CompressParams& cparams)
-      : frame_dim_(frame_dim), cparams_(cparams) {
+  ModularFrameEncoder(const FrameDimensions& frame_dim)
+      : frame_dim_(frame_dim) {
     size_t num_streams = ModularStreamId::Num(frame_dim_, 1);
+    ModularOptions options;
     stream_images_.resize(num_streams);
-    cparams_.options.splitting_heuristics_node_threshold = 192;
+    options.splitting_heuristics_node_threshold = 192;
     // Set properties.
     std::vector<uint32_t> prop_order;
     prop_order = {0, 1, 15, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7, 8};
-    cparams_.options.splitting_heuristics_properties.assign(
-        prop_order.begin(), prop_order.begin() + 8);
-    cparams_.options.max_property_values = 32;
+    options.splitting_heuristics_properties.assign(prop_order.begin(),
+                                                   prop_order.begin() + 8);
+    options.max_property_values = 32;
     // Gradient in previous channels.
-    for (int i = 0; i < cparams_.options.max_properties; i++) {
-      cparams_.options.splitting_heuristics_properties.push_back(
-          kNumNonrefProperties + i * 4 + 3);
+    for (int i = 0; i < options.max_properties; i++) {
+      options.splitting_heuristics_properties.push_back(kNumNonrefProperties +
+                                                        i * 4 + 3);
     }
 
-    if (cparams_.options.predictor == static_cast<Predictor>(-1)) {
+    if (options.predictor == static_cast<Predictor>(-1)) {
       // no explicit predictor(s) given, set a good default
-      cparams_.options.predictor = Predictor::Gradient;
+      options.predictor = Predictor::Gradient;
     } else {
-      delta_pred_ = cparams_.options.predictor;
+      delta_pred_ = options.predictor;
     }
-    if (cparams_.options.predictor == Predictor::Weighted ||
-        cparams_.options.predictor == Predictor::Variable ||
-        cparams_.options.predictor == Predictor::Best) {
-      cparams_.options.predictor = Predictor::Zero;
+    if (options.predictor == Predictor::Weighted ||
+        options.predictor == Predictor::Variable ||
+        options.predictor == Predictor::Best) {
+      options.predictor = Predictor::Zero;
     }
     tree_splits_.push_back(0);
-    cparams_.options.fast_decode_multiplier = 1.0f;
+    options.fast_decode_multiplier = 1.0f;
     tree_splits_.push_back(ModularStreamId::VarDCTDC(0).ID(frame_dim_));
     tree_splits_.push_back(ModularStreamId::ModularDC(0).ID(frame_dim_));
     tree_splits_.push_back(ModularStreamId::ACMetadata(0).ID(frame_dim_));
@@ -274,15 +333,13 @@ class ModularFrameEncoder {
     ac_metadata_size.resize(frame_dim_.num_dc_groups);
     extra_dc_precision.resize(frame_dim_.num_dc_groups);
     tree_splits_.push_back(num_streams);
-    cparams_.options.max_chan_size = frame_dim_.group_dim;
-    cparams_.options.group_dim = frame_dim_.group_dim;
+    options.max_chan_size = frame_dim_.group_dim;
+    options.group_dim = frame_dim_.group_dim;
 
     // TODO(veluca): figure out how to use different predictor sets per channel.
-    stream_options_.resize(num_streams, cparams_.options);
+    stream_options_.resize(num_streams, options);
   }
   Status ComputeEncodingData(ThreadPool* pool) {
-    stream_options_[0] = cparams_.options;
-
     if (!tree_.empty()) return true;
 
     // Compute tree.
@@ -339,7 +396,7 @@ class ModularFrameEncoder {
           tokens_[stream_id].clear();
           JXL_CHECK(ModularGenericCompress(
               stream_images_[stream_id], stream_options_[stream_id],
-              /*writer=*/nullptr, nullptr, 0, stream_id,
+              /*writer=*/nullptr, stream_id,
               /*total_pixels=*/nullptr,
               /*tree=*/&tree_, /*header=*/&stream_headers_[stream_id],
               /*tokens=*/&tokens_[stream_id],
@@ -354,11 +411,11 @@ class ModularFrameEncoder {
     // If we are using brotli, or not using modular mode.
     if (tree_tokens_.empty() || tree_tokens_[0].empty()) {
       writer->Write(1, 0);
-      ReclaimAndCharge(writer, &allotment, 0, nullptr);
+      allotment.Reclaim(writer);
       return true;
     }
     writer->Write(1, 1);
-    ReclaimAndCharge(writer, &allotment, 0, nullptr);
+    allotment.Reclaim(writer);
 
     // Write tree
     HistogramParams params;
@@ -366,7 +423,7 @@ class ModularFrameEncoder {
     params.lz77_method = HistogramParams::LZ77Method::kNone;
     BuildAndEncodeHistograms(params, kNumTreeContexts, tree_tokens_, &code_,
                              &context_map_, writer);
-    WriteTokensTiny(tree_tokens_[0], code_, context_map_, writer);
+    WriteTokens(tree_tokens_[0], code_, context_map_, writer);
     params.image_widths = image_widths_;
     // Write histograms.
     BuildAndEncodeHistograms(params, (tree_.size() + 1) / 2, tokens_, &code_,
@@ -380,9 +437,8 @@ class ModularFrameEncoder {
     if (stream_images_[stream_id].channel.empty()) {
       return true;  // Image with no channels, header never gets decoded.
     }
-    JXL_RETURN_IF_ERROR(
-        Bundle::Write(stream_headers_[stream_id], writer, 0, nullptr));
-    WriteTokensTiny(tokens_[stream_id], code_, context_map_, writer);
+    JXL_RETURN_IF_ERROR(Bundle::Write(stream_headers_[stream_id], writer));
+    WriteTokens(tokens_[stream_id], code_, context_map_, writer);
     return true;
   }
   // Creates a modular image for a given DC group of VarDCT mode. `dc` is the
@@ -479,7 +535,6 @@ class ModularFrameEncoder {
   EntropyEncodingData code_;
   std::vector<uint8_t> context_map_;
   FrameDimensions frame_dim_;
-  CompressParams cparams_;
   std::vector<size_t> tree_splits_;
   std::vector<ModularMultiplierInfo> multiplier_info_;
   std::vector<std::vector<uint32_t>> gi_channel_;
@@ -489,15 +544,13 @@ class ModularFrameEncoder {
 
 }  // namespace
 
-Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
+Status EncodeFrame(const float distance, const CodecMetadata* metadata,
                    const Image3F& linear, ThreadPool* pool, BitWriter* writer) {
   PassesEncoderState enc_state;
   PassesSharedState& shared = enc_state.shared;
   shared.frame_header = FrameHeader(metadata);
-  JXL_RETURN_IF_ERROR(
-      MakeFrameHeader(cparams.butteraugli_distance, &shared.frame_header));
+  JXL_RETURN_IF_ERROR(MakeFrameHeader(distance, &shared.frame_header));
   shared.frame_dim = shared.frame_header.ToFrameDimensions();
-  shared.image_features.patches.SetPassesSharedState(&shared);
 
   const FrameDimensions& frame_dim = shared.frame_dim;
   const size_t num_groups = frame_dim.num_groups;
@@ -514,25 +567,19 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   shared.coeff_order_size = kCoeffOrderMaxSize;
   shared.coeff_orders.resize(kCoeffOrderMaxSize);
 
-  shared.quant_dc = ImageB(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
-
-  shared.dc_storage = Image3F(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
-  shared.dc = &shared.dc_storage;
-
-  enc_state.cparams = cparams;
   enc_state.passes.clear();
 
   std::unique_ptr<ModularFrameEncoder> modular_frame_encoder =
-      jxl::make_unique<ModularFrameEncoder>(frame_dim, cparams);
+      jxl::make_unique<ModularFrameEncoder>(frame_dim);
 
   float x_qm_scale_steps[2] = {1.25f, 9.0f};
   shared.frame_header.x_qm_scale = 2;
   for (float x_qm_scale_step : x_qm_scale_steps) {
-    if (cparams.butteraugli_distance > x_qm_scale_step) {
+    if (distance > x_qm_scale_step) {
       shared.frame_header.x_qm_scale++;
     }
   }
-  if (cparams.butteraugli_distance < 0.299f) {
+  if (distance < 0.299f) {
     // Favor chromacity preservation for making images appear more
     // faithful to original even with extreme (5-10x) zooming.
     shared.frame_header.x_qm_scale++;
@@ -560,11 +607,11 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   // output: Gaborished XYB, CfL, ACS, raw quant field, EPF control field.
 
   // Compute adaptive quantization field, relies on pre-gaborish values.
-  float butteraugli_distance_for_iqf = cparams.butteraugli_distance;
+  float butteraugli_distance_for_iqf = distance;
   if (!shared.frame_header.loop_filter.gab) {
     butteraugli_distance_for_iqf *= 0.73f;
   }
-  const float quant_dc = InitialQuantDC(cparams.butteraugli_distance);
+  const float quant_dc = InitialQuantDC(distance);
   enc_state.initial_quant_field =
       InitialQuantField(butteraugli_distance_for_iqf, opsin, shared.frame_dim,
                         pool, 1.0f, &enc_state.initial_quant_masking);
@@ -579,22 +626,22 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   // Flat AR field.
   FillPlane(static_cast<uint8_t>(4), &shared.epf_sharpness);
 
-  AcStrategyHeuristicsTiny acs_heuristics;
-  CfLHeuristicsTiny cfl_heuristics;
+  AcStrategyHeuristics acs_heuristics;
+  CfLHeuristics cfl_heuristics;
   cfl_heuristics.Init(opsin);
-  acs_heuristics.Init(opsin, &enc_state);
+  acs_heuristics.Init(opsin, distance, &enc_state);
 
   auto process_tile = [&](const uint32_t tid, const size_t thread) {
     size_t n_enc_tiles =
-        DivCeil(shared.frame_dim.xsize_blocks, kEncTileDimInBlocks);
+        DivCeil(shared.frame_dim.xsize_blocks, kColorTileDimInBlocks);
     size_t tx = tid % n_enc_tiles;
     size_t ty = tid / n_enc_tiles;
-    size_t by0 = ty * kEncTileDimInBlocks;
-    size_t by1 =
-        std::min((ty + 1) * kEncTileDimInBlocks, shared.frame_dim.ysize_blocks);
-    size_t bx0 = tx * kEncTileDimInBlocks;
-    size_t bx1 =
-        std::min((tx + 1) * kEncTileDimInBlocks, shared.frame_dim.xsize_blocks);
+    size_t by0 = ty * kColorTileDimInBlocks;
+    size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks,
+                          shared.frame_dim.ysize_blocks);
+    size_t bx0 = tx * kColorTileDimInBlocks;
+    size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks,
+                          shared.frame_dim.xsize_blocks);
     Rect r(bx0, by0, bx1 - bx0, by1 - by0);
 
     // Choose block sizes.
@@ -614,8 +661,8 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   };
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0,
-      DivCeil(shared.frame_dim.xsize_blocks, kEncTileDimInBlocks) *
-          DivCeil(shared.frame_dim.ysize_blocks, kEncTileDimInBlocks),
+      DivCeil(shared.frame_dim.xsize_blocks, kColorTileDimInBlocks) *
+          DivCeil(shared.frame_dim.ysize_blocks, kColorTileDimInBlocks),
       [&](const size_t num_threads) {
         cfl_heuristics.PrepareForThreads(num_threads);
         return true;
@@ -639,7 +686,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0, shared.frame_dim.num_groups, ThreadPool::NoInit,
       [&](size_t group_idx, size_t _) {
-        ComputeCoefficientsTiny(group_idx, &enc_state, opsin, &dc);
+        ComputeCoefficients(group_idx, &enc_state, opsin, &dc);
       },
       "Compute coeffs"));
 
@@ -661,15 +708,13 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     pass.ac_tokens.resize(shared.frame_dim.num_groups);
   }
 
-  auto used_orders_info =
-      ComputeUsedOrdersTiny(cparams.speed_tier, enc_state.shared.ac_strategy,
-                            Rect(enc_state.shared.raw_quant_field));
+  auto used_orders_info = ComputeUsedOrders(
+      enc_state.shared.ac_strategy, Rect(enc_state.shared.raw_quant_field));
   enc_state.used_orders.clear();
   enc_state.used_orders.resize(1, used_orders_info.second);
-  ComputeCoeffOrderTiny(cparams.speed_tier, *enc_state.coeffs[0],
-                        enc_state.shared.ac_strategy, shared.frame_dim,
-                        enc_state.used_orders[0], used_orders_info.first,
-                        &enc_state.shared.coeff_orders[0]);
+  ComputeCoeffOrder(*enc_state.coeffs[0], enc_state.shared.ac_strategy,
+                    shared.frame_dim, enc_state.used_orders[0],
+                    used_orders_info.first, &enc_state.shared.coeff_orders[0]);
   shared.num_histograms = 1;
 
   std::vector<EncCache> group_caches;
@@ -704,7 +749,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   // needs to happen *AFTER* VarDCT-ComputeEncodingData.
   JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(pool));
 
-  JXL_RETURN_IF_ERROR(Bundle::Write(shared.frame_header, writer, 0, nullptr));
+  JXL_RETURN_IF_ERROR(Bundle::Write(shared.frame_header, writer));
 
   // DC global info + DC groups + AC global info + AC groups
   std::vector<BitWriter> group_codes(
@@ -719,13 +764,12 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     BitWriter* writer = get_output(0);
     BitWriter::Allotment allotment(writer, 2);
     writer->Write(1, 1);  // default quant dc
-    ReclaimAndCharge(writer, &allotment, kLayerQuant, nullptr);
+    allotment.Reclaim(writer);
   }
   {
     BitWriter* writer = get_output(0);
     // Encode quantizer DC and global scale.
-    JXL_RETURN_IF_ERROR(
-        enc_state.shared.quantizer.Encode(writer, kLayerQuant, nullptr));
+    JXL_RETURN_IF_ERROR(enc_state.shared.quantizer.Encode(writer));
     writer->Write(1, 1);  // default BlockCtxMap
     ColorCorrelationMapEncodeDC(&enc_state.shared.cmap, writer);
   }
@@ -739,7 +783,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     {
       BitWriter::Allotment allotment(output, 2);
       output->Write(2, modular_frame_encoder->extra_dc_precision[group_index]);
-      ReclaimAndCharge(output, &allotment, 0, nullptr);
+      allotment.Reclaim(output);
       JXL_CHECK(modular_frame_encoder->EncodeStream(
           output, ModularStreamId::VarDCTDC(group_index)));
     }
@@ -750,7 +794,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
         BitWriter::Allotment allotment(output, nb_bits);
         output->Write(nb_bits,
                       modular_frame_encoder->ac_metadata_size[group_index] - 1);
-        ReclaimAndCharge(output, &allotment, 0, nullptr);
+        allotment.Reclaim(output);
       }
       JXL_CHECK(modular_frame_encoder->EncodeStream(
           output, ModularStreamId::ACMetadata(group_index)));
@@ -769,7 +813,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
       if (num_histo_bits != 0) {
         writer->Write(num_histo_bits, enc_state.shared.num_histograms - 1);
       }
-      ReclaimAndCharge(writer, &allotment, 0, nullptr);
+      allotment.Reclaim(writer);
     }
 
     // Encode coefficient orders.
@@ -778,9 +822,9 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
         U32Coder::CanEncode(kOrderEnc, enc_state.used_orders[0], &order_bits));
     BitWriter::Allotment allotment(writer, order_bits);
     JXL_CHECK(U32Coder::Write(kOrderEnc, enc_state.used_orders[0], writer));
-    ReclaimAndCharge(writer, &allotment, 0, nullptr);
+    allotment.Reclaim(writer);
     EncodeCoeffOrders(enc_state.used_orders[0],
-                      &enc_state.shared.coeff_orders[0], writer, 0, nullptr);
+                      &enc_state.shared.coeff_orders[0], writer);
 
     // Encode histograms.
     HistogramParams hist_params;
@@ -812,10 +856,10 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   for (BitWriter& bw : group_codes) {
     BitWriter::Allotment allotment(&bw, 8);
     bw.ZeroPadToByte();  // end of group.
-    ReclaimAndCharge(&bw, &allotment, 0, nullptr);
+    allotment.Reclaim(&bw);
   }
 
-  JXL_RETURN_IF_ERROR(WriteGroupOffsets(group_codes, nullptr, writer, nullptr));
+  JXL_RETURN_IF_ERROR(WriteGroupOffsets(group_codes, nullptr, writer));
   writer->AppendByteAligned(group_codes);
 
   return true;

@@ -15,11 +15,11 @@
 #include <utility>
 #include <vector>
 
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/padded_bytes.h"
-#include "lib/jxl/base/span.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/common.h"
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/padded_bytes.h"
+#include "encoder/base/span.h"
+#include "encoder/base/status.h"
+#include "encoder/common.h"
 
 namespace jxl {
 
@@ -85,11 +85,14 @@ struct BitWriter {
       return histogram_bits_;
     }
 
-    // Do not call directly - use ::ReclaimAndCharge instead, which ensures
-    // the bits are charged to a layer.
     void PrivateReclaim(BitWriter* JXL_RESTRICT writer,
                         size_t* JXL_RESTRICT used_bits,
                         size_t* JXL_RESTRICT unused_bits);
+
+    void Reclaim(BitWriter* writer) {
+      size_t used, unused;
+      PrivateReclaim(writer, &used, &unused);
+    }
 
    private:
     size_t prev_bits_written_;

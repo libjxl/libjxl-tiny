@@ -6,7 +6,7 @@
 
 #include "encoder/read_pfm.h"
 
-#include "tools/file_io.h"
+#include "encoder/file_io.h"
 
 namespace jxl {
 

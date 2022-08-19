@@ -8,8 +8,8 @@
 
 #include <string.h>  // memcpy
 
-#include "lib/jxl/base/byte_order.h"
-#include "lib/jxl/dec_bit_reader.h"
+#include "encoder/base/byte_order.h"
+#include "encoder/dec_bit_reader.h"
 
 namespace jxl {
 

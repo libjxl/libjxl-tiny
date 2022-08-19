@@ -18,22 +18,20 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "lib/jxl/ac_context.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/base/bits.h"
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/profiler.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/coeff_order.h"
-#include "lib/jxl/coeff_order_fwd.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dec_ans.h"
-#include "lib/jxl/dec_bit_reader.h"
-#include "lib/jxl/dec_context_map.h"
-#include "lib/jxl/entropy_coder.h"
-#include "lib/jxl/epf.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/image_ops.h"
+#include "encoder/ac_context.h"
+#include "encoder/ac_strategy.h"
+#include "encoder/base/bits.h"
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/profiler.h"
+#include "encoder/base/status.h"
+#include "encoder/coeff_order.h"
+#include "encoder/coeff_order_fwd.h"
+#include "encoder/common.h"
+#include "encoder/dec_bit_reader.h"
+#include "encoder/dec_context_map.h"
+#include "encoder/entropy_coder.h"
+#include "encoder/image.h"
+#include "encoder/image_ops.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -172,8 +170,7 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
   size_t offset[3] = {};
   const size_t nzeros_stride = tmp_num_nzeroes->PixelsPerRow();
   for (size_t by = 0; by < ysize_blocks; ++by) {
-    size_t sby[3] = {by >> cs.VShift(0), by >> cs.VShift(1),
-                     by >> cs.VShift(2)};
+    size_t sby[3] = {by, by, by};
     int32_t* JXL_RESTRICT row_nzeros[3] = {
         tmp_num_nzeroes->PlaneRow(0, sby[0]),
         tmp_num_nzeroes->PlaneRow(1, sby[1]),
@@ -188,8 +185,7 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
     for (size_t bx = 0; bx < xsize_blocks; ++bx) {
       AcStrategy acs = acs_row[bx];
       if (!acs.IsFirstBlock()) continue;
-      size_t sbx[3] = {bx >> cs.HShift(0), bx >> cs.HShift(1),
-                       bx >> cs.HShift(2)};
+      size_t sbx[3] = {bx, bx, bx};
       size_t cx = acs.covered_blocks_x();
       size_t cy = acs.covered_blocks_y();
       const size_t covered_blocks = cx * cy;  // = #LLF coefficients
@@ -200,8 +196,6 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
       CoefficientLayout(&cy, &cx);  // swap cx/cy to canonical order
 
       for (int c : {1, 0, 2}) {
-        if (sbx[c] << cs.HShift(c) != bx) continue;
-        if (sby[c] << cs.VShift(c) != by) continue;
         const int32_t* JXL_RESTRICT block = ac_rows[c] + offset[c];
 
         int32_t nzeros =

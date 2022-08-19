@@ -19,7 +19,6 @@
 #if JPEGXL_ENABLE_JPEG
 #include "lib/extras/enc/jpg.h"
 #endif
-#include "encoder/enc_file.h"
 #include "lib/extras/packed_image_convert.h"
 #include "lib/extras/time.h"
 #include "lib/jxl/aux_out.h"
@@ -53,7 +52,6 @@ struct JxlArgs {
   double xmul;
 
   bool use_ac_strategy;
-  bool simple;
 
   std::string debug_image_dir;
 };
@@ -72,8 +70,6 @@ Status AddCommandLineOptionsJxlCodec(BenchmarkArgs* args) {
       "If not empty, saves debug images for each "
       "input image and each codec that provides it to this directory.");
 
-  args->AddFlag(&jxlargs->simple, "simple", "If true, uses simple interface.",
-                false);
   return true;
 }
 
@@ -205,16 +201,11 @@ class JxlCodec : public ImageCodec {
     }
 
     const double start = Now();
-    if (jxlargs->simple) {
-      JXL_RETURN_IF_ERROR(EncodeFile(
-          io->Main().color(), cparams_.butteraugli_distance, compressed));
-    } else {
-      PaddedBytes compressed_padded;
-      JXL_RETURN_IF_ERROR(EncodeFile(cparams_, io, &compressed_padded,
-                                     GetJxlCms(), &cinfo_, pool));
-      compressed->assign(compressed_padded.begin(), compressed_padded.end());
-    }
+    PaddedBytes compressed_padded;
+    JXL_RETURN_IF_ERROR(EncodeFile(cparams_, io, &compressed_padded,
+                                   GetJxlCms(), &cinfo_, pool));
     const double end = Now();
+    compressed->assign(compressed_padded.begin(), compressed_padded.end());
     speed_stats->NotifyElapsed(end - start);
     return true;
   }

@@ -15,19 +15,18 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/ac_strategy.h"
+#include "encoder/base/bits.h"
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/profiler.h"
+#include "encoder/common.h"
+#include "encoder/dct_util.h"
+#include "encoder/dec_transforms-inl.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_transforms-inl.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/base/bits.h"
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/profiler.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dct_util.h"
-#include "lib/jxl/dec_transforms-inl.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/quantizer-inl.h"
-#include "lib/jxl/quantizer.h"
+#include "encoder/image.h"
+#include "encoder/quantizer-inl.h"
+#include "encoder/quantizer.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -41,10 +40,10 @@ using hwy::HWY_NAMESPACE::MaskFromVec;
 using hwy::HWY_NAMESPACE::Round;
 
 // NOTE: caller takes care of extracting quant from rect of RawQuantField.
-void QuantizeBlockACTiny(const Quantizer& quantizer, size_t c, int32_t quant,
-                         float qm_multiplier, size_t quant_kind, size_t xsize,
-                         size_t ysize, const float* JXL_RESTRICT block_in,
-                         int32_t* JXL_RESTRICT block_out) {
+void QuantizeBlockAC(const Quantizer& quantizer, size_t c, int32_t quant,
+                     float qm_multiplier, size_t quant_kind, size_t xsize,
+                     size_t ysize, const float* JXL_RESTRICT block_in,
+                     int32_t* JXL_RESTRICT block_out) {
   PROFILER_FUNC;
   const float* JXL_RESTRICT qm = quantizer.InvDequantMatrix(quant_kind, c);
   const float qac = quantizer.Scale() * quant;
@@ -103,14 +102,13 @@ void QuantizeBlockACTiny(const Quantizer& quantizer, size_t c, int32_t quant,
 }
 
 // NOTE: caller takes care of extracting quant from rect of RawQuantField.
-void QuantizeRoundtripYBlockACTiny(const Quantizer& quantizer, int32_t quant,
-                                   size_t quant_kind, size_t xsize,
-                                   size_t ysize,
-                                   const float* JXL_RESTRICT biases,
-                                   float* JXL_RESTRICT inout,
-                                   int32_t* JXL_RESTRICT quantized) {
-  QuantizeBlockACTiny(quantizer, 1, quant, 1.0f, quant_kind, xsize, ysize,
-                      inout, quantized);
+void QuantizeRoundtripYBlockAC(const Quantizer& quantizer, int32_t quant,
+                               size_t quant_kind, size_t xsize, size_t ysize,
+                               const float* JXL_RESTRICT biases,
+                               float* JXL_RESTRICT inout,
+                               int32_t* JXL_RESTRICT quantized) {
+  QuantizeBlockAC(quantizer, 1, quant, 1.0f, quant_kind, xsize, ysize, inout,
+                  quantized);
 
   PROFILER_ZONE("enc quant adjust bias");
   const float* JXL_RESTRICT dequant_matrix =
@@ -127,8 +125,8 @@ void QuantizeRoundtripYBlockACTiny(const Quantizer& quantizer, int32_t quant,
   }
 }
 
-void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
-                             const Image3F& opsin, Image3F* dc) {
+void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
+                         const Image3F& opsin, Image3F* dc) {
   PROFILER_FUNC;
   const Rect block_group_rect = enc_state->shared.BlockGroupRect(group_idx);
   const Rect group_rect = enc_state->shared.GroupRect(group_idx);
@@ -207,20 +205,19 @@ void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
 
           // DCT Y channel, roundtrip-quantize it and set DC.
           const int32_t quant_ac = row_quant_ac[bx];
-          TransformFromPixelsTiny(acs.Strategy(),
-                                  opsin_rows[1] + bx * kBlockDim, opsin_stride,
-                                  coeffs_in + size, scratch_space);
-          DCFromLowestFrequenciesTiny(acs.Strategy(), coeffs_in + size,
-                                      dc_rows[1] + bx, dc_stride);
-          QuantizeRoundtripYBlockACTiny(
+          TransformFromPixels(acs.Strategy(), opsin_rows[1] + bx * kBlockDim,
+                              opsin_stride, coeffs_in + size, scratch_space);
+          DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size,
+                                  dc_rows[1] + bx, dc_stride);
+          QuantizeRoundtripYBlockAC(
               enc_state->shared.quantizer, quant_ac, acs.RawStrategy(), xblocks,
               yblocks, kDefaultQuantBias, coeffs_in + size, quantized + size);
 
           // DCT X and B channels
           for (size_t c : {0, 2}) {
-            TransformFromPixelsTiny(
-                acs.Strategy(), opsin_rows[c] + bx * kBlockDim, opsin_stride,
-                coeffs_in + c * size, scratch_space);
+            TransformFromPixels(acs.Strategy(), opsin_rows[c] + bx * kBlockDim,
+                                opsin_stride, coeffs_in + c * size,
+                                scratch_space);
           }
 
           // Unapply color correlation
@@ -236,13 +233,13 @@ void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
 
           // Quantize X and B channels and set DC.
           for (size_t c : {0, 2}) {
-            QuantizeBlockACTiny(enc_state->shared.quantizer, c, quant_ac,
-                                c == 0 ? enc_state->x_qm_multiplier
-                                       : enc_state->b_qm_multiplier,
-                                acs.RawStrategy(), xblocks, yblocks,
-                                coeffs_in + c * size, quantized + c * size);
-            DCFromLowestFrequenciesTiny(acs.Strategy(), coeffs_in + c * size,
-                                        dc_rows[c] + bx, dc_stride);
+            QuantizeBlockAC(enc_state->shared.quantizer, c, quant_ac,
+                            c == 0 ? enc_state->x_qm_multiplier
+                                   : enc_state->b_qm_multiplier,
+                            acs.RawStrategy(), xblocks, yblocks,
+                            coeffs_in + c * size, quantized + c * size);
+            DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size,
+                                    dc_rows[c] + bx, dc_stride);
           }
           for (size_t c = 0; c < 3; c++) {
             memcpy(coeffs[0][c] + offset, quantized + c * size,
@@ -262,11 +259,11 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace jxl {
-HWY_EXPORT(ComputeCoefficientsTiny);
-void ComputeCoefficientsTiny(size_t group_idx, PassesEncoderState* enc_state,
-                             const Image3F& opsin, Image3F* dc) {
-  return HWY_DYNAMIC_DISPATCH(ComputeCoefficientsTiny)(group_idx, enc_state,
-                                                       opsin, dc);
+HWY_EXPORT(ComputeCoefficients);
+void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
+                         const Image3F& opsin, Image3F* dc) {
+  return HWY_DYNAMIC_DISPATCH(ComputeCoefficients)(group_idx, enc_state, opsin,
+                                                   dc);
 }
 
 Status EncodeGroupTokenizedCoefficients(size_t group_idx, size_t pass_idx,
@@ -282,11 +279,11 @@ Status EncodeGroupTokenizedCoefficients(size_t group_idx, size_t pass_idx,
   if (histo_selector_bits != 0) {
     BitWriter::Allotment allotment(writer, histo_selector_bits);
     writer->Write(histo_selector_bits, histogram_idx);
-    ReclaimAndCharge(writer, &allotment, 0, nullptr);
+    allotment.Reclaim(writer);
   }
-  WriteTokensTiny(enc_state.passes[pass_idx].ac_tokens[group_idx],
-                  enc_state.passes[pass_idx].codes,
-                  enc_state.passes[pass_idx].context_map, writer);
+  WriteTokens(enc_state.passes[pass_idx].ac_tokens[group_idx],
+              enc_state.passes[pass_idx].codes,
+              enc_state.passes[pass_idx].context_map, writer);
 
   return true;
 }

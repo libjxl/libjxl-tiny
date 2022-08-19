@@ -20,28 +20,23 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/ac_strategy.h"
+#include "encoder/base/compiler_specific.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/base/profiler.h"
+#include "encoder/base/status.h"
+#include "encoder/coeff_order_fwd.h"
+#include "encoder/color_encoding_internal.h"
+#include "encoder/color_management.h"
+#include "encoder/common.h"
+#include "encoder/convolve.h"
 #include "encoder/enc_group.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/base/compiler_specific.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/profiler.h"
-#include "lib/jxl/base/status.h"
-#include "lib/jxl/butteraugli/butteraugli.h"
-#include "lib/jxl/coeff_order_fwd.h"
-#include "lib/jxl/color_encoding_internal.h"
-#include "lib/jxl/color_management.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/convolve.h"
-#include "lib/jxl/dec_cache.h"
-#include "lib/jxl/dec_group.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/epf.h"
-#include "lib/jxl/fast_math-inl.h"
-#include "lib/jxl/gauss_blur.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/image_ops.h"
-#include "lib/jxl/opsin_params.h"
-#include "lib/jxl/quant_weights.h"
+#include "encoder/fast_math-inl.h"
+#include "encoder/gauss_blur.h"
+#include "encoder/image.h"
+#include "encoder/image_ops.h"
+#include "encoder/opsin_params.h"
+#include "encoder/quant_weights.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -61,14 +56,14 @@ using hwy::HWY_NAMESPACE::ZeroIfNegative;
 
 // Hack for mask estimation. Eventually replace this code with butteraugli's
 // masking.
-float ComputeMaskForAcStrategyUseTiny(const float out_val) {
+float ComputeMaskForAcStrategyUse(const float out_val) {
   const float kMul = 1.0f;
   const float kOffset = 0.001f;
   return kMul / (out_val + kOffset);
 }
 
 template <class D, class V>
-V ComputeMaskTiny(const D d, const V out_val) {
+V ComputeMask(const D d, const V out_val) {
   const auto kBase = Set(d, -0.74174993f);
   const auto kMul4 = Set(d, 3.2353257320940401f);
   const auto kMul2 = Set(d, 12.906028311180409f);
@@ -101,7 +96,7 @@ static const float kSGRetMul = kSGmul2 * 18.6580932135f * kLog2;
 static const float kSGVOffset = 7.14672470003f;
 
 template <bool invert, typename D, typename V>
-V RatioOfDerivativesOfCubicRootToSimpleGammaTiny(const D d, V v) {
+V RatioOfDerivativesOfCubicRootToSimpleGamma(const D d, V v) {
   // The opsin space in jxl is the cubic root of photons, i.e., v * v * v
   // is related to the number of photons.
   //
@@ -122,11 +117,11 @@ V RatioOfDerivativesOfCubicRootToSimpleGammaTiny(const D d, V v) {
 }
 
 template <bool invert = false>
-static float RatioOfDerivativesOfCubicRootToSimpleGammaTiny(float v) {
+static float RatioOfDerivativesOfCubicRootToSimpleGamma(float v) {
   using DScalar = HWY_CAPPED(float, 1);
   auto vscalar = Load(DScalar(), &v);
-  return GetLane(RatioOfDerivativesOfCubicRootToSimpleGammaTiny<invert>(
-      DScalar(), vscalar));
+  return GetLane(
+      RatioOfDerivativesOfCubicRootToSimpleGamma<invert>(DScalar(), vscalar));
 }
 
 // TODO(veluca): this function computes an approximation of the derivative of
@@ -153,9 +148,8 @@ V SimpleGamma(const D d, V v) {
 */
 
 template <class D, class V>
-V GammaModulationTiny(const D d, const size_t x, const size_t y,
-                      const ImageF& xyb_x, const ImageF& xyb_y,
-                      const V out_val) {
+V GammaModulation(const D d, const size_t x, const size_t y,
+                  const ImageF& xyb_x, const ImageF& xyb_y, const V out_val) {
   const float kBias = 0.16f;
   JXL_DASSERT(kBias > kOpsinAbsorbanceBias[0]);
   JXL_DASSERT(kBias > kOpsinAbsorbanceBias[1]);
@@ -172,9 +166,9 @@ V GammaModulationTiny(const D d, const size_t x, const size_t y,
       const auto r = Sub(iny, inx);
       const auto g = Add(iny, inx);
       const auto ratio_r =
-          RatioOfDerivativesOfCubicRootToSimpleGammaTiny</*invert=*/true>(d, r);
+          RatioOfDerivativesOfCubicRootToSimpleGamma</*invert=*/true>(d, r);
       const auto ratio_g =
-          RatioOfDerivativesOfCubicRootToSimpleGammaTiny</*invert=*/true>(d, g);
+          RatioOfDerivativesOfCubicRootToSimpleGamma</*invert=*/true>(d, g);
       const auto avg_ratio = Mul(half, Add(ratio_r, ratio_g));
 
       overall_ratio = Add(overall_ratio, avg_ratio);
@@ -189,10 +183,9 @@ V GammaModulationTiny(const D d, const size_t x, const size_t y,
 }
 
 template <class D, class V>
-V ColorModulationTiny(const D d, const size_t x, const size_t y,
-                      const ImageF& xyb_x, const ImageF& xyb_y,
-                      const ImageF& xyb_b, const double butteraugli_target,
-                      V out_val) {
+V ColorModulation(const D d, const size_t x, const size_t y,
+                  const ImageF& xyb_x, const ImageF& xyb_y, const ImageF& xyb_b,
+                  const double butteraugli_target, V out_val) {
   static const float kStrengthMul = 2.177823400325309;
   static const float kRedRampStart = 0.0073200141118951231;
   static const float kRedRampLength = 0.019421555948474039;
@@ -254,8 +247,8 @@ V ColorModulationTiny(const D d, const size_t x, const size_t y,
 
 // Change precision in 8x8 blocks that have high frequency content.
 template <class D, class V>
-V HfModulationTiny(const D d, const size_t x, const size_t y, const ImageF& xyb,
-                   const V out_val) {
+V HfModulation(const D d, const size_t x, const size_t y, const ImageF& xyb,
+               const V out_val) {
   // Zero out the invalid differences for the rightmost value per row.
   const Rebind<uint32_t, D> du;
   HWY_ALIGN constexpr uint32_t kMaskRight[kBlockDim] = {~0u, ~0u, ~0u, ~0u,
@@ -292,10 +285,9 @@ V HfModulationTiny(const D d, const size_t x, const size_t y, const ImageF& xyb,
   return MulAdd(sum, Set(d, -2.0052193233688884f / 112), out_val);
 }
 
-void PerBlockModulationsTiny(const float butteraugli_target,
-                             const ImageF& xyb_x, const ImageF& xyb_y,
-                             const ImageF& xyb_b, const float scale,
-                             const Rect& rect, ImageF* out) {
+void PerBlockModulations(const float butteraugli_target, const ImageF& xyb_x,
+                         const ImageF& xyb_y, const ImageF& xyb_b,
+                         const float scale, const Rect& rect, ImageF* out) {
   JXL_ASSERT(SameSize(xyb_x, xyb_y));
   JXL_ASSERT(DivCeil(xyb_x.xsize(), kBlockDim) == out->xsize());
   JXL_ASSERT(DivCeil(xyb_x.ysize(), kBlockDim) == out->ysize());
@@ -320,11 +312,11 @@ void PerBlockModulationsTiny(const float butteraugli_target,
     for (size_t ix = rect.x0(); ix < rect.x0() + rect.xsize(); ix++) {
       size_t x = ix * 8;
       auto out_val = Set(df, row_out[ix]);
-      out_val = ComputeMaskTiny(df, out_val);
-      out_val = HfModulationTiny(df, x, y, xyb_y, out_val);
-      out_val = ColorModulationTiny(df, x, y, xyb_x, xyb_y, xyb_b,
-                                    butteraugli_target, out_val);
-      out_val = GammaModulationTiny(df, x, y, xyb_x, xyb_y, out_val);
+      out_val = ComputeMask(df, out_val);
+      out_val = HfModulation(df, x, y, xyb_y, out_val);
+      out_val = ColorModulation(df, x, y, xyb_x, xyb_y, xyb_b,
+                                butteraugli_target, out_val);
+      out_val = GammaModulation(df, x, y, xyb_x, xyb_y, out_val);
       // We want multiplicative quantization field, so everything
       // until this point has been modulating the exponent.
       row_out[ix] = FastPow2f(GetLane(out_val) * 1.442695041f) * mul + add;
@@ -333,7 +325,7 @@ void PerBlockModulationsTiny(const float butteraugli_target,
 }
 
 template <typename D, typename V>
-V MaskingSqrtTiny(const D d, V v) {
+V MaskingSqrt(const D d, V v) {
   static const float kLogOffset = 26.481471032459346f;
   static const float kMul = 211.50759899638012f;
   const auto mul_v = Set(d, kMul * 1e8);
@@ -341,14 +333,14 @@ V MaskingSqrtTiny(const D d, V v) {
   return Mul(Set(d, 0.25f), Sqrt(MulAdd(v, Sqrt(mul_v), offset_v)));
 }
 
-float MaskingSqrtTiny(const float v) {
+float MaskingSqrt(const float v) {
   using DScalar = HWY_CAPPED(float, 1);
   auto vscalar = Load(DScalar(), &v);
-  return GetLane(MaskingSqrtTiny(DScalar(), vscalar));
+  return GetLane(MaskingSqrt(DScalar(), vscalar));
 }
 
-void StoreMin4Tiny(const float v, float& min0, float& min1, float& min2,
-                   float& min3) {
+void StoreMin4(const float v, float& min0, float& min1, float& min2,
+               float& min3) {
   if (v < min3) {
     if (v < min0) {
       min3 = min2;
@@ -371,8 +363,8 @@ void StoreMin4Tiny(const float v, float& min0, float& min1, float& min2,
 // Look for smooth areas near the area of degradation.
 // If the areas are generally smooth, don't do masking.
 // Output is downsampled 2x.
-void FuzzyErosionTiny(const Rect& from_rect, const ImageF& from,
-                      const Rect& to_rect, ImageF* to) {
+void FuzzyErosion(const Rect& from_rect, const ImageF& from,
+                  const Rect& to_rect, ImageF* to) {
   const size_t xsize = from.xsize();
   const size_t ysize = from.ysize();
   constexpr int kStep = 1;
@@ -403,11 +395,11 @@ void FuzzyErosionTiny(const Rect& from_rect, const ImageF& from,
       if (min1 > min3) std::swap(min1, min3);
       if (min2 > min3) std::swap(min2, min3);
       // The remaining five values of a 3x3 neighbourhood.
-      StoreMin4Tiny(rowt[x], min0, min1, min2, min3);
-      StoreMin4Tiny(rowt[xp1], min0, min1, min2, min3);
-      StoreMin4Tiny(rowb[xm1], min0, min1, min2, min3);
-      StoreMin4Tiny(rowb[x], min0, min1, min2, min3);
-      StoreMin4Tiny(rowb[xp1], min0, min1, min2, min3);
+      StoreMin4(rowt[x], min0, min1, min2, min3);
+      StoreMin4(rowt[xp1], min0, min1, min2, min3);
+      StoreMin4(rowb[xm1], min0, min1, min2, min3);
+      StoreMin4(rowb[x], min0, min1, min2, min3);
+      StoreMin4(rowb[xp1], min0, min1, min2, min3);
       static const float kMulC = 0.05f;
       static const float kMul0 = 0.05f;
       static const float kMul1 = 0.05f;
@@ -424,7 +416,7 @@ void FuzzyErosionTiny(const Rect& from_rect, const ImageF& from,
   }
 }
 
-struct AdaptiveQuantizationImplTiny {
+struct AdaptiveQuantizationImpl {
   void Init(const Image3F& xyb) {
     JXL_DASSERT(xyb.xsize() % kBlockDim == 0);
     JXL_DASSERT(xyb.ysize() % kBlockDim == 0);
@@ -433,10 +425,10 @@ struct AdaptiveQuantizationImplTiny {
     aq_map = ImageF(xsize / kBlockDim, ysize / kBlockDim);
   }
   void PrepareBuffers(size_t num_threads) {
-    diff_buffer = ImageF(kEncTileDim + 8, num_threads);
+    diff_buffer = ImageF(kColorTileDim + 8, num_threads);
     for (size_t i = pre_erosion.size(); i < num_threads; i++) {
-      pre_erosion.emplace_back(kEncTileDimInBlocks * 2 + 2,
-                               kEncTileDimInBlocks * 2 + 2);
+      pre_erosion.emplace_back(kColorTileDimInBlocks * 2 + 2,
+                               kColorTileDimInBlocks * 2 + 2);
     }
   }
 
@@ -487,7 +479,7 @@ struct AdaptiveQuantizationImplTiny {
         const size_t x1 = x > 0 ? x - 1 : x;
         const float base =
             0.25f * (row_in2[x] + row_in1[x] + row_in[x1] + row_in[x2]);
-        const float gammac = RatioOfDerivativesOfCubicRootToSimpleGammaTiny(
+        const float gammac = RatioOfDerivativesOfCubicRootToSimpleGamma(
             row_in[x] + match_gamma_offset);
         float diff = gammac * (row_in[x] - base);
         diff *= diff;
@@ -496,7 +488,7 @@ struct AdaptiveQuantizationImplTiny {
         float diff_x = gammac * (row_x_in[x] - base_x);
         diff_x *= diff_x;
         diff += kXMul * diff_x;
-        diff = MaskingSqrtTiny(diff);
+        diff = MaskingSqrt(diff);
         if ((y % 4) != 0) {
           row_out[x - x0] += diff;
         } else {
@@ -521,7 +513,7 @@ struct AdaptiveQuantizationImplTiny {
         const auto in_b = LoadU(df, row_in1 + x);
         auto base = Mul(quarter, Add(Add(in_r, in_l), Add(in_t, in_b)));
         auto gammacv =
-            RatioOfDerivativesOfCubicRootToSimpleGammaTiny</*invert=*/false>(
+            RatioOfDerivativesOfCubicRootToSimpleGamma</*invert=*/false>(
                 df, Add(in, match_gamma_offset_v));
         auto diff = Mul(gammacv, Sub(in, base));
         diff = Mul(diff, diff);
@@ -536,7 +528,7 @@ struct AdaptiveQuantizationImplTiny {
         auto diff_x = Mul(gammacv, Sub(in_x, base_x));
         diff_x = Mul(diff_x, diff_x);
         diff = MulAdd(kXMulv, diff_x, diff);
-        diff = MaskingSqrtTiny(df, diff);
+        diff = MaskingSqrt(df, diff);
         if ((y & 3) != 0) {
           diff = Add(diff, LoadU(df, row_out + x - x0));
         }
@@ -557,51 +549,50 @@ struct AdaptiveQuantizationImplTiny {
     }
     Rect from_rect(x0 % 8 == 0 ? 0 : 1, y_start % 8 == 0 ? 0 : 1,
                    rect.xsize() * 2, rect.ysize() * 2);
-    FuzzyErosionTiny(from_rect, pre_erosion[thread], rect, &aq_map);
+    FuzzyErosion(from_rect, pre_erosion[thread], rect, &aq_map);
     for (size_t y = 0; y < rect.ysize(); ++y) {
       const float* aq_map_row = rect.ConstRow(aq_map, y);
       float* mask_row = rect.Row(mask, y);
       for (size_t x = 0; x < rect.xsize(); ++x) {
-        mask_row[x] = ComputeMaskForAcStrategyUseTiny(aq_map_row[x]);
+        mask_row[x] = ComputeMaskForAcStrategyUse(aq_map_row[x]);
       }
     }
-    PerBlockModulationsTiny(butteraugli_target, xyb.Plane(0), xyb.Plane(1),
-                            xyb.Plane(2), scale, rect, &aq_map);
+    PerBlockModulations(butteraugli_target, xyb.Plane(0), xyb.Plane(1),
+                        xyb.Plane(2), scale, rect, &aq_map);
   }
   std::vector<ImageF> pre_erosion;
   ImageF aq_map;
   ImageF diff_buffer;
 };
 
-ImageF AdaptiveQuantizationMapTiny(const float butteraugli_target,
-                                   const Image3F& xyb,
-                                   const FrameDimensions& frame_dim,
-                                   float scale, ThreadPool* pool,
-                                   ImageF* mask) {
+ImageF AdaptiveQuantizationMap(const float butteraugli_target,
+                               const Image3F& xyb,
+                               const FrameDimensions& frame_dim, float scale,
+                               ThreadPool* pool, ImageF* mask) {
   PROFILER_ZONE("aq AdaptiveQuantMap");
 
-  AdaptiveQuantizationImplTiny impl;
+  AdaptiveQuantizationImpl impl;
   impl.Init(xyb);
   *mask = ImageF(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
   JXL_CHECK(RunOnPool(
       pool, 0,
-      DivCeil(frame_dim.xsize_blocks, kEncTileDimInBlocks) *
-          DivCeil(frame_dim.ysize_blocks, kEncTileDimInBlocks),
+      DivCeil(frame_dim.xsize_blocks, kColorTileDimInBlocks) *
+          DivCeil(frame_dim.ysize_blocks, kColorTileDimInBlocks),
       [&](const size_t num_threads) {
         impl.PrepareBuffers(num_threads);
         return true;
       },
       [&](const uint32_t tid, const size_t thread) {
         size_t n_enc_tiles =
-            DivCeil(frame_dim.xsize_blocks, kEncTileDimInBlocks);
+            DivCeil(frame_dim.xsize_blocks, kColorTileDimInBlocks);
         size_t tx = tid % n_enc_tiles;
         size_t ty = tid / n_enc_tiles;
-        size_t by0 = ty * kEncTileDimInBlocks;
+        size_t by0 = ty * kColorTileDimInBlocks;
         size_t by1 =
-            std::min((ty + 1) * kEncTileDimInBlocks, frame_dim.ysize_blocks);
-        size_t bx0 = tx * kEncTileDimInBlocks;
+            std::min((ty + 1) * kColorTileDimInBlocks, frame_dim.ysize_blocks);
+        size_t bx0 = tx * kColorTileDimInBlocks;
         size_t bx1 =
-            std::min((tx + 1) * kEncTileDimInBlocks, frame_dim.xsize_blocks);
+            std::min((tx + 1) * kColorTileDimInBlocks, frame_dim.xsize_blocks);
         Rect r(bx0, by0, bx1 - bx0, by1 - by0);
         impl.ComputeTile(butteraugli_target, scale, xyb, r, thread, mask);
       },
@@ -619,7 +610,7 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace jxl {
-HWY_EXPORT(AdaptiveQuantizationMapTiny);
+HWY_EXPORT(AdaptiveQuantizationMap);
 
 namespace {
 
@@ -676,7 +667,7 @@ ImageF InitialQuantField(const float butteraugli_target, const Image3F& opsin,
                          float rescale, ImageF* mask) {
   PROFILER_FUNC;
   const float quant_ac = kAcQuant / butteraugli_target;
-  return HWY_DYNAMIC_DISPATCH(AdaptiveQuantizationMapTiny)(
+  return HWY_DYNAMIC_DISPATCH(AdaptiveQuantizationMap)(
       butteraugli_target, opsin, frame_dim, quant_ac * rescale, pool, mask);
 }
 

@@ -12,21 +12,19 @@
 
 #include <vector>
 
+#include "encoder/ac_strategy.h"
+#include "encoder/base/data_parallel.h"
+#include "encoder/chroma_from_luma.h"
+#include "encoder/coeff_order.h"
+#include "encoder/coeff_order_fwd.h"
+#include "encoder/common.h"
+#include "encoder/dct_util.h"
 #include "encoder/enc_ans.h"
-#include "lib/jxl/ac_strategy.h"
-#include "lib/jxl/aux_out.h"
-#include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/chroma_from_luma.h"
-#include "lib/jxl/coeff_order.h"
-#include "lib/jxl/coeff_order_fwd.h"
-#include "lib/jxl/common.h"
-#include "lib/jxl/dct_util.h"
-#include "lib/jxl/enc_params.h"
-#include "lib/jxl/frame_header.h"
-#include "lib/jxl/image.h"
-#include "lib/jxl/passes_state.h"
-#include "lib/jxl/quant_weights.h"
-#include "lib/jxl/quantizer.h"
+#include "encoder/frame_header.h"
+#include "encoder/image.h"
+#include "encoder/passes_state.h"
+#include "encoder/quant_weights.h"
+#include "encoder/quantizer.h"
 
 namespace jxl {
 
@@ -39,8 +37,6 @@ struct PassesEncoderState {
 
   // Per-pass DCT coefficients for the image. One row per group.
   std::vector<std::unique_ptr<ACImage>> coeffs;
-
-  CompressParams cparams;
 
   struct PassData {
     std::vector<std::vector<Token>> ac_tokens;
