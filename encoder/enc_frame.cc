@@ -18,7 +18,15 @@
 #include <queue>
 #include <vector>
 
+#include "encoder/enc_ac_strategy.h"
+#include "encoder/enc_adaptive_quantization.h"
+#include "encoder/enc_ans.h"
+#include "encoder/enc_cache.h"
+#include "encoder/enc_chroma_from_luma.h"
+#include "encoder/enc_entropy_coder.h"
+#include "encoder/enc_group.h"
 #include "encoder/enc_xyb.h"
+#include "encoder/modular/encoding/enc_encoding.h"
 #include "lib/jxl/ac_context.h"
 #include "lib/jxl/ac_strategy.h"
 #include "lib/jxl/ans_params.h"
@@ -33,20 +41,12 @@
 #include "lib/jxl/coeff_order.h"
 #include "lib/jxl/coeff_order_fwd.h"
 #include "lib/jxl/color_encoding_internal.h"
-#include "lib/jxl/color_management.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/compressed_dc.h"
 #include "lib/jxl/dct_util.h"
 #include "lib/jxl/dec_modular.h"
-#include "lib/jxl/enc_ac_strategy.h"
-#include "lib/jxl/enc_adaptive_quantization.h"
-#include "lib/jxl/enc_ans.h"
 #include "lib/jxl/enc_bit_writer.h"
-#include "lib/jxl/enc_cache.h"
-#include "lib/jxl/enc_chroma_from_luma.h"
 #include "lib/jxl/enc_coeff_order.h"
-#include "lib/jxl/enc_entropy_coder.h"
-#include "lib/jxl/enc_group.h"
 #include "lib/jxl/enc_params.h"
 #include "lib/jxl/enc_toc.h"
 #include "lib/jxl/fields.h"
@@ -57,8 +57,6 @@
 #include "lib/jxl/image_ops.h"
 #include "lib/jxl/loop_filter.h"
 #include "lib/jxl/modular/encoding/context_predict.h"
-#include "lib/jxl/modular/encoding/enc_debug_tree.h"
-#include "lib/jxl/modular/encoding/enc_encoding.h"
 #include "lib/jxl/modular/encoding/encoding.h"
 #include "lib/jxl/modular/encoding/ma_common.h"
 #include "lib/jxl/modular/modular_image.h"
@@ -368,12 +366,12 @@ class ModularFrameEncoder {
     params.clustering = HistogramParams::ClusteringType::kFast;
     params.lz77_method = HistogramParams::LZ77Method::kNone;
     BuildAndEncodeHistograms(params, kNumTreeContexts, tree_tokens_, &code_,
-                             &context_map_, writer, 0, nullptr);
-    WriteTokens(tree_tokens_[0], code_, context_map_, writer, 0, nullptr);
+                             &context_map_, writer);
+    WriteTokensTiny(tree_tokens_[0], code_, context_map_, writer);
     params.image_widths = image_widths_;
     // Write histograms.
     BuildAndEncodeHistograms(params, (tree_.size() + 1) / 2, tokens_, &code_,
-                             &context_map_, writer, 0, nullptr);
+                             &context_map_, writer);
     return true;
   }
   // Encodes a specific modular image (identified by `stream`) in the `writer`,
@@ -385,7 +383,7 @@ class ModularFrameEncoder {
     }
     JXL_RETURN_IF_ERROR(
         Bundle::Write(stream_headers_[stream_id], writer, 0, nullptr));
-    WriteTokens(tokens_[stream_id], code_, context_map_, writer, 0, nullptr);
+    WriteTokensTiny(tokens_[stream_id], code_, context_map_, writer);
     return true;
   }
   // Creates a modular image for a given DC group of VarDCT mode. `dc` is the
@@ -582,8 +580,8 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   // Flat AR field.
   FillPlane(static_cast<uint8_t>(4), &shared.epf_sharpness);
 
-  AcStrategyHeuristics acs_heuristics;
-  CfLHeuristics cfl_heuristics;
+  AcStrategyHeuristicsTiny acs_heuristics;
+  CfLHeuristicsTiny cfl_heuristics;
   cfl_heuristics.Init(opsin);
   acs_heuristics.Init(opsin, &enc_state);
 
@@ -625,7 +623,6 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
       },
       process_tile, "Enc Heuristics"));
 
-  acs_heuristics.Finalize(nullptr);
   cfl_heuristics.ComputeDC(/*fast=*/true, &shared.cmap);
 
   enc_state.histogram_idx.resize(shared.frame_dim.num_groups);
@@ -643,7 +640,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0, shared.frame_dim.num_groups, ThreadPool::NoInit,
       [&](size_t group_idx, size_t _) {
-        ComputeCoefficients(group_idx, &enc_state, opsin, &dc);
+        ComputeCoefficientsTiny(group_idx, &enc_state, opsin, &dc);
       },
       "Compute coeffs"));
 
@@ -731,8 +728,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     JXL_RETURN_IF_ERROR(
         enc_state.shared.quantizer.Encode(writer, kLayerQuant, nullptr));
     writer->Write(1, 1);  // default BlockCtxMap
-    ColorCorrelationMapEncodeDC(&enc_state.shared.cmap, writer, kLayerDC,
-                                nullptr);
+    ColorCorrelationMapEncodeDC(&enc_state.shared.cmap, writer);
   }
   JXL_RETURN_IF_ERROR(modular_frame_encoder->EncodeGlobalInfo(get_output(0)));
   JXL_RETURN_IF_ERROR(modular_frame_encoder->EncodeStream(
@@ -790,12 +786,12 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     // Encode histograms.
     HistogramParams hist_params;
     hist_params.lz77_method = HistogramParams::LZ77Method::kNone;
-    BuildAndEncodeHistograms(
-        hist_params,
-        enc_state.shared.num_histograms *
-            enc_state.shared.block_ctx_map.NumACContexts(),
-        enc_state.passes[0].ac_tokens, &enc_state.passes[0].codes,
-        &enc_state.passes[0].context_map, writer, 0, nullptr);
+    BuildAndEncodeHistograms(hist_params,
+                             enc_state.shared.num_histograms *
+                                 enc_state.shared.block_ctx_map.NumACContexts(),
+                             enc_state.passes[0].ac_tokens,
+                             &enc_state.passes[0].codes,
+                             &enc_state.passes[0].context_map, writer);
   }
 
   std::atomic<int> num_errors{0};
@@ -804,7 +800,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     BitWriter* writer = get_output(2 + frame_dim.num_dc_groups + group_index);
     if (!EncodeGroupTokenizedCoefficients(group_index, 0,
                                           enc_state.histogram_idx[group_index],
-                                          enc_state, writer, nullptr)) {
+                                          enc_state, writer)) {
       num_errors.fetch_add(1, std::memory_order_relaxed);
       return;
     }
