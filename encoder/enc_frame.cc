@@ -24,8 +24,10 @@
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_cache.h"
 #include "encoder/enc_chroma_from_luma.h"
+#include "encoder/enc_coeff_order.h"
 #include "encoder/enc_entropy_coder.h"
 #include "encoder/enc_group.h"
+#include "encoder/enc_toc.h"
 #include "encoder/enc_xyb.h"
 #include "encoder/modular/encoding/enc_encoding.h"
 #include "lib/jxl/ac_context.h"
@@ -46,9 +48,7 @@
 #include "lib/jxl/compressed_dc.h"
 #include "lib/jxl/dct_util.h"
 #include "lib/jxl/dec_modular.h"
-#include "lib/jxl/enc_coeff_order.h"
 #include "lib/jxl/enc_params.h"
-#include "lib/jxl/enc_toc.h"
 #include "lib/jxl/fields.h"
 #include "lib/jxl/frame_header.h"
 #include "lib/jxl/gaborish.h"
@@ -662,14 +662,14 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   }
 
   auto used_orders_info =
-      ComputeUsedOrders(cparams.speed_tier, enc_state.shared.ac_strategy,
-                        Rect(enc_state.shared.raw_quant_field));
+      ComputeUsedOrdersTiny(cparams.speed_tier, enc_state.shared.ac_strategy,
+                            Rect(enc_state.shared.raw_quant_field));
   enc_state.used_orders.clear();
   enc_state.used_orders.resize(1, used_orders_info.second);
-  ComputeCoeffOrder(cparams.speed_tier, *enc_state.coeffs[0],
-                    enc_state.shared.ac_strategy, shared.frame_dim,
-                    enc_state.used_orders[0], used_orders_info.first,
-                    &enc_state.shared.coeff_orders[0]);
+  ComputeCoeffOrderTiny(cparams.speed_tier, *enc_state.coeffs[0],
+                        enc_state.shared.ac_strategy, shared.frame_dim,
+                        enc_state.used_orders[0], used_orders_info.first,
+                        &enc_state.shared.coeff_orders[0]);
   shared.num_histograms = 1;
 
   std::vector<EncCache> group_caches;

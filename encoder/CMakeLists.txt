@@ -11,10 +11,12 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_bit_writer.cc
   enc_chroma_from_luma.cc
   enc_cluster.cc
+  enc_coeff_order.cc
   enc_entropy_coder.cc
   enc_file.cc
   enc_frame.cc
   enc_group.cc
+  enc_toc.cc
   enc_xyb.cc
   modular/encoding/enc_encoding.cc
   modular/encoding/enc_ma.cc
