@@ -238,41 +238,22 @@ struct EncCache {
 
 class ModularFrameEncoder {
  public:
-  ModularFrameEncoder(const FrameHeader& frame_header,
+  ModularFrameEncoder(const FrameDimensions& frame_dim,
                       const CompressParams& cparams)
-      : frame_dim_(frame_header.ToFrameDimensions()), cparams_(cparams) {
-    size_t num_streams =
-        ModularStreamId::Num(frame_dim_, frame_header.passes.num_passes);
+      : frame_dim_(frame_dim), cparams_(cparams) {
+    size_t num_streams = ModularStreamId::Num(frame_dim_, 1);
     stream_images_.resize(num_streams);
-
-    if (cparams_.speed_tier > SpeedTier::kWombat) {
-      cparams_.options.splitting_heuristics_node_threshold = 192;
-    } else {
-      cparams_.options.splitting_heuristics_node_threshold = 96;
-    }
-    {
-      // Set properties.
-      std::vector<uint32_t> prop_order;
-      prop_order = {0, 1, 15, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7, 8};
-      switch (cparams_.speed_tier) {
-        case SpeedTier::kSquirrel:
-        case SpeedTier::kKitten:
-        case SpeedTier::kTortoise:
-          cparams_.options.splitting_heuristics_properties.assign(
-              prop_order.begin(), prop_order.begin() + 8);
-          cparams_.options.max_property_values = 32;
-          break;
-        default:
-          cparams_.options.splitting_heuristics_properties.assign(
-              prop_order.begin(), prop_order.begin() + 6);
-          cparams_.options.max_property_values = 16;
-          break;
-      }
-      // Gradient in previous channels.
-      for (int i = 0; i < cparams_.options.max_properties; i++) {
-        cparams_.options.splitting_heuristics_properties.push_back(
-            kNumNonrefProperties + i * 4 + 3);
-      }
+    cparams_.options.splitting_heuristics_node_threshold = 192;
+    // Set properties.
+    std::vector<uint32_t> prop_order;
+    prop_order = {0, 1, 15, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7, 8};
+    cparams_.options.splitting_heuristics_properties.assign(
+        prop_order.begin(), prop_order.begin() + 8);
+    cparams_.options.max_property_values = 32;
+    // Gradient in previous channels.
+    for (int i = 0; i < cparams_.options.max_properties; i++) {
+      cparams_.options.splitting_heuristics_properties.push_back(
+          kNumNonrefProperties + i * 4 + 3);
     }
 
     if (cparams_.options.predictor == static_cast<Predictor>(-1)) {
@@ -302,11 +283,7 @@ class ModularFrameEncoder {
     // TODO(veluca): figure out how to use different predictor sets per channel.
     stream_options_.resize(num_streams, cparams_.options);
   }
-  Status ComputeEncodingData(const FrameHeader& frame_header,
-                             ThreadPool* pool) {
-    JXL_DEBUG_V(6, "Computing modular encoding data for frame %s",
-                frame_header.DebugString().c_str());
-
+  Status ComputeEncodingData(ThreadPool* pool) {
     stream_options_[0] = cparams_.options;
 
     if (!tree_.empty()) return true;
@@ -427,49 +404,25 @@ class ModularFrameEncoder {
         ModularOptions::TreeKind::kGradientFixedDC;
 
     stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 8, 3);
-    if (shared->frame_header.chroma_subsampling.Is444()) {
-      for (size_t c : {1, 0, 2}) {
-        float inv_factor = shared->quantizer.GetInvDcStep(c);
-        float y_factor = shared->quantizer.GetDcStep(1);
-        float cfl_factor = shared->cmap.DCFactors()[c];
-        for (size_t y = 0; y < r.ysize(); y++) {
-          int32_t* quant_row =
-              stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c].plane.Row(y);
-          const float* row = r.ConstPlaneRow(dc, c, y);
-          if (c == 1) {
-            for (size_t x = 0; x < r.xsize(); x++) {
-              quant_row[x] = roundf(row[x] * inv_factor);
-            }
-          } else {
-            int32_t* quant_row_y =
-                stream_images_[stream_id].channel[0].plane.Row(y);
-            for (size_t x = 0; x < r.xsize(); x++) {
-              quant_row[x] =
-                  roundf((row[x] - quant_row_y[x] * (y_factor * cfl_factor)) *
-                         inv_factor);
-            }
-          }
-        }
-      }
-    } else {
-      for (size_t c : {1, 0, 2}) {
-        Rect rect(
-            r.x0() >> shared->frame_header.chroma_subsampling.HShift(c),
-            r.y0() >> shared->frame_header.chroma_subsampling.VShift(c),
-            r.xsize() >> shared->frame_header.chroma_subsampling.HShift(c),
-            r.ysize() >> shared->frame_header.chroma_subsampling.VShift(c));
-        float inv_factor = shared->quantizer.GetInvDcStep(c);
-        size_t ys = rect.ysize();
-        size_t xs = rect.xsize();
-        Channel& ch = stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c];
-        ch.w = xs;
-        ch.h = ys;
-        ch.shrink();
-        for (size_t y = 0; y < ys; y++) {
-          int32_t* quant_row = ch.plane.Row(y);
-          const float* row = rect.ConstPlaneRow(dc, c, y);
-          for (size_t x = 0; x < xs; x++) {
+    for (size_t c : {1, 0, 2}) {
+      float inv_factor = shared->quantizer.GetInvDcStep(c);
+      float y_factor = shared->quantizer.GetDcStep(1);
+      float cfl_factor = shared->cmap.DCFactors()[c];
+      for (size_t y = 0; y < r.ysize(); y++) {
+        int32_t* quant_row =
+            stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c].plane.Row(y);
+        const float* row = r.ConstPlaneRow(dc, c, y);
+        if (c == 1) {
+          for (size_t x = 0; x < r.xsize(); x++) {
             quant_row[x] = roundf(row[x] * inv_factor);
+          }
+        } else {
+          int32_t* quant_row_y =
+              stream_images_[stream_id].channel[0].plane.Row(y);
+          for (size_t x = 0; x < r.xsize(); x++) {
+            quant_row[x] =
+                roundf((row[x] - quant_row_y[x] * (y_factor * cfl_factor)) *
+                       inv_factor);
           }
         }
       }
@@ -541,24 +494,39 @@ class ModularFrameEncoder {
 
 Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
                    const Image3F& linear, ThreadPool* pool, BitWriter* writer) {
-  std::unique_ptr<FrameHeader> frame_header =
-      jxl::make_unique<FrameHeader>(metadata);
-  JXL_RETURN_IF_ERROR(
-      MakeFrameHeader(cparams.butteraugli_distance, frame_header.get()));
-
-  FrameDimensions frame_dim = frame_header->ToFrameDimensions();
-
-  const size_t num_groups = frame_dim.num_groups;
-
   PassesEncoderState enc_state;
   PassesSharedState& shared = enc_state.shared;
-  JXL_CHECK(InitializePassesSharedState(*frame_header, &shared,
-                                        /*encoder=*/true));
+  shared.frame_header = FrameHeader(metadata);
+  JXL_RETURN_IF_ERROR(
+      MakeFrameHeader(cparams.butteraugli_distance, &shared.frame_header));
+  shared.frame_dim = shared.frame_header.ToFrameDimensions();
+  shared.image_features.patches.SetPassesSharedState(&shared);
+
+  const FrameDimensions& frame_dim = shared.frame_dim;
+  const size_t num_groups = frame_dim.num_groups;
+
+  shared.ac_strategy =
+      AcStrategyImage(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
+  shared.raw_quant_field =
+      ImageI(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
+  shared.epf_sharpness = ImageB(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
+  shared.cmap = ColorCorrelationMap(frame_dim.xsize, frame_dim.ysize);
+
+  // In the decoder, we allocate coeff orders afterwards, when we know how many
+  // we will actually need.
+  shared.coeff_order_size = kCoeffOrderMaxSize;
+  shared.coeff_orders.resize(kCoeffOrderMaxSize);
+
+  shared.quant_dc = ImageB(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
+
+  shared.dc_storage = Image3F(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
+  shared.dc = &shared.dc_storage;
+
   enc_state.cparams = cparams;
   enc_state.passes.clear();
 
   std::unique_ptr<ModularFrameEncoder> modular_frame_encoder =
-      jxl::make_unique<ModularFrameEncoder>(*frame_header, cparams);
+      jxl::make_unique<ModularFrameEncoder>(frame_dim, cparams);
 
   float x_qm_scale_steps[2] = {1.25f, 9.0f};
   shared.frame_header.x_qm_scale = 2;
@@ -632,15 +600,6 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
         std::min((tx + 1) * kEncTileDimInBlocks, shared.frame_dim.xsize_blocks);
     Rect r(bx0, by0, bx1 - bx0, by1 - by0);
 
-    // For speeds up to Wombat, we only compute the color correlation map
-    // once we know the transform type and the quantization map.
-    if (cparams.speed_tier <= SpeedTier::kSquirrel) {
-      cfl_heuristics.ComputeTile(r, opsin, shared.matrices,
-                                 /*ac_strategy=*/nullptr,
-                                 /*quantizer=*/nullptr, /*fast=*/false, thread,
-                                 &shared.cmap);
-    }
-
     // Choose block sizes.
     acs_heuristics.ProcessRect(r);
 
@@ -652,13 +611,9 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
     quantizer.SetQuantFieldRect(enc_state.initial_quant_field, r,
                                 &shared.raw_quant_field);
 
-    // Compute a non-default CfL map if we are at Hare speed, or slower.
-    if (cparams.speed_tier <= SpeedTier::kHare) {
-      cfl_heuristics.ComputeTile(
-          r, opsin, shared.matrices, &shared.ac_strategy, &shared.quantizer,
-          /*fast=*/cparams.speed_tier >= SpeedTier::kWombat, thread,
-          &shared.cmap);
-    }
+    cfl_heuristics.ComputeTile(r, opsin, shared.matrices, &shared.ac_strategy,
+                               &shared.quantizer,
+                               /*fast=*/true, thread, &shared.cmap);
   };
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0,
@@ -671,10 +626,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
       process_tile, "Enc Heuristics"));
 
   acs_heuristics.Finalize(nullptr);
-  if (cparams.speed_tier <= SpeedTier::kHare) {
-    cfl_heuristics.ComputeDC(/*fast=*/cparams.speed_tier >= SpeedTier::kWombat,
-                             &shared.cmap);
-  }
+  cfl_heuristics.ComputeDC(/*fast=*/true, &shared.cmap);
 
   enc_state.histogram_idx.resize(shared.frame_dim.num_groups);
 
@@ -683,18 +635,9 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
   enc_state.b_qm_multiplier =
       std::pow(1.25f, shared.frame_header.b_qm_scale - 2.0f);
 
-  if (enc_state.coeffs.size() < shared.frame_header.passes.num_passes) {
-    enc_state.coeffs.reserve(shared.frame_header.passes.num_passes);
-    for (size_t i = enc_state.coeffs.size();
-         i < shared.frame_header.passes.num_passes; i++) {
-      // Allocate enough coefficients for each group on every row.
-      enc_state.coeffs.emplace_back(make_unique<ACImageT<int32_t>>(
-          kGroupDim * kGroupDim, shared.frame_dim.num_groups));
-    }
-  }
-  while (enc_state.coeffs.size() > shared.frame_header.passes.num_passes) {
-    enc_state.coeffs.pop_back();
-  }
+  // Allocate enough coefficients for each group on every row.
+  enc_state.coeffs.push_back(make_unique<ACImageT<int32_t>>(
+      kGroupDim * kGroupDim, shared.frame_dim.num_groups));
 
   Image3F dc(shared.frame_dim.xsize_blocks, shared.frame_dim.ysize_blocks);
   JXL_RETURN_IF_ERROR(RunOnPool(
@@ -753,7 +696,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
       group_caches[thread].InitOnce();
       TokenizeCoefficients(
           &shared.coeff_orders[idx_pass * shared.coeff_order_size], rect,
-          ac_rows, shared.ac_strategy, frame_header->chroma_subsampling,
+          ac_rows, shared.ac_strategy, YCbCrChromaSubsampling(),
           &group_caches[thread].num_nzeroes,
           &enc_state.passes[idx_pass].ac_tokens[group_index]);
     }
@@ -762,12 +705,10 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
                                 tokenize_group_init, tokenize_group,
                                 "TokenizeGroup"));
 
-  *frame_header = shared.frame_header;
   // needs to happen *AFTER* VarDCT-ComputeEncodingData.
-  JXL_RETURN_IF_ERROR(
-      modular_frame_encoder->ComputeEncodingData(*frame_header, pool));
+  JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(pool));
 
-  JXL_RETURN_IF_ERROR(WriteFrameHeader(*frame_header, writer, nullptr));
+  JXL_RETURN_IF_ERROR(Bundle::Write(shared.frame_header, writer, 0, nullptr));
 
   // DC global info + DC groups + AC global info + AC groups
   std::vector<BitWriter> group_codes(
@@ -847,8 +788,7 @@ Status EncodeFrame(const CompressParams& cparams, const CodecMetadata* metadata,
                       &enc_state.shared.coeff_orders[0], writer, 0, nullptr);
 
     // Encode histograms.
-    HistogramParams hist_params(cparams.speed_tier,
-                                enc_state.shared.block_ctx_map.NumACContexts());
+    HistogramParams hist_params;
     hist_params.lz77_method = HistogramParams::LZ77Method::kNone;
     BuildAndEncodeHistograms(
         hist_params,
