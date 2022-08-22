@@ -12,7 +12,6 @@
 
 #include "encoder/ac_context.h"
 #include "encoder/base/compiler_specific.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/field_encodings.h"
 
 // Entropy coding and context modeling of DC and AC coefficients, as well as AC

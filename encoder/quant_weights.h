@@ -21,7 +21,6 @@
 #include "encoder/base/span.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/image.h"
 
 namespace jxl {
@@ -405,10 +404,6 @@ class DequantMatrices {
       inv_dc_quant_[c] = dc[c];
     }
   }
-
-  Status Decode(BitReader* br,
-                ModularFrameDecoder* modular_frame_decoder = nullptr);
-  Status DecodeDC(BitReader* br);
 
   const std::vector<QuantEncoding>& encodings() const { return encodings_; }
 

@@ -19,7 +19,6 @@
 #include "encoder/base/data_parallel.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/field_encodings.h"
@@ -65,28 +64,6 @@ struct ColorCorrelationMap {
 
   float YtoBRatio(int32_t b_factor) const {
     return base_correlation_b_ + b_factor * color_scale_;
-  }
-
-  Status DecodeDC(BitReader* br) {
-    if (br->ReadFixedBits<1>() == 1) {
-      // All default.
-      return true;
-    }
-    SetColorFactor(U32Coder::Read(kColorFactorDist, br));
-    JXL_RETURN_IF_ERROR(F16Coder::Read(br, &base_correlation_x_));
-    if (std::abs(base_correlation_x_) > 4.0f) {
-      return JXL_FAILURE("Base X correlation is out of range");
-    }
-    JXL_RETURN_IF_ERROR(F16Coder::Read(br, &base_correlation_b_));
-    if (std::abs(base_correlation_b_) > 4.0f) {
-      return JXL_FAILURE("Base B correlation is out of range");
-    }
-    ytox_dc_ = static_cast<int>(br->ReadFixedBits<kBitsPerByte>()) +
-               std::numeric_limits<int8_t>::min();
-    ytob_dc_ = static_cast<int>(br->ReadFixedBits<kBitsPerByte>()) +
-               std::numeric_limits<int8_t>::min();
-    RecomputeDCFactors();
-    return true;
   }
 
   // We consider a CfL map to be JPEG-reconstruction-compatible if base

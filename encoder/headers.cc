@@ -188,9 +188,4 @@ Status AnimationHeader::VisitFields(Visitor* JXL_RESTRICT visitor) {
   return true;
 }
 
-Status ReadSizeHeader(BitReader* JXL_RESTRICT reader,
-                      SizeHeader* JXL_RESTRICT size) {
-  return Bundle::Read(reader, size);
-}
-
 }  // namespace jxl

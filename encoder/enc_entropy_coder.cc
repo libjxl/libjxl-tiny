@@ -27,8 +27,6 @@
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
-#include "encoder/dec_bit_reader.h"
-#include "encoder/dec_context_map.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/image.h"
 #include "encoder/image_ops.h"

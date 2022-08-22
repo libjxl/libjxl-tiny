@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "encoder/base/status.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/modular/options.h"
 
 namespace jxl {
@@ -59,8 +58,6 @@ struct PropertyDecisionNode {
 };
 
 using Tree = std::vector<PropertyDecisionNode>;
-
-Status DecodeTree(BitReader *br, Tree *tree, size_t tree_size_limit);
 
 }  // namespace jxl
 

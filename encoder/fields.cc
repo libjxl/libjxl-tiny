@@ -258,128 +258,6 @@ class AllDefaultVisitor : public VisitorBase {
   bool all_default_ = true;
 };
 
-class ReadVisitor : public VisitorBase {
- public:
-  explicit ReadVisitor(BitReader* reader) : VisitorBase(), reader_(reader) {}
-
-  Status Bits(const size_t bits, const uint32_t /*default_value*/,
-              uint32_t* JXL_RESTRICT value) override {
-    *value = BitsCoder::Read(bits, reader_);
-    if (!reader_->AllReadsWithinBounds()) {
-      return JXL_STATUS(StatusCode::kNotEnoughBytes,
-                        "Not enough bytes for header");
-    }
-    return true;
-  }
-
-  Status U32(const U32Enc dist, const uint32_t /*default_value*/,
-             uint32_t* JXL_RESTRICT value) override {
-    *value = U32Coder::Read(dist, reader_);
-    if (!reader_->AllReadsWithinBounds()) {
-      return JXL_STATUS(StatusCode::kNotEnoughBytes,
-                        "Not enough bytes for header");
-    }
-    return true;
-  }
-
-  Status U64(const uint64_t /*default_value*/,
-             uint64_t* JXL_RESTRICT value) override {
-    *value = U64Coder::Read(reader_);
-    if (!reader_->AllReadsWithinBounds()) {
-      return JXL_STATUS(StatusCode::kNotEnoughBytes,
-                        "Not enough bytes for header");
-    }
-    return true;
-  }
-
-  Status F16(const float /*default_value*/,
-             float* JXL_RESTRICT value) override {
-    ok_ &= F16Coder::Read(reader_, value);
-    if (!reader_->AllReadsWithinBounds()) {
-      return JXL_STATUS(StatusCode::kNotEnoughBytes,
-                        "Not enough bytes for header");
-    }
-    return true;
-  }
-
-  void SetDefault(Fields* fields) override { Bundle::SetDefault(fields); }
-
-  bool IsReading() const override { return true; }
-
-  // This never fails because visitors are expected to keep reading until
-  // EndExtensions, see comment there.
-  Status BeginExtensions(uint64_t* JXL_RESTRICT extensions) override {
-    JXL_QUIET_RETURN_IF_ERROR(VisitorBase::BeginExtensions(extensions));
-    if (*extensions == 0) return true;
-
-    // For each nonzero bit, i.e. extension that is present:
-    for (uint64_t remaining_extensions = *extensions; remaining_extensions != 0;
-         remaining_extensions &= remaining_extensions - 1) {
-      const size_t idx_extension =
-          Num0BitsBelowLS1Bit_Nonzero(remaining_extensions);
-      // Read additional U64 (one per extension) indicating the number of bits
-      // (allows skipping individual extensions).
-      JXL_RETURN_IF_ERROR(U64(0, &extension_bits_[idx_extension]));
-      if (!SafeAdd(total_extension_bits_, extension_bits_[idx_extension],
-                   total_extension_bits_)) {
-        return JXL_FAILURE("Extension bits overflowed, invalid codestream");
-      }
-    }
-    // Used by EndExtensions to skip past any _remaining_ extensions.
-    pos_after_ext_size_ = reader_->TotalBitsConsumed();
-    JXL_ASSERT(pos_after_ext_size_ != 0);
-    return true;
-  }
-
-  Status EndExtensions() override {
-    JXL_QUIET_RETURN_IF_ERROR(VisitorBase::EndExtensions());
-    // Happens if extensions == 0: don't read size, done.
-    if (pos_after_ext_size_ == 0) return true;
-
-    // Not enough bytes as set by BeginExtensions or earlier. Do not return
-    // this as an JXL_FAILURE or false (which can also propagate to error
-    // through e.g. JXL_RETURN_IF_ERROR), since this may be used while
-    // silently checking whether there are enough bytes. If this case must be
-    // treated as an error, reader_>Close() will do this, just like is already
-    // done for non-extension fields.
-    if (!enough_bytes_) return true;
-
-    // Skip new fields this (old?) decoder didn't know about, if any.
-    const size_t bits_read = reader_->TotalBitsConsumed();
-    uint64_t end;
-    if (!SafeAdd(pos_after_ext_size_, total_extension_bits_, end)) {
-      return JXL_FAILURE("Invalid extension size, caused overflow");
-    }
-    if (bits_read > end) {
-      return JXL_FAILURE("Read more extension bits than budgeted");
-    }
-    const size_t remaining_bits = end - bits_read;
-    if (remaining_bits != 0) {
-      JXL_WARNING("Skipping %" PRIuS "-bit extension(s)", remaining_bits);
-      reader_->SkipBits(remaining_bits);
-      if (!reader_->AllReadsWithinBounds()) {
-        return JXL_STATUS(StatusCode::kNotEnoughBytes,
-                          "Not enough bytes for header");
-      }
-    }
-    return true;
-  }
-
-  Status OK() const { return ok_; }
-
- private:
-  // Whether any error other than not enough bytes occurred.
-  bool ok_ = true;
-
-  // Whether there are enough input bytes to read from.
-  bool enough_bytes_ = true;
-  BitReader* const reader_;
-  // May be 0 even if the corresponding extension is present.
-  uint64_t extension_bits_[Bundle::kMaxExtensions] = {0};
-  uint64_t total_extension_bits_ = 0;
-  size_t pos_after_ext_size_ = 0;  // 0 iff extensions == 0.
-};
-
 class MaxBitsVisitor : public VisitorBase {
  public:
   Status Bits(const size_t bits, const uint32_t /*default_value*/,
@@ -615,19 +493,6 @@ Status Bundle::CanEncode(const Fields& fields, size_t* extension_bits,
   JXL_QUIET_RETURN_IF_ERROR(visitor.GetSizes(extension_bits, total_bits));
   return true;
 }
-Status Bundle::Read(BitReader* reader, Fields* fields) {
-  ReadVisitor visitor(reader);
-  JXL_RETURN_IF_ERROR(visitor.Visit(fields));
-  return visitor.OK();
-}
-bool Bundle::CanRead(BitReader* reader, Fields* fields) {
-  ReadVisitor visitor(reader);
-  Status status = visitor.Visit(fields);
-  // We are only checking here whether there are enough bytes. We still return
-  // true for other errors because it means there are enough bytes to determine
-  // there's an error. Use Read() to determine which error it is.
-  return status.code() != StatusCode::kNotEnoughBytes;
-}
 Status Bundle::Write(const Fields& fields, BitWriter* JXL_RESTRICT writer) {
   size_t extension_bits, total_bits;
   JXL_RETURN_IF_ERROR(CanEncode(fields, &extension_bits, &total_bits));
@@ -660,16 +525,6 @@ Status U32Coder::CanEncode(const U32Enc enc, const uint32_t value,
   const Status ok = ChooseSelector(enc, value, &selector, &total_bits);
   *encoded_bits = ok ? total_bits : 0;
   return ok;
-}
-
-uint32_t U32Coder::Read(const U32Enc enc, BitReader* JXL_RESTRICT reader) {
-  const uint32_t selector = reader->ReadFixedBits<2>();
-  const U32Distr d = enc.GetDistr(selector);
-  if (d.IsDirect()) {
-    return d.Direct();
-  } else {
-    return reader->ReadBits(d.ExtraBits()) + d.Offset();
-  }
 }
 
 // Returns false if the value is too large to encode.
@@ -731,34 +586,6 @@ Status U32Coder::ChooseSelector(const U32Enc enc, const uint32_t value,
   }
 
   return true;
-}
-
-uint64_t U64Coder::Read(BitReader* JXL_RESTRICT reader) {
-  uint64_t selector = reader->ReadFixedBits<2>();
-  if (selector == 0) {
-    return 0;
-  }
-  if (selector == 1) {
-    return 1 + reader->ReadFixedBits<4>();
-  }
-  if (selector == 2) {
-    return 17 + reader->ReadFixedBits<8>();
-  }
-
-  // selector 3, varint, groups have first 12, then 8, and last 4 bits.
-  uint64_t result = reader->ReadFixedBits<12>();
-
-  uint64_t shift = 12;
-  while (reader->ReadFixedBits<1>()) {
-    if (shift == 60) {
-      result |= static_cast<uint64_t>(reader->ReadFixedBits<4>()) << shift;
-      break;
-    }
-    result |= static_cast<uint64_t>(reader->ReadFixedBits<8>()) << shift;
-    shift += 8;
-  }
-
-  return result;
 }
 
 // Returns false if the value is too large to encode.
@@ -826,32 +653,6 @@ Status U64Coder::CanEncode(uint64_t value, size_t* JXL_RESTRICT encoded_bits) {
     }
   }
 
-  return true;
-}
-
-Status F16Coder::Read(BitReader* JXL_RESTRICT reader,
-                      float* JXL_RESTRICT value) {
-  const uint32_t bits16 = reader->ReadFixedBits<16>();
-  const uint32_t sign = bits16 >> 15;
-  const uint32_t biased_exp = (bits16 >> 10) & 0x1F;
-  const uint32_t mantissa = bits16 & 0x3FF;
-
-  if (JXL_UNLIKELY(biased_exp == 31)) {
-    return JXL_FAILURE("F16 infinity or NaN are not supported");
-  }
-
-  // Subnormal or zero
-  if (JXL_UNLIKELY(biased_exp == 0)) {
-    *value = (1.0f / 16384) * (mantissa * (1.0f / 1024));
-    if (sign) *value = -*value;
-    return true;
-  }
-
-  // Normalized: convert the representation directly (faster than ldexp/tables).
-  const uint32_t biased_exp32 = biased_exp + (127 - 15);
-  const uint32_t mantissa32 = mantissa << (23 - 10);
-  const uint32_t bits32 = (sign << 31) | (biased_exp32 << 23) | mantissa32;
-  memcpy(value, &bits32, sizeof(bits32));
   return true;
 }
 

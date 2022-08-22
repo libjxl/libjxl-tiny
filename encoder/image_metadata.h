@@ -364,9 +364,6 @@ struct ImageMetadata : public Fields {
   bool nonserialized_only_parse_basic_info = false;
 };
 
-Status ReadImageMetadata(BitReader* JXL_RESTRICT reader,
-                         ImageMetadata* JXL_RESTRICT metadata);
-
 // All metadata applicable to the entire codestream (dimensions, extra channels,
 // ...)
 struct CodecMetadata {

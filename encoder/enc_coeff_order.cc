@@ -15,7 +15,6 @@
 #include "encoder/base/span.h"
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"

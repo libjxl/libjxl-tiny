@@ -23,7 +23,6 @@
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/fields.h"
 #include "encoder/image.h"
@@ -119,8 +118,6 @@ class Quantizer {
   float inv_quant_ac(int32_t quant) const { return inv_global_scale_ / quant; }
 
   Status Encode(BitWriter* writer) const;
-
-  Status Decode(BitReader* reader);
 
   void DumpQuantizationMap(const ImageI& raw_quant_field) const;
 

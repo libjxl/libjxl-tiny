@@ -14,7 +14,6 @@
 
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/image.h"
 #include "encoder/noise.h"
 
@@ -24,9 +23,6 @@ void Random3Planes(size_t visible_frame_index, size_t nonvisible_frame_index,
                    size_t x0, size_t y0, const std::pair<ImageF*, Rect>& plane0,
                    const std::pair<ImageF*, Rect>& plane1,
                    const std::pair<ImageF*, Rect>& plane2);
-
-// Must only call if FrameHeader.flags.kNoise.
-Status DecodeNoise(BitReader* br, NoiseParams* noise_params);
 
 }  // namespace jxl
 

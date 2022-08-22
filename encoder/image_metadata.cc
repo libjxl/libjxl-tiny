@@ -397,11 +397,6 @@ Status ToneMapping::VisitFields(Visitor* JXL_RESTRICT visitor) {
   return true;
 }
 
-Status ReadImageMetadata(BitReader* JXL_RESTRICT reader,
-                         ImageMetadata* JXL_RESTRICT metadata) {
-  return Bundle::Read(reader, metadata);
-}
-
 void ImageMetadata::SetAlphaBits(uint32_t bits, bool alpha_is_premultiplied) {
   std::vector<ExtraChannelInfo>& eciv = extra_channel_info;
   ExtraChannelInfo* alpha = Find(ExtraChannel::kAlpha);

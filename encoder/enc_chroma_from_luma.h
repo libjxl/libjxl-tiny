@@ -20,7 +20,6 @@
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"
