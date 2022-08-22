@@ -25,7 +25,6 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_xyb.cc
   fields.cc
   modular/encoding/enc_encoding.cc
-  modular/encoding/enc_ma.cc
   read_pfm.cc
   quant_weights.cc
   base/data_parallel.cc

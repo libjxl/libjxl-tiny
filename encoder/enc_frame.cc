@@ -54,7 +54,6 @@
 #include "encoder/modular/encoding/context_predict.h"
 #include "encoder/modular/encoding/enc_encoding.h"
 #include "encoder/modular/encoding/encoding.h"
-#include "encoder/modular/encoding/ma_common.h"
 #include "encoder/modular/modular_image.h"
 #include "encoder/modular/options.h"
 #include "encoder/quant_weights.h"

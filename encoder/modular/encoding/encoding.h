@@ -12,15 +12,28 @@
 
 #include <vector>
 
+#include "encoder/enc_ans.h"
 #include "encoder/fields.h"
 #include "encoder/image.h"
 #include "encoder/modular/encoding/context_predict.h"
-#include "encoder/modular/encoding/dec_ma.h"
 #include "encoder/modular/modular_image.h"
 #include "encoder/modular/options.h"
 #include "encoder/modular/transform/transform.h"
 
 namespace jxl {
+
+enum MATreeContext : size_t {
+  kSplitValContext = 0,
+  kPropertyContext = 1,
+  kPredictorContext = 2,
+  kOffsetContext = 3,
+  kMultiplierLogContext = 4,
+  kMultiplierBitsContext = 5,
+
+  kNumTreeContexts = 6,
+};
+
+static constexpr size_t kMaxTreeSize = 1 << 22;
 
 // Valid range of properties for using lookup tables instead of trees.
 constexpr int32_t kPropRangeFast = 512;
@@ -50,10 +63,55 @@ struct GroupHeader : public Fields {
   std::vector<Transform> transforms;
 };
 
+// inner nodes
+struct PropertyDecisionNode {
+  PropertyVal splitval;
+  int16_t property;  // -1: leaf node, lchild points to leaf node
+  uint32_t lchild;
+  uint32_t rchild;
+  Predictor predictor;
+  int64_t predictor_offset;
+  uint32_t multiplier;
+
+  PropertyDecisionNode(int p, int split_val, int lchild, int rchild,
+                       Predictor predictor, int64_t predictor_offset,
+                       uint32_t multiplier)
+      : splitval(split_val),
+        property(p),
+        lchild(lchild),
+        rchild(rchild),
+        predictor(predictor),
+        predictor_offset(predictor_offset),
+        multiplier(multiplier) {}
+  PropertyDecisionNode()
+      : splitval(0),
+        property(-1),
+        lchild(0),
+        rchild(0),
+        predictor(Predictor::Zero),
+        predictor_offset(0),
+        multiplier(1) {}
+  static PropertyDecisionNode Leaf(Predictor predictor, int64_t offset = 0,
+                                   uint32_t multiplier = 1) {
+    return PropertyDecisionNode(-1, 0, 0, 0, predictor, offset, multiplier);
+  }
+  static PropertyDecisionNode Split(int p, int split_val, int lchild,
+                                    int rchild = -1) {
+    if (rchild == -1) rchild = lchild + 1;
+    return PropertyDecisionNode(p, split_val, lchild, rchild, Predictor::Zero,
+                                0, 1);
+  }
+};
+
+using Tree = std::vector<PropertyDecisionNode>;
+
 FlatTree FilterTree(const Tree &global_tree,
                     std::array<pixel_type, kNumStaticProperties> &static_props,
                     size_t *num_props, bool *use_wp, bool *wp_only,
                     bool *gradient_only);
+
+void TokenizeTree(const Tree &tree, std::vector<Token> *tokens,
+                  Tree *decoder_tree);
 
 template <typename T>
 bool TreeToLookupTable(const FlatTree &tree,
