@@ -23,8 +23,6 @@
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"
-#include "encoder/field_encodings.h"
-#include "encoder/fields.h"
 #include "encoder/image.h"
 #include "encoder/opsin_params.h"
 #include "encoder/quant_weights.h"

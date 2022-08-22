@@ -20,8 +20,6 @@
 #include "encoder/ac_context.h"  // BlockCtxMap
 #include "encoder/ac_strategy.h"
 #include "encoder/enc_ans.h"
-#include "encoder/field_encodings.h"
-#include "encoder/frame_header.h"  // YCbCrChromaSubsampling
 #include "encoder/image.h"
 
 // Entropy coding and context modeling of DC and AC coefficients, as well as AC
@@ -36,7 +34,6 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
                           const Rect& rect,
                           const int32_t* JXL_RESTRICT* JXL_RESTRICT ac_rows,
                           const AcStrategyImage& ac_strategy,
-                          YCbCrChromaSubsampling cs,
                           Image3I* JXL_RESTRICT tmp_num_nzeroes,
                           std::vector<Token>* JXL_RESTRICT output);
 

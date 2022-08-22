@@ -20,7 +20,6 @@
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_ans.h"
-#include "encoder/frame_header.h"
 #include "encoder/image.h"
 #include "encoder/passes_state.h"
 #include "encoder/quant_weights.h"

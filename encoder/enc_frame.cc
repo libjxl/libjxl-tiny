@@ -31,7 +31,6 @@
 #include "encoder/chroma_from_luma.h"
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"
-#include "encoder/color_encoding_internal.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_ac_strategy.h"
@@ -45,12 +44,9 @@
 #include "encoder/enc_group.h"
 #include "encoder/enc_toc.h"
 #include "encoder/enc_xyb.h"
-#include "encoder/fields.h"
-#include "encoder/frame_header.h"
 #include "encoder/gaborish.h"
 #include "encoder/image.h"
 #include "encoder/image_ops.h"
-#include "encoder/loop_filter.h"
 #include "encoder/modular/encoding/context_predict.h"
 #include "encoder/modular/encoding/enc_encoding.h"
 #include "encoder/modular/encoding/encoding.h"
@@ -58,7 +54,6 @@
 #include "encoder/modular/options.h"
 #include "encoder/quant_weights.h"
 #include "encoder/quantizer.h"
-#include "encoder/toc.h"
 
 namespace jxl {
 namespace {
@@ -125,37 +120,6 @@ struct ModularStreamId {
   }
   std::string DebugString() const;
 };
-
-Status MakeFrameHeader(const float distance,
-                       FrameHeader* JXL_RESTRICT frame_header) {
-  frame_header->nonserialized_is_preview = false;
-  frame_header->is_last = true;
-  frame_header->save_before_color_transform = false;
-  frame_header->frame_type = FrameType::kRegularFrame;
-  frame_header->passes.num_passes = 1;
-  frame_header->passes.num_downsample = 0;
-  frame_header->passes.shift[0] = 0;
-  frame_header->encoding = FrameEncoding::kVarDCT;
-  frame_header->color_transform = ColorTransform::kXYB;
-  frame_header->flags = 0;
-  frame_header->dc_level = 0;
-  frame_header->flags |= FrameHeader::kSkipAdaptiveDCSmoothing;
-  frame_header->custom_size_or_origin = false;
-  frame_header->upsampling = 1;
-  frame_header->save_as_reference = 0;
-
-  LoopFilter* loop_filter = &frame_header->loop_filter;
-  loop_filter->gab = true;
-  constexpr float kThresholds[3] = {0.7, 1.5, 4.0};
-  loop_filter->epf_iters = 0;
-  for (size_t i = 0; i < 3; i++) {
-    if (distance >= kThresholds[i]) {
-      loop_filter->epf_iters++;
-    }
-  }
-
-  return true;
-}
 
 // `cutoffs` must be sorted.
 Tree MakeFixedTree(int property, const std::vector<int32_t>& cutoffs,
@@ -317,11 +281,6 @@ class ModularFrameEncoder {
     } else {
       delta_pred_ = options.predictor;
     }
-    if (options.predictor == Predictor::Weighted ||
-        options.predictor == Predictor::Variable ||
-        options.predictor == Predictor::Best) {
-      options.predictor = Predictor::Zero;
-    }
     tree_splits_.push_back(0);
     options.fast_decode_multiplier = 1.0f;
     tree_splits_.push_back(ModularStreamId::VarDCTDC(0).ID(frame_dim_));
@@ -343,7 +302,6 @@ class ModularFrameEncoder {
 
     // Compute tree.
     size_t num_streams = stream_images_.size();
-    stream_headers_.resize(num_streams);
     tokens_.resize(num_streams);
 
     // Avoid creating a tree with leaves that don't correspond to any pixels.
@@ -397,7 +355,7 @@ class ModularFrameEncoder {
               stream_images_[stream_id], stream_options_[stream_id],
               /*writer=*/nullptr, stream_id,
               /*total_pixels=*/nullptr,
-              /*tree=*/&tree_, /*header=*/&stream_headers_[stream_id],
+              /*tree=*/&tree_,
               /*tokens=*/&tokens_[stream_id],
               /*widths=*/&image_widths_[stream_id]));
         },
@@ -436,7 +394,11 @@ class ModularFrameEncoder {
     if (stream_images_[stream_id].channel.empty()) {
       return true;  // Image with no channels, header never gets decoded.
     }
-    JXL_RETURN_IF_ERROR(Bundle::Write(stream_headers_[stream_id], writer));
+    BitWriter::Allotment allotment(writer, 1024);
+    writer->Write(1, 1);  // use global tree
+    writer->Write(1, 1);  // all default wp header
+    writer->Write(2, 0);  // no transforms
+    allotment.Reclaim(writer);
     WriteTokens(tokens_[stream_id], code_, context_map_, writer);
     return true;
   }
@@ -529,7 +491,6 @@ class ModularFrameEncoder {
 
   Tree tree_;
   std::vector<std::vector<Token>> tree_tokens_;
-  std::vector<GroupHeader> stream_headers_;
   std::vector<std::vector<Token>> tokens_;
   EntropyEncodingData code_;
   std::vector<uint8_t> context_map_;
@@ -541,17 +502,50 @@ class ModularFrameEncoder {
   Predictor delta_pred_ = Predictor::Average4;
 };
 
+void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
+                      BitWriter* writer) {
+  BitWriter::Allotment allotment(writer, 1024);
+  writer->Write(1, 0);    // not all default
+  writer->Write(2, 0);    // regular frame
+  writer->Write(1, 0);    // vardct
+  writer->Write(2, 2);    // flags selector bits (17 .. 272)
+  writer->Write(8, 111);  // skip adaptive dc flag (128)
+  writer->Write(2, 0);    // no upsampling
+  writer->Write(3, x_qm_scale);
+  writer->Write(3, 2);  // b_qm_scale
+  writer->Write(2, 0);  // one pass
+  writer->Write(1, 0);  // no custom frame size or origin
+  writer->Write(2, 0);  // replace blend mode
+  writer->Write(1, 1);  // last frame
+  writer->Write(2, 0);  // no name
+  if (epf_iters == 2) {
+    writer->Write(1, 1);  // default loop filter
+  } else {
+    writer->Write(1, 0);  // not default loop filter
+    writer->Write(1, 1);  // gaborish on
+    writer->Write(1, 0);  // default gaborish
+    writer->Write(2, epf_iters);
+    if (epf_iters > 0) {
+      writer->Write(1, 0);  // default epf sharpness
+      writer->Write(1, 0);  // default epf weights
+      writer->Write(1, 0);  // default epf sigma
+    }
+    writer->Write(2, 0);  // no loop filter extensions
+  }
+  writer->Write(2, 0);  // no frame header extensions
+  allotment.Reclaim(writer);
+}
+
 }  // namespace
 
-Status EncodeFrame(const float distance, const CodecMetadata* metadata,
-                   const Image3F& linear, ThreadPool* pool, BitWriter* writer) {
+Status EncodeFrame(const float distance, const Image3F& linear,
+                   ThreadPool* pool, BitWriter* writer) {
   PassesEncoderState enc_state;
   PassesSharedState& shared = enc_state.shared;
-  shared.frame_header = FrameHeader(metadata);
-  JXL_RETURN_IF_ERROR(MakeFrameHeader(distance, &shared.frame_header));
-  shared.frame_dim = shared.frame_header.ToFrameDimensions();
+  FrameDimensions frame_dim;
+  frame_dim.Set(linear.xsize(), linear.ysize());
+  shared.frame_dim = frame_dim;
 
-  const FrameDimensions& frame_dim = shared.frame_dim;
   const size_t num_groups = frame_dim.num_groups;
 
   shared.ac_strategy =
@@ -572,16 +566,23 @@ Status EncodeFrame(const float distance, const CodecMetadata* metadata,
       jxl::make_unique<ModularFrameEncoder>(frame_dim);
 
   float x_qm_scale_steps[2] = {1.25f, 9.0f};
-  shared.frame_header.x_qm_scale = 2;
+  uint32_t x_qm_scale = 2;
   for (float x_qm_scale_step : x_qm_scale_steps) {
     if (distance > x_qm_scale_step) {
-      shared.frame_header.x_qm_scale++;
+      x_qm_scale++;
     }
   }
   if (distance < 0.299f) {
     // Favor chromacity preservation for making images appear more
     // faithful to original even with extreme (5-10x) zooming.
-    shared.frame_header.x_qm_scale++;
+    x_qm_scale++;
+  }
+  constexpr float kEpfThresholds[3] = {0.7, 1.5, 4.0};
+  uint32_t epf_iters = 0;
+  for (size_t i = 0; i < 3; i++) {
+    if (distance >= kEpfThresholds[i]) {
+      epf_iters++;
+    }
   }
 
   Image3F opsin(RoundUpToBlockDim(linear.xsize()),
@@ -606,21 +607,15 @@ Status EncodeFrame(const float distance, const CodecMetadata* metadata,
   // output: Gaborished XYB, CfL, ACS, raw quant field, EPF control field.
 
   // Compute adaptive quantization field, relies on pre-gaborish values.
-  float butteraugli_distance_for_iqf = distance;
-  if (!shared.frame_header.loop_filter.gab) {
-    butteraugli_distance_for_iqf *= 0.73f;
-  }
   const float quant_dc = InitialQuantDC(distance);
   enc_state.initial_quant_field =
-      InitialQuantField(butteraugli_distance_for_iqf, opsin, shared.frame_dim,
-                        pool, 1.0f, &enc_state.initial_quant_masking);
+      InitialQuantField(distance, opsin, shared.frame_dim, pool, 1.0f,
+                        &enc_state.initial_quant_masking);
   Quantizer& quantizer = shared.quantizer;
   quantizer.SetQuantField(quant_dc, enc_state.initial_quant_field, nullptr);
 
   // Apply inverse-gaborish.
-  if (shared.frame_header.loop_filter.gab) {
-    GaborishInverse(&opsin, 0.9908511000000001f, pool);
-  }
+  GaborishInverse(&opsin, 0.9908511000000001f, pool);
 
   // Flat AR field.
   FillPlane(static_cast<uint8_t>(4), &shared.epf_sharpness);
@@ -672,10 +667,8 @@ Status EncodeFrame(const float distance, const CodecMetadata* metadata,
 
   enc_state.histogram_idx.resize(shared.frame_dim.num_groups);
 
-  enc_state.x_qm_multiplier =
-      std::pow(1.25f, shared.frame_header.x_qm_scale - 2.0f);
-  enc_state.b_qm_multiplier =
-      std::pow(1.25f, shared.frame_header.b_qm_scale - 2.0f);
+  enc_state.x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
+  enc_state.b_qm_multiplier = 1.0;
 
   // Allocate enough coefficients for each group on every row.
   enc_state.coeffs.push_back(make_unique<ACImageT<int32_t>>(
@@ -736,8 +729,7 @@ Status EncodeFrame(const float distance, const CodecMetadata* metadata,
       group_caches[thread].InitOnce();
       TokenizeCoefficients(
           &shared.coeff_orders[idx_pass * shared.coeff_order_size], rect,
-          ac_rows, shared.ac_strategy, YCbCrChromaSubsampling(),
-          &group_caches[thread].num_nzeroes,
+          ac_rows, shared.ac_strategy, &group_caches[thread].num_nzeroes,
           &enc_state.passes[idx_pass].ac_tokens[group_index]);
     }
   };
@@ -748,11 +740,11 @@ Status EncodeFrame(const float distance, const CodecMetadata* metadata,
   // needs to happen *AFTER* VarDCT-ComputeEncodingData.
   JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(pool));
 
-  JXL_RETURN_IF_ERROR(Bundle::Write(shared.frame_header, writer));
+  WriteFrameHeader(x_qm_scale, epf_iters, writer);
 
   // DC global info + DC groups + AC global info + AC groups
-  std::vector<BitWriter> group_codes(
-      NumTocEntries(frame_dim.num_groups, frame_dim.num_dc_groups, 1, true));
+  size_t num_toc_entries = 2 + frame_dim.num_dc_groups + frame_dim.num_groups;
+  std::vector<BitWriter> group_codes(num_toc_entries);
   const size_t global_ac_index = frame_dim.num_dc_groups + 1;
   const bool is_small_image = frame_dim.num_groups == 1;
   const auto get_output = [&](const size_t index) {
@@ -815,12 +807,9 @@ Status EncodeFrame(const float distance, const CodecMetadata* metadata,
       allotment.Reclaim(writer);
     }
 
-    // Encode coefficient orders.
-    size_t order_bits = 0;
-    JXL_RETURN_IF_ERROR(
-        U32Coder::CanEncode(kOrderEnc, enc_state.used_orders[0], &order_bits));
-    BitWriter::Allotment allotment(writer, order_bits);
-    JXL_CHECK(U32Coder::Write(kOrderEnc, enc_state.used_orders[0], writer));
+    BitWriter::Allotment allotment(writer, 1024);
+    writer->Write(2, 3);
+    writer->Write(kNumOrders, enc_state.used_orders[0]);
     allotment.Reclaim(writer);
     EncodeCoeffOrders(enc_state.used_orders[0],
                       &enc_state.shared.coeff_orders[0], writer);

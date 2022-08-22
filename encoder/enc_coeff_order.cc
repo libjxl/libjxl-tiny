@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "encoder/ans_params.h"

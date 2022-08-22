@@ -24,7 +24,6 @@
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_bit_writer.h"
-#include "encoder/fields.h"
 #include "encoder/image.h"
 #include "encoder/linalg.h"
 #include "encoder/quant_weights.h"
@@ -163,16 +162,6 @@ class Quantizer {
 
   float zero_bias_[3];
   const DequantMatrices* dequant_;
-};
-
-struct QuantizerParams : public Fields {
-  QuantizerParams() { Bundle::Init(this); }
-  JXL_FIELDS_NAME(QuantizerParams)
-
-  Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
-
-  uint32_t global_scale;
-  uint32_t quant_dc;
 };
 
 }  // namespace jxl

@@ -155,7 +155,6 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
                           const Rect& rect,
                           const int32_t* JXL_RESTRICT* JXL_RESTRICT ac_rows,
                           const AcStrategyImage& ac_strategy,
-                          YCbCrChromaSubsampling cs,
                           Image3I* JXL_RESTRICT tmp_num_nzeroes,
                           std::vector<Token>* JXL_RESTRICT output) {
   const size_t xsize_blocks = rect.xsize();
@@ -248,11 +247,10 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
                           const Rect& rect,
                           const int32_t* JXL_RESTRICT* JXL_RESTRICT ac_rows,
                           const AcStrategyImage& ac_strategy,
-                          YCbCrChromaSubsampling cs,
                           Image3I* JXL_RESTRICT tmp_num_nzeroes,
                           std::vector<Token>* JXL_RESTRICT output) {
   return HWY_DYNAMIC_DISPATCH(TokenizeCoefficients)(
-      orders, rect, ac_rows, ac_strategy, cs, tmp_num_nzeroes, output);
+      orders, rect, ac_rows, ac_strategy, tmp_num_nzeroes, output);
 }
 
 }  // namespace jxl

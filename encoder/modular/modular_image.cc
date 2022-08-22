@@ -10,7 +10,6 @@
 
 #include "encoder/base/status.h"
 #include "encoder/common.h"
-#include "encoder/modular/transform/transform.h"
 
 namespace jxl {
 
@@ -28,7 +27,6 @@ Image &Image::operator=(Image &&other) noexcept {
   nb_meta_channels = other.nb_meta_channels;
   error = other.error;
   channel = std::move(other.channel);
-  transform = std::move(other.transform);
   return *this;
 }
 
@@ -36,7 +34,6 @@ Image Image::clone() {
   Image c(w, h, bitdepth, 0);
   c.nb_meta_channels = nb_meta_channels;
   c.error = error;
-  c.transform = transform;
   for (Channel &ch : channel) {
     Channel a(ch.w, ch.h, ch.hshift, ch.vshift);
     CopyImageTo(ch.plane, &a.plane);

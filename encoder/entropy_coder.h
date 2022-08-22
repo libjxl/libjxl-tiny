@@ -12,7 +12,6 @@
 
 #include "encoder/ac_context.h"
 #include "encoder/base/compiler_specific.h"
-#include "encoder/field_encodings.h"
 
 // Entropy coding and context modeling of DC and AC coefficients, as well as AC
 // strategy and quantization field.
@@ -30,13 +29,6 @@ static JXL_INLINE int32_t PredictFromTopAndLeft(
   }
   return (row_top[x] + row[x - 1] + 1) / 2;
 }
-
-static constexpr U32Enc kDCThresholdDist(Bits(4), BitsOffset(8, 16),
-                                         BitsOffset(16, 272),
-                                         BitsOffset(32, 65808));
-
-static constexpr U32Enc kQFThresholdDist(Bits(2), BitsOffset(3, 4),
-                                         BitsOffset(5, 12), BitsOffset(8, 44));
 
 }  // namespace jxl
 

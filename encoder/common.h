@@ -87,29 +87,17 @@ constexpr size_t kMaxNumPasses = 11;
 // Maximum number of reference frames.
 constexpr size_t kMaxNumReferenceFrames = 4;
 
-// Dimensions of a frame, in pixels, and other derived dimensions.
-// Computed from FrameHeader.
-// TODO(veluca): add extra channels.
+// Dimensions of an image, in pixels, and other derived dimensions.
 struct FrameDimensions {
-  void Set(size_t xsize, size_t ysize, size_t group_size_shift,
-           bool modular_mode, size_t upsampling) {
-    group_dim = (kGroupDim >> 1) << group_size_shift;
+  void Set(size_t xsize, size_t ysize) {
+    this->xsize = xsize;
+    this->ysize = ysize;
+    group_dim = kGroupDim;
     dc_group_dim = group_dim * kBlockDim;
-    xsize_upsampled = xsize;
-    ysize_upsampled = ysize;
-    this->xsize = DivCeil(xsize, upsampling);
-    this->ysize = DivCeil(ysize, upsampling);
     xsize_blocks = DivCeil(this->xsize, kBlockDim);
     ysize_blocks = DivCeil(this->ysize, kBlockDim);
     xsize_padded = xsize_blocks * kBlockDim;
     ysize_padded = ysize_blocks * kBlockDim;
-    if (modular_mode) {
-      // Modular mode doesn't have any padding.
-      xsize_padded = this->xsize;
-      ysize_padded = this->ysize;
-    }
-    xsize_upsampled_padded = xsize_padded * upsampling;
-    ysize_upsampled_padded = ysize_padded * upsampling;
     xsize_groups = DivCeil(this->xsize, group_dim);
     ysize_groups = DivCeil(this->ysize, group_dim);
     xsize_dc_groups = DivCeil(xsize_blocks, group_dim);
@@ -121,12 +109,6 @@ struct FrameDimensions {
   // Image size without any upsampling, i.e. original_size / upsampling.
   size_t xsize;
   size_t ysize;
-  // Original image size.
-  size_t xsize_upsampled;
-  size_t ysize_upsampled;
-  // Image size after upsampling the padded image.
-  size_t xsize_upsampled_padded;
-  size_t ysize_upsampled_padded;
   // Image size after padding to a multiple of kBlockDim (if VarDCT mode).
   size_t xsize_padded;
   size_t ysize_padded;

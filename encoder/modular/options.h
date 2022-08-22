@@ -24,7 +24,6 @@ enum class Predictor : uint32_t {
   Average0 = 3,
   Select = 4,
   Gradient = 5,
-  Weighted = 6,
   TopRight = 7,
   TopLeft = 8,
   LeftLeft = 9,
@@ -32,16 +31,10 @@ enum class Predictor : uint32_t {
   Average2 = 11,
   Average3 = 12,
   Average4 = 13,
-  // The following predictors are encoder-only.
-  Best = 14,  // Best of Gradient and Weighted
-  Variable =
-      15,  // Find the best decision tree for predictors/predictor per row
 };
 
 constexpr size_t kNumModularPredictors =
     static_cast<size_t>(Predictor::Average4) + 1;
-constexpr size_t kNumModularEncoderPredictors =
-    static_cast<size_t>(Predictor::Variable) + 1;
 
 static constexpr ssize_t kNumStaticProperties = 2;  // channel, group_id.
 

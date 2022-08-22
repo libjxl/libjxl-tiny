@@ -18,7 +18,6 @@
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/dct_scales.h"
-#include "encoder/fields.h"
 #include "encoder/image.h"
 
 #undef HWY_TARGET_INCLUDE

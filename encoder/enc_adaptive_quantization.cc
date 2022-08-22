@@ -26,8 +26,6 @@
 #include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/coeff_order_fwd.h"
-#include "encoder/color_encoding_internal.h"
-#include "encoder/color_management.h"
 #include "encoder/common.h"
 #include "encoder/convolve.h"
 #include "encoder/enc_group.h"

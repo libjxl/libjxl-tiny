@@ -21,8 +21,6 @@
 #include "encoder/common.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"
-#include "encoder/field_encodings.h"
-#include "encoder/fields.h"
 #include "encoder/image.h"
 #include "encoder/opsin_params.h"
 #include "encoder/quant_weights.h"
@@ -41,15 +39,13 @@ static_assert(kGroupDimInBlocks % kColorTileDimInBlocks == 0,
               "Group dim should be divisible by color tile dim");
 
 static constexpr uint8_t kDefaultColorFactor = 84;
+static constexpr float kInvColorFactor = 1.0f / kDefaultColorFactor;
 
 // JPEG DCT coefficients are at most 1024. CfL constants are at most 127, and
 // the ratio of two entries in a JPEG quantization table is at most 255. Thus,
 // since the CfL denominator is 84, this leaves 12 bits of mantissa to be used.
 // For extra caution, we use 11.
 static constexpr uint8_t kCFLFixedPointPrecision = 11;
-
-static constexpr U32Enc kColorFactorDist(Val(kDefaultColorFactor), Val(256),
-                                         BitsOffset(8, 2), BitsOffset(16, 258));
 
 struct ColorCorrelationMap {
   ColorCorrelationMap() = default;
@@ -59,30 +55,11 @@ struct ColorCorrelationMap {
   ColorCorrelationMap(size_t xsize, size_t ysize, bool XYB = true);
 
   float YtoXRatio(int32_t x_factor) const {
-    return base_correlation_x_ + x_factor * color_scale_;
+    return base_correlation_x_ + x_factor * kInvColorFactor;
   }
 
   float YtoBRatio(int32_t b_factor) const {
-    return base_correlation_b_ + b_factor * color_scale_;
-  }
-
-  // We consider a CfL map to be JPEG-reconstruction-compatible if base
-  // correlation is 0, no DC correlation is used, and we use the default color
-  // factor.
-  bool IsJPEGCompatible() const {
-    return base_correlation_x_ == 0 && base_correlation_b_ == 0 &&
-           ytob_dc_ == 0 && ytox_dc_ == 0 &&
-           color_factor_ == kDefaultColorFactor;
-  }
-
-  int32_t RatioJPEG(int32_t factor) const {
-    return factor * (1 << kCFLFixedPointPrecision) / kDefaultColorFactor;
-  }
-
-  void SetColorFactor(uint32_t factor) {
-    color_factor_ = factor;
-    color_scale_ = 1.0f / color_factor_;
-    RecomputeDCFactors();
+    return base_correlation_b_ + b_factor * kInvColorFactor;
   }
 
   void SetYToBDC(int32_t ytob_dc) {
@@ -96,7 +73,6 @@ struct ColorCorrelationMap {
 
   int32_t GetYToXDC() const { return ytox_dc_; }
   int32_t GetYToBDC() const { return ytob_dc_; }
-  float GetColorFactor() const { return color_factor_; }
   float GetBaseCorrelationX() const { return base_correlation_x_; }
   float GetBaseCorrelationB() const { return base_correlation_b_; }
 
@@ -112,9 +88,6 @@ struct ColorCorrelationMap {
 
  private:
   float dc_factors_[4] = {};
-  // range of factor: -1.51 to +1.52
-  uint32_t color_factor_ = kDefaultColorFactor;
-  float color_scale_ = 1.0f / color_factor_;
   float base_correlation_x_ = 0.0f;
   float base_correlation_b_ = kYToBRatio;
   int32_t ytox_dc_ = 0;

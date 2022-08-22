@@ -12,8 +12,6 @@
 #include <algorithm>
 
 #include "encoder/base/compiler_specific.h"
-#include "encoder/field_encodings.h"
-#include "encoder/fields.h"
 #include "encoder/image.h"
 #include "encoder/image_ops.h"
 #include "encoder/quant_weights.h"
@@ -116,21 +114,35 @@ void Quantizer::SetQuant(float quant_dc, float quant_ac,
   FillImage(val, raw_quant_field);
 }
 
-Status QuantizerParams::VisitFields(Visitor* JXL_RESTRICT visitor) {
-  JXL_QUIET_RETURN_IF_ERROR(visitor->U32(
-      BitsOffset(11, 1), BitsOffset(11, 2049), BitsOffset(12, 4097),
-      BitsOffset(16, 8193), 1, &global_scale));
-  JXL_QUIET_RETURN_IF_ERROR(visitor->U32(Val(16), BitsOffset(5, 1),
-                                         BitsOffset(8, 1), BitsOffset(16, 1), 1,
-                                         &quant_dc));
-  return true;
-}
-
 Status Quantizer::Encode(BitWriter* writer) const {
-  QuantizerParams params;
-  params.global_scale = global_scale_;
-  params.quant_dc = quant_dc_;
-  return Bundle::Write(params, writer);
+  BitWriter::Allotment allotment(writer, 1024);
+  if (global_scale_ < 2049) {
+    writer->Write(2, 0);
+    writer->Write(11, global_scale_ - 1);
+  } else if (global_scale_ < 4097) {
+    writer->Write(2, 1);
+    writer->Write(11, global_scale_ - 2049);
+  } else if (global_scale_ < 8193) {
+    writer->Write(2, 2);
+    writer->Write(12, global_scale_ - 4097);
+  } else {
+    writer->Write(2, 3);
+    writer->Write(16, global_scale_ - 8193);
+  }
+  if (quant_dc_ == 16) {
+    writer->Write(2, 0);
+  } else if (quant_dc_ < 33) {
+    writer->Write(2, 1);
+    writer->Write(5, quant_dc_ - 1);
+  } else if (quant_dc_ < 257) {
+    writer->Write(2, 2);
+    writer->Write(8, quant_dc_ - 1);
+  } else {
+    writer->Write(2, 3);
+    writer->Write(16, quant_dc_ - 1);
+  }
+  allotment.Reclaim(writer);
+  return true;
 }
 
 void Quantizer::DumpQuantizationMap(const ImageI& raw_quant_field) const {

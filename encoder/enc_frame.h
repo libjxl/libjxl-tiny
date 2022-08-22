@@ -11,16 +11,13 @@
 #include "encoder/base/status.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/image.h"
-#include "encoder/image_metadata.h"
 
 namespace jxl {
 
-// Encodes a single frame (including its header) into a byte stream.  Groups may
-// be processed in parallel by `pool`. metadata is the ImageMetadata encoded in
-// the codestream, and must be used for the FrameHeaders, do not use
-// ib.metadata.
-Status EncodeFrame(const float distance, const CodecMetadata* metadata,
-                   const Image3F& linear, ThreadPool* pool, BitWriter* writer);
+// Encodes a single frame (including its header) into a byte stream.
+// Groups may be processed in parallel by `pool`.
+Status EncodeFrame(const float distance, const Image3F& linear,
+                   ThreadPool* pool, BitWriter* writer);
 
 }  // namespace jxl
 
