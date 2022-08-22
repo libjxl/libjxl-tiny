@@ -216,8 +216,10 @@ class CommandLineParser {
 
     bool Parse(const int argc, const char* argv[], int* i) override {
       matched_ = true;
-      if (MatchLong(argv[*i])) {
-        const char* arg = argv[*i] + 2 + long_name_len_;
+      bool match_long = MatchLong(argv[*i]);
+      const char* arg;
+      if (match_long) {
+        arg = argv[*i] + 2 + long_name_len_;
         if (arg[0] == '=') {
           if (metavar_) {
             // Passed '--long_name=...'.
@@ -232,15 +234,23 @@ class CommandLineParser {
           }
         }
       }
-      // In any other case, it passed a -s or --long_name
-      (*i)++;
+      if (metavar_ && !match_long && argv[*i][2]) {
+        // Argument is passed as -sN
+        arg = argv[*i] + 2;
+      } else {
+        // In any other case, it passed a -s or --long_name
+        (*i)++;
+        arg = argv[*i];
+      }
       if (metavar_) {
         if (argc <= *i) {
           fprintf(stderr, "--%s expected an argument but none passed.\n",
                   argv[*i - 1]);
           return false;
         }
-        return (*parser_.parser_with_arg_)(argv[(*i)++], storage_);
+        bool retval = (*parser_.parser_with_arg_)(arg, storage_);
+        (*i)++;
+        return retval;
       } else {
         return (*parser_.parser_no_value_)(storage_);
       }
@@ -257,7 +267,7 @@ class CommandLineParser {
     // Returns whether arg matches the short_name flag of this option.
     bool MatchShort(const char* arg) const {
       if (!short_name_ || arg[0] != '-') return false;
-      return arg[1] == short_name_ && arg[2] == 0;
+      return arg[1] == short_name_;
     }
 
     // Returns whether arg matches the long_name flag of this option,
