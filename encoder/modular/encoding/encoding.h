@@ -13,12 +13,10 @@
 #include <vector>
 
 #include "encoder/enc_ans.h"
-#include "encoder/fields.h"
 #include "encoder/image.h"
 #include "encoder/modular/encoding/context_predict.h"
 #include "encoder/modular/modular_image.h"
 #include "encoder/modular/options.h"
-#include "encoder/modular/transform/transform.h"
 
 namespace jxl {
 
@@ -37,31 +35,6 @@ static constexpr size_t kMaxTreeSize = 1 << 22;
 
 // Valid range of properties for using lookup tables instead of trees.
 constexpr int32_t kPropRangeFast = 512;
-
-struct GroupHeader : public Fields {
-  GroupHeader() { Bundle::Init(this); }
-
-  JXL_FIELDS_NAME(GroupHeader)
-
-  Status VisitFields(Visitor *JXL_RESTRICT visitor) override {
-    JXL_QUIET_RETURN_IF_ERROR(visitor->Bool(false, &use_global_tree));
-    JXL_QUIET_RETURN_IF_ERROR(visitor->VisitNested(&wp_header));
-    uint32_t num_transforms = static_cast<uint32_t>(transforms.size());
-    JXL_QUIET_RETURN_IF_ERROR(visitor->U32(Val(0), Val(1), BitsOffset(4, 2),
-                                           BitsOffset(8, 18), 0,
-                                           &num_transforms));
-    if (visitor->IsReading()) transforms.resize(num_transforms);
-    for (size_t i = 0; i < num_transforms; i++) {
-      JXL_QUIET_RETURN_IF_ERROR(visitor->VisitNested(&transforms[i]));
-    }
-    return true;
-  }
-
-  bool use_global_tree;
-  weighted::Header wp_header;
-
-  std::vector<Transform> transforms;
-};
 
 // inner nodes
 struct PropertyDecisionNode {
@@ -107,8 +80,7 @@ using Tree = std::vector<PropertyDecisionNode>;
 
 FlatTree FilterTree(const Tree &global_tree,
                     std::array<pixel_type, kNumStaticProperties> &static_props,
-                    size_t *num_props, bool *use_wp, bool *wp_only,
-                    bool *gradient_only);
+                    size_t *num_props, bool *gradient_only);
 
 void TokenizeTree(const Tree &tree, std::vector<Token> *tokens,
                   Tree *decoder_tree);

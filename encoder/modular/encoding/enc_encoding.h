@@ -22,7 +22,6 @@
 #include "encoder/modular/encoding/encoding.h"
 #include "encoder/modular/modular_image.h"
 #include "encoder/modular/options.h"
-#include "encoder/modular/transform/transform.h"
 
 namespace jxl {
 
@@ -30,7 +29,6 @@ Status ModularGenericCompress(Image &image, const ModularOptions &opts,
                               BitWriter *writer, size_t group_id = 0,
                               size_t *total_pixels = nullptr,
                               const Tree *tree = nullptr,
-                              GroupHeader *header = nullptr,
                               std::vector<Token> *tokens = nullptr,
                               size_t *widths = nullptr);
 }  // namespace jxl

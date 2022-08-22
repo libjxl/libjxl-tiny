@@ -21,7 +21,6 @@
 #include "encoder/base/profiler.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
-#include "encoder/dec_transforms-inl.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/image.h"

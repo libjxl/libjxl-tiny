@@ -26,7 +26,6 @@
 #include "encoder/base/status.h"
 #include "encoder/enc_ans_params.h"
 #include "encoder/enc_bit_writer.h"
-#include "encoder/fields.h"
 #include "encoder/huffman_table.h"
 
 namespace jxl {
@@ -149,26 +148,14 @@ class ANSCoder {
   uint32_t state_;
 };
 
-struct LZ77Params : public Fields {
-  LZ77Params() { Bundle::Init(this); }
-  JXL_FIELDS_NAME(LZ77Params)
-  Status VisitFields(Visitor* JXL_RESTRICT visitor) override {
-    JXL_QUIET_RETURN_IF_ERROR(visitor->Bool(false, &enabled));
-    if (!visitor->Conditional(enabled)) return true;
-    JXL_QUIET_RETURN_IF_ERROR(visitor->U32(
-        Val(224), Val(512), Val(4096), BitsOffset(15, 8), 224, &min_symbol));
-    JXL_QUIET_RETURN_IF_ERROR(visitor->U32(Val(3), Val(4), BitsOffset(2, 5),
-                                           BitsOffset(8, 9), 3, &min_length));
-    return true;
-  }
-  bool enabled;
+struct LZ77Params {
+  bool enabled = false;
 
   // Symbols above min_symbol use a special hybrid uint encoding and
   // represent a length, to be added to min_length.
-  uint32_t min_symbol;
-  uint32_t min_length;
+  uint32_t min_symbol = 224;
+  uint32_t min_length = 3;
 
-  // Not serialized by VisitFields.
   HybridUintConfig length_uint_config{0, 0, 0};
 
   size_t nonserialized_distance_context;

@@ -25,7 +25,6 @@
 #include "encoder/base/span.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
-#include "encoder/dec_transforms-inl.h"
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/image_ops.h"
@@ -48,7 +47,6 @@ static HWY_FULL(float) df;
 struct CFLFunction {
   static constexpr float kCoeff = 1.f / 3;
   static constexpr float kThres = 100.0f;
-  static constexpr float kInvColorFactor = 1.0f / kDefaultColorFactor;
   CFLFunction(const float* values_m, const float* values_s, size_t num,
               float base, float distance_mul)
       : values_m(values_m),
@@ -358,23 +356,22 @@ void CfLHeuristics::ComputeDC(bool fast, ColorCorrelationMap* cmap) {
 }
 
 void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer) {
-  float color_factor = map->GetColorFactor();
   float base_correlation_x = map->GetBaseCorrelationX();
   float base_correlation_b = map->GetBaseCorrelationB();
   int32_t ytox_dc = map->GetYToXDC();
   int32_t ytob_dc = map->GetYToBDC();
 
   BitWriter::Allotment allotment(writer, 1 + 2 * kBitsPerByte + 12 + 32);
-  if (ytox_dc == 0 && ytob_dc == 0 && color_factor == kDefaultColorFactor &&
-      base_correlation_x == 0.0f && base_correlation_b == kYToBRatio) {
+  if (ytox_dc == 0 && ytob_dc == 0 && base_correlation_x == 0.0f &&
+      base_correlation_b == kYToBRatio) {
     writer->Write(1, 1);
     allotment.Reclaim(writer);
     return;
   }
   writer->Write(1, 0);
-  JXL_CHECK(U32Coder::Write(kColorFactorDist, color_factor, writer));
-  JXL_CHECK(F16Coder::Write(base_correlation_x, writer));
-  JXL_CHECK(F16Coder::Write(base_correlation_b, writer));
+  writer->Write(2, 0);  // default color factor
+  JXL_CHECK(WriteFloat16(base_correlation_x, writer));
+  JXL_CHECK(WriteFloat16(base_correlation_b, writer));
   writer->Write(kBitsPerByte, ytox_dc - std::numeric_limits<int8_t>::min());
   writer->Write(kBitsPerByte, ytob_dc - std::numeric_limits<int8_t>::min());
   allotment.Reclaim(writer);

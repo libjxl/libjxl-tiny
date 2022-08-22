@@ -14,9 +14,7 @@
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
 #include "encoder/enc_cache.h"
-#include "encoder/frame_header.h"
 #include "encoder/image.h"
-#include "encoder/loop_filter.h"
 #include "encoder/quant_weights.h"
 #include "encoder/quantizer.h"
 

@@ -29,10 +29,6 @@ typedef int32_t pixel_type;  // can use int16_t if it's only for 8-bit images.
 
 typedef int64_t pixel_type_w;
 
-namespace weighted {
-struct Header;
-}
-
 class Channel {
  public:
   jxl::Plane<pixel_type> plane;
@@ -74,17 +70,12 @@ class Channel {
   }
 };
 
-class Transform;
-
 class Image {
  public:
-  // image data, transforms can dramatically change the number of channels and
-  // their semantics
+  // image data
   std::vector<Channel> channel;
-  // transforms that have been applied (and that have to be undone)
-  std::vector<Transform> transform;
 
-  // image dimensions (channels may have different dimensions due to transforms)
+  // image dimensions
   size_t w, h;
   int bitdepth;
   size_t nb_meta_channels;  // first few channels might contain palette(s)

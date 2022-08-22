@@ -22,7 +22,6 @@
 #include "encoder/base/bits.h"
 #include "encoder/enc_cluster.h"
 #include "encoder/fast_math-inl.h"
-#include "encoder/fields.h"
 
 namespace jxl {
 
@@ -583,9 +582,11 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
 
   const size_t max_contexts = std::min(num_contexts, kClustersLimit);
   BitWriter::Allotment allotment(writer,
-                                 128 + num_contexts * 40 + max_contexts * 96);
-  JXL_CHECK(Bundle::Write(codes->lz77, writer));
+                                 1024 + num_contexts * 40 + max_contexts * 96);
+  writer->Write(1, codes->lz77.enabled);
   if (codes->lz77.enabled) {
+    writer->Write(2, 0);  // min_symbol 224
+    writer->Write(2, 0);  // min_length 3
     writer->Write(4, 0);  // uint config 0,0,0
     num_contexts += 1;
     tokens = std::move(tokens_lz77);

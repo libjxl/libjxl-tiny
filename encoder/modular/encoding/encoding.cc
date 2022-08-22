@@ -23,18 +23,10 @@ namespace jxl {
 // using the weighted predictor.
 FlatTree FilterTree(const Tree &global_tree,
                     std::array<pixel_type, kNumStaticProperties> &static_props,
-                    size_t *num_props, bool *use_wp, bool *wp_only,
-                    bool *gradient_only) {
+                    size_t *num_props, bool *gradient_only) {
   *num_props = 0;
-  bool has_wp = false;
-  bool has_non_wp = false;
   *gradient_only = true;
   const auto mark_property = [&](int32_t p) {
-    if (p == kWPProp) {
-      has_wp = true;
-    } else if (p >= kNumStaticProperties) {
-      has_non_wp = true;
-    }
     if (p >= kNumStaticProperties && p != kGradientProp) {
       *gradient_only = false;
     }
@@ -68,8 +60,6 @@ FlatTree FilterTree(const Tree &global_tree,
       flat.predictor_offset = global_tree[cur].predictor_offset;
       flat.multiplier = global_tree[cur].multiplier;
       *gradient_only &= flat.predictor == Predictor::Gradient;
-      has_wp |= flat.predictor == Predictor::Weighted;
-      has_non_wp |= flat.predictor != Predictor::Weighted;
       output.push_back(flat);
       continue;
     }
@@ -119,8 +109,6 @@ FlatTree FilterTree(const Tree &global_tree,
   } else {
     *num_props = kNumNonrefProperties;
   }
-  *use_wp = has_wp;
-  *wp_only = has_wp && !has_non_wp;
 
   return output;
 }
@@ -146,7 +134,6 @@ void TokenizeTree(const Tree &tree, std::vector<Token> *tokens,
       uint32_t mul_bits = (tree[cur].multiplier >> mul_log) - 1;
       tokens->emplace_back(kMultiplierLogContext, mul_log);
       tokens->emplace_back(kMultiplierBitsContext, mul_bits);
-      JXL_ASSERT(tree[cur].predictor < Predictor::Best);
       decoder_tree->emplace_back(-1, 0, leaf_id++, 0, tree[cur].predictor,
                                  tree[cur].predictor_offset,
                                  tree[cur].multiplier);
