@@ -125,6 +125,43 @@ FlatTree FilterTree(const Tree &global_tree,
   return output;
 }
 
+void TokenizeTree(const Tree &tree, std::vector<Token> *tokens,
+                  Tree *decoder_tree) {
+  JXL_ASSERT(tree.size() <= kMaxTreeSize);
+  std::queue<int> q;
+  q.push(0);
+  size_t leaf_id = 0;
+  decoder_tree->clear();
+  while (!q.empty()) {
+    int cur = q.front();
+    q.pop();
+    JXL_ASSERT(tree[cur].property >= -1);
+    tokens->emplace_back(kPropertyContext, tree[cur].property + 1);
+    if (tree[cur].property == -1) {
+      tokens->emplace_back(kPredictorContext,
+                           static_cast<int>(tree[cur].predictor));
+      tokens->emplace_back(kOffsetContext,
+                           PackSigned(tree[cur].predictor_offset));
+      uint32_t mul_log = Num0BitsBelowLS1Bit_Nonzero(tree[cur].multiplier);
+      uint32_t mul_bits = (tree[cur].multiplier >> mul_log) - 1;
+      tokens->emplace_back(kMultiplierLogContext, mul_log);
+      tokens->emplace_back(kMultiplierBitsContext, mul_bits);
+      JXL_ASSERT(tree[cur].predictor < Predictor::Best);
+      decoder_tree->emplace_back(-1, 0, leaf_id++, 0, tree[cur].predictor,
+                                 tree[cur].predictor_offset,
+                                 tree[cur].multiplier);
+      continue;
+    }
+    decoder_tree->emplace_back(tree[cur].property, tree[cur].splitval,
+                               decoder_tree->size() + q.size() + 1,
+                               decoder_tree->size() + q.size() + 2,
+                               Predictor::Zero, 0, 1);
+    q.push(tree[cur].lchild);
+    q.push(tree[cur].rchild);
+    tokens->emplace_back(kSplitValContext, PackSigned(tree[cur].splitval));
+  }
+}
+
 Status ValidateChannelDimensions(const Image &image,
                                  const ModularOptions &options) {
   size_t nb_channels = image.channel.size();
