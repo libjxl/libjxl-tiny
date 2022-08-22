@@ -133,15 +133,6 @@ Status Quantizer::Encode(BitWriter* writer) const {
   return Bundle::Write(params, writer);
 }
 
-Status Quantizer::Decode(BitReader* reader) {
-  QuantizerParams params;
-  JXL_RETURN_IF_ERROR(Bundle::Read(reader, &params));
-  global_scale_ = static_cast<int>(params.global_scale);
-  quant_dc_ = static_cast<int>(params.quant_dc);
-  RecomputeFromGlobalScale();
-  return true;
-}
-
 void Quantizer::DumpQuantizationMap(const ImageI& raw_quant_field) const {
   printf("Global scale: %d (%.7f)\nDC quant: %d\n", global_scale_,
          global_scale_ * 1.0 / kGlobalScaleDenom, quant_dc_);

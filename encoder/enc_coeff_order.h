@@ -17,7 +17,6 @@
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_bit_writer.h"
 
 namespace jxl {

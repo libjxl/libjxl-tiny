@@ -24,7 +24,6 @@
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/field_encodings.h"
 
@@ -45,10 +44,6 @@ class BitsCoder {
                          static_cast<uint64_t>(bits));
     }
     return true;
-  }
-
-  static uint32_t Read(const size_t bits, BitReader* JXL_RESTRICT reader) {
-    return reader->ReadBits(bits);
   }
 
   // Returns false if the value is too large to encode.
@@ -84,8 +79,6 @@ class U32Coder {
   static size_t MaxEncodedBits(U32Enc enc);
   static Status CanEncode(U32Enc enc, uint32_t value,
                           size_t* JXL_RESTRICT encoded_bits);
-  static uint32_t Read(U32Enc enc, BitReader* JXL_RESTRICT reader);
-
   // Returns false if the value is too large to encode.
   static Status Write(U32Enc enc, uint32_t value,
                       BitWriter* JXL_RESTRICT writer);
@@ -106,8 +99,6 @@ class U64Coder {
     return 2 + 12 + 6 * (8 + 1) + (4 + 1);
   }
 
-  static uint64_t Read(BitReader* JXL_RESTRICT reader);
-
   // Returns false if the value is too large to encode.
   static Status Write(uint64_t value, BitWriter* JXL_RESTRICT writer);
 
@@ -119,9 +110,6 @@ class U64Coder {
 class F16Coder {
  public:
   static constexpr size_t MaxEncodedBits() { return 16; }
-
-  // Returns false if the bit representation is NaN or infinity
-  static Status Read(BitReader* JXL_RESTRICT reader, float* JXL_RESTRICT value);
 
   // Returns false if the value is too large to encode.
   static Status Write(float value, BitWriter* JXL_RESTRICT writer);
@@ -204,17 +192,6 @@ class Bundle {
   static Status CanEncode(const Fields& fields,
                           size_t* JXL_RESTRICT extension_bits,
                           size_t* JXL_RESTRICT total_bits);
-
-  static Status Read(BitReader* reader, Fields* JXL_RESTRICT fields);
-
-  // Returns whether enough bits are available to fully read this bundle using
-  // Read. Also returns true in case of a codestream error (other than not being
-  // large enough): that means enough bits are available to determine there's an
-  // error, use Read to get such error status.
-  // NOTE: this advances the BitReader, a different one pointing back at the
-  // original bit position in the codestream must be created to use Read after
-  // this.
-  static bool CanRead(BitReader* reader, Fields* JXL_RESTRICT fields);
 
   static Status Write(const Fields& fields, BitWriter* JXL_RESTRICT writer);
 

@@ -24,7 +24,6 @@
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/status.h"
-#include "encoder/dec_huffman.h"
 #include "encoder/enc_ans_params.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/fields.h"
@@ -177,7 +176,6 @@ struct LZ77Params : public Fields {
 
 struct ANSCode {
   CacheAlignedUniquePtr alias_tables;
-  std::vector<HuffmanDecodingData> huffman_data;
   std::vector<HybridUintConfig> uint_config;
   std::vector<int> degenerate_symbols;
   bool use_prefix_code;

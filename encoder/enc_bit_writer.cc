@@ -9,7 +9,6 @@
 #include <string.h>  // memcpy
 
 #include "encoder/base/byte_order.h"
-#include "encoder/dec_bit_reader.h"
 
 namespace jxl {
 

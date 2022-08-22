@@ -14,7 +14,6 @@
 
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/status.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/field_encodings.h"
 

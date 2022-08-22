@@ -21,7 +21,6 @@
 #include "encoder/base/status.h"
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/fields.h"
 #include "encoder/image_metadata.h"
@@ -400,9 +399,6 @@ struct FrameHeader : public Fields {
 
   uint64_t extensions;
 };
-
-Status ReadFrameHeader(BitReader* JXL_RESTRICT reader,
-                       FrameHeader* JXL_RESTRICT frame);
 
 // Shared by enc/dec. 5F and 13 are by far the most common for d1/2/4/8, 0
 // ensures low overhead for small images.

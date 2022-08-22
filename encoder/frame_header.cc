@@ -168,11 +168,6 @@ FrameHeader::FrameHeader(const CodecMetadata* metadata)
   Bundle::Init(this);
 }
 
-Status ReadFrameHeader(BitReader* JXL_RESTRICT reader,
-                       FrameHeader* JXL_RESTRICT frame) {
-  return Bundle::Read(reader, frame);
-}
-
 Status FrameHeader::VisitFields(Visitor* JXL_RESTRICT visitor) {
   if (visitor->AllDefault(*this, &all_default)) {
     // Overwrite all serialized fields, but not any nonserialized_*.

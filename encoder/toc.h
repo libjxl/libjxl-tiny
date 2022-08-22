@@ -15,7 +15,6 @@
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/status.h"
 #include "encoder/coeff_order_fwd.h"
-#include "encoder/dec_bit_reader.h"
 #include "encoder/field_encodings.h"
 
 namespace jxl {
@@ -41,15 +40,6 @@ static JXL_INLINE size_t NumTocEntries(size_t num_groups, size_t num_dc_groups,
   return AcGroupIndex(0, 0, num_groups, num_dc_groups, has_ac_global) +
          num_groups * num_passes;
 }
-
-Status ReadToc(size_t toc_entries, BitReader* JXL_RESTRICT reader,
-               std::vector<uint32_t>* JXL_RESTRICT sizes,
-               std::vector<coeff_order_t>* JXL_RESTRICT permutation);
-
-Status ReadGroupOffsets(size_t toc_entries, BitReader* JXL_RESTRICT reader,
-                        std::vector<uint64_t>* JXL_RESTRICT offsets,
-                        std::vector<uint32_t>* JXL_RESTRICT sizes,
-                        uint64_t* total_size);
 
 }  // namespace jxl
 
