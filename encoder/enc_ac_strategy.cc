@@ -22,10 +22,8 @@
 #include "encoder/ans_params.h"
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/coeff_order_fwd.h"
-#include "encoder/convolve.h"
 #include "encoder/dct_scales.h"
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/entropy_coder.h"
@@ -807,7 +805,6 @@ void AcStrategyHeuristics::Init(const Image3F& src, float distance,
 }
 
 void AcStrategyHeuristics::ProcessRect(const Rect& rect) {
-  PROFILER_FUNC;
   // In Falcon mode, use DCT8 everywhere and uniform quantization.
   // enc_state->shared.ac_strategy.FillDCT8(rect);
   // return;

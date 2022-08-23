@@ -13,7 +13,6 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "encoder/base/profiler.h"
 #include "encoder/common.h"
 #include "encoder/image_ops.h"
 #include "encoder/sanitizers.h"
@@ -78,9 +77,6 @@ PlaneBase::PlaneBase(const size_t xsize, const size_t ysize,
       ysize_(static_cast<uint32_t>(ysize)),
       orig_xsize_(static_cast<uint32_t>(xsize)),
       orig_ysize_(static_cast<uint32_t>(ysize)) {
-  // (Can't profile CacheAligned itself because it is used by profiler.h)
-  PROFILER_FUNC;
-
   JXL_CHECK(xsize == xsize_);
   JXL_CHECK(ysize == ysize_);
 
@@ -134,50 +130,7 @@ void PlaneBase::Swap(PlaneBase& other) {
   std::swap(bytes_, other.bytes_);
 }
 
-Image3F PadImageMirror(const Image3F& in, const size_t xborder,
-                       const size_t yborder) {
-  size_t xsize = in.xsize();
-  size_t ysize = in.ysize();
-  Image3F out(xsize + 2 * xborder, ysize + 2 * yborder);
-  if (xborder > xsize || yborder > ysize) {
-    for (size_t c = 0; c < 3; c++) {
-      for (int32_t y = 0; y < static_cast<int32_t>(out.ysize()); y++) {
-        float* row_out = out.PlaneRow(c, y);
-        const float* row_in = in.PlaneRow(
-            c, Mirror(y - static_cast<int32_t>(yborder), in.ysize()));
-        for (int32_t x = 0; x < static_cast<int32_t>(out.xsize()); x++) {
-          int32_t xin = Mirror(x - static_cast<int32_t>(xborder), in.xsize());
-          row_out[x] = row_in[xin];
-        }
-      }
-    }
-    return out;
-  }
-  CopyImageTo(in, Rect(xborder, yborder, xsize, ysize), &out);
-  for (size_t c = 0; c < 3; c++) {
-    // Horizontal pad.
-    for (size_t y = 0; y < ysize; y++) {
-      for (size_t x = 0; x < xborder; x++) {
-        out.PlaneRow(c, y + yborder)[x] =
-            in.ConstPlaneRow(c, y)[xborder - x - 1];
-        out.PlaneRow(c, y + yborder)[x + xsize + xborder] =
-            in.ConstPlaneRow(c, y)[xsize - 1 - x];
-      }
-    }
-    // Vertical pad.
-    for (size_t y = 0; y < yborder; y++) {
-      memcpy(out.PlaneRow(c, y), out.ConstPlaneRow(c, 2 * yborder - 1 - y),
-             out.xsize() * sizeof(float));
-      memcpy(out.PlaneRow(c, y + ysize + yborder),
-             out.ConstPlaneRow(c, ysize + yborder - 1 - y),
-             out.xsize() * sizeof(float));
-    }
-  }
-  return out;
-}
-
 void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in) {
-  PROFILER_FUNC;
   const size_t xsize_orig = in->xsize();
   const size_t ysize_orig = in->ysize();
   const size_t xsize = RoundUpToBlockDim(xsize_orig);
@@ -196,52 +149,6 @@ void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in) {
       memcpy(in->PlaneRow(c, y), row_src, xsize * sizeof(float));
     }
   }
-}
-
-static void DownsampleImage(const ImageF& input, size_t factor,
-                            ImageF* output) {
-  JXL_ASSERT(factor != 1);
-  output->ShrinkTo(DivCeil(input.xsize(), factor),
-                   DivCeil(input.ysize(), factor));
-  size_t in_stride = input.PixelsPerRow();
-  for (size_t y = 0; y < output->ysize(); y++) {
-    float* row_out = output->Row(y);
-    const float* row_in = input.Row(factor * y);
-    for (size_t x = 0; x < output->xsize(); x++) {
-      size_t cnt = 0;
-      float sum = 0;
-      for (size_t iy = 0; iy < factor && iy + factor * y < input.ysize();
-           iy++) {
-        for (size_t ix = 0; ix < factor && ix + factor * x < input.xsize();
-             ix++) {
-          sum += row_in[iy * in_stride + x * factor + ix];
-          cnt++;
-        }
-      }
-      row_out[x] = sum / cnt;
-    }
-  }
-}
-
-void DownsampleImage(ImageF* image, size_t factor) {
-  // Allocate extra space to avoid a reallocation when padding.
-  ImageF downsampled(DivCeil(image->xsize(), factor) + kBlockDim,
-                     DivCeil(image->ysize(), factor) + kBlockDim);
-  DownsampleImage(*image, factor, &downsampled);
-  *image = std::move(downsampled);
-}
-
-void DownsampleImage(Image3F* opsin, size_t factor) {
-  JXL_ASSERT(factor != 1);
-  // Allocate extra space to avoid a reallocation when padding.
-  Image3F downsampled(DivCeil(opsin->xsize(), factor) + kBlockDim,
-                      DivCeil(opsin->ysize(), factor) + kBlockDim);
-  downsampled.ShrinkTo(downsampled.xsize() - kBlockDim,
-                       downsampled.ysize() - kBlockDim);
-  for (size_t c = 0; c < 3; c++) {
-    DownsampleImage(opsin->Plane(c), factor, &downsampled.Plane(c));
-  }
-  *opsin = std::move(downsampled);
 }
 
 }  // namespace jxl

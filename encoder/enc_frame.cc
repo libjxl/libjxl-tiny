@@ -24,9 +24,7 @@
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/data_parallel.h"
-#include "encoder/base/override.h"
 #include "encoder/base/padded_bytes.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/coeff_order.h"
@@ -518,8 +516,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                                 &shared.raw_quant_field);
 
     cfl_heuristics.ComputeTile(r, opsin, shared.matrices, &shared.ac_strategy,
-                               &shared.quantizer,
-                               /*fast=*/true, thread, &shared.cmap);
+                               &shared.quantizer, thread, &shared.cmap);
   };
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0,
@@ -531,7 +528,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
       },
       process_tile, "Enc Heuristics"));
 
-  cfl_heuristics.ComputeDC(/*fast=*/true, &shared.cmap);
+  cfl_heuristics.ComputeDC(&shared.cmap);
 
   enc_state.histogram_idx.resize(shared.frame_dim.num_groups);
 

@@ -14,7 +14,6 @@
 #include <hwy/highway.h>
 
 #include "encoder/base/data_parallel.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/image_ops.h"
 
@@ -181,7 +180,6 @@ class ConvolveT {
   template <class Image, class Weights>
   static void Run(const Image& in, const Rect& rect, const Weights& weights,
                   ThreadPool* pool, Image* out) {
-    PROFILER_ZONE("ConvolveT::Run");
     JXL_CHECK(SameSize(rect, *out));
     JXL_CHECK(rect.xsize() >= MinWidth());
 

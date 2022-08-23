@@ -21,7 +21,6 @@
 
 #include "encoder/base/bits.h"
 #include "encoder/base/padded_bytes.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/span.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
@@ -113,46 +112,27 @@ struct CFLFunction {
 };
 
 int32_t FindBestMultiplier(const float* values_m, const float* values_s,
-                           size_t num, float base, float distance_mul,
-                           bool fast) {
+                           size_t num, float base, float distance_mul) {
   if (num == 0) {
     return 0;
   }
   float x;
-  if (fast) {
-    static constexpr float kInvColorFactor = 1.0f / kDefaultColorFactor;
-    auto ca = Zero(df);
-    auto cb = Zero(df);
-    const auto inv_color_factor = Set(df, kInvColorFactor);
-    const auto base_v = Set(df, base);
-    for (size_t i = 0; i < num; i += Lanes(df)) {
-      // color residual = ax + b
-      const auto a = Mul(inv_color_factor, Load(df, values_m + i));
-      const auto b =
-          Sub(Mul(base_v, Load(df, values_m + i)), Load(df, values_s + i));
-      ca = MulAdd(a, a, ca);
-      cb = MulAdd(a, b, cb);
-    }
-    // + distance_mul * x^2 * num
-    x = -GetLane(SumOfLanes(df, cb)) /
-        (GetLane(SumOfLanes(df, ca)) + num * distance_mul * 0.5f);
-  } else {
-    constexpr float eps = 1;
-    constexpr float kClamp = 20.0f;
-    CFLFunction fn(values_m, values_s, num, base, distance_mul);
-    x = 0;
-    // Up to 20 Newton iterations, with approximate derivatives.
-    // Derivatives are approximate due to the high amount of noise in the exact
-    // derivatives.
-    for (size_t i = 0; i < 20; i++) {
-      float dfpeps, dfmeps;
-      float df = fn.Compute(x, eps, &dfpeps, &dfmeps);
-      float ddf = (dfpeps - dfmeps) / (2 * eps);
-      float step = df / ddf;
-      x -= std::min(kClamp, std::max(-kClamp, step));
-      if (std::abs(step) < 3e-3) break;
-    }
+  static constexpr float kInvColorFactor = 1.0f / kDefaultColorFactor;
+  auto ca = Zero(df);
+  auto cb = Zero(df);
+  const auto inv_color_factor = Set(df, kInvColorFactor);
+  const auto base_v = Set(df, base);
+  for (size_t i = 0; i < num; i += Lanes(df)) {
+    // color residual = ax + b
+    const auto a = Mul(inv_color_factor, Load(df, values_m + i));
+    const auto b =
+        Sub(Mul(base_v, Load(df, values_m + i)), Load(df, values_s + i));
+    ca = MulAdd(a, a, ca);
+    cb = MulAdd(a, b, cb);
   }
+  // + distance_mul * x^2 * num
+  x = -GetLane(SumOfLanes(df, cb)) /
+      (GetLane(SumOfLanes(df, ca)) + num * distance_mul * 0.5f);
   return std::max(-128.0f, std::min(127.0f, roundf(x)));
 }
 
@@ -173,23 +153,22 @@ void InitDCStorage(size_t num_blocks, ImageF* dc_values) {
   }
 }
 
-void ComputeDC(const ImageF& dc_values, bool fast, int32_t* dc_x,
-               int32_t* dc_b) {
+void ComputeDC(const ImageF& dc_values, int32_t* dc_x, int32_t* dc_b) {
   constexpr float kDistanceMultiplierDC = 1e-5f;
   const float* JXL_RESTRICT dc_values_yx = dc_values.Row(0);
   const float* JXL_RESTRICT dc_values_x = dc_values.Row(1);
   const float* JXL_RESTRICT dc_values_yb = dc_values.Row(2);
   const float* JXL_RESTRICT dc_values_b = dc_values.Row(3);
   *dc_x = FindBestMultiplier(dc_values_yx, dc_values_x, dc_values.xsize(), 0.0f,
-                             kDistanceMultiplierDC, fast);
+                             kDistanceMultiplierDC);
   *dc_b = FindBestMultiplier(dc_values_yb, dc_values_b, dc_values.xsize(),
-                             kYToBRatio, kDistanceMultiplierDC, fast);
+                             kYToBRatio, kDistanceMultiplierDC);
 }
 
 void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
                  const AcStrategyImage* ac_strategy, const Quantizer* quantizer,
-                 const Rect& r, bool fast, bool use_dct8, ImageSB* map_x,
-                 ImageSB* map_b, ImageF* dc_values, float* mem) {
+                 const Rect& r, bool use_dct8, ImageSB* map_x, ImageSB* map_b,
+                 ImageF* dc_values, float* mem) {
   size_t xsize_blocks = opsin.xsize() / kBlockDim;
   constexpr float kDistanceMultiplierAC = 1e-3f;
 
@@ -311,9 +290,9 @@ void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
   }
   JXL_CHECK(num_ac % Lanes(df) == 0);
   row_out_x[tx] = FindBestMultiplier(coeffs_yx, coeffs_x, num_ac, 0.0f,
-                                     kDistanceMultiplierAC, fast);
+                                     kDistanceMultiplierAC);
   row_out_b[tx] = FindBestMultiplier(coeffs_yb, coeffs_b, num_ac, kYToBRatio,
-                                     kDistanceMultiplierAC, fast);
+                                     kDistanceMultiplierAC);
 }
 
 // NOLINTNEXTLINE(google-readability-namespace-comments)
@@ -338,18 +317,18 @@ void CfLHeuristics::Init(const Image3F& opsin) {
 void CfLHeuristics::ComputeTile(const Rect& r, const Image3F& opsin,
                                 const DequantMatrices& dequant,
                                 const AcStrategyImage* ac_strategy,
-                                const Quantizer* quantizer, bool fast,
-                                size_t thread, ColorCorrelationMap* cmap) {
+                                const Quantizer* quantizer, size_t thread,
+                                ColorCorrelationMap* cmap) {
   bool use_dct8 = ac_strategy == nullptr;
   HWY_DYNAMIC_DISPATCH(ComputeTile)
-  (opsin, dequant, ac_strategy, quantizer, r, fast, use_dct8, &cmap->ytox_map,
+  (opsin, dequant, ac_strategy, quantizer, r, use_dct8, &cmap->ytox_map,
    &cmap->ytob_map, &dc_values, mem.get() + thread * kItemsPerThread);
 }
 
-void CfLHeuristics::ComputeDC(bool fast, ColorCorrelationMap* cmap) {
+void CfLHeuristics::ComputeDC(ColorCorrelationMap* cmap) {
   int32_t ytob_dc = 0;
   int32_t ytox_dc = 0;
-  HWY_DYNAMIC_DISPATCH(ComputeDC)(dc_values, fast, &ytox_dc, &ytob_dc);
+  HWY_DYNAMIC_DISPATCH(ComputeDC)(dc_values, &ytox_dc, &ytob_dc);
   cmap->SetYToBDC(ytob_dc);
   cmap->SetYToXDC(ytox_dc);
 }

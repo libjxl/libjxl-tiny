@@ -26,7 +26,6 @@
 #include "encoder/base/status.h"
 #include "encoder/enc_ans_params.h"
 #include "encoder/enc_bit_writer.h"
-#include "encoder/huffman_table.h"
 
 namespace jxl {
 

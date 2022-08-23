@@ -343,14 +343,6 @@ class RectT {
   size_t ysize_;
 };
 
-template <typename T>
-std::string Description(RectT<T> r) {
-  std::ostringstream os;
-  os << "[" << r.x0() << ".." << r.x1() << ")x"
-     << "[" << r.y0() << ".." << r.y1() << ")";
-  return os.str();
-}
-
 using Rect = RectT<size_t>;
 
 // Currently, we abuse Image to either refer to an image that owns its storage
