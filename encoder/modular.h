@@ -4,21 +4,124 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef ENCODER_MODULAR_ENCODING_ENCODING_H_
-#define ENCODER_MODULAR_ENCODING_ENCODING_H_
+#ifndef ENCODER_MODULAR_H_
+#define ENCODER_MODULAR_H_
 
 #include <stddef.h>
 #include <stdint.h>
+#include <unistd.h>
 
+#include <array>
+#include <limits>
 #include <vector>
 
+#include "encoder/base/bits.h"
 #include "encoder/enc_ans.h"
 #include "encoder/image.h"
-#include "encoder/modular/encoding/context_predict.h"
-#include "encoder/modular/modular_image.h"
-#include "encoder/modular/options.h"
 
 namespace jxl {
+
+typedef int32_t pixel_type;
+typedef int64_t pixel_type_w;
+
+class Channel {
+ public:
+  jxl::Plane<pixel_type> plane;
+  size_t w, h;
+  Channel(size_t iw, size_t ih, int hsh = 0, int vsh = 0)
+      : plane(iw, ih), w(iw), h(ih) {}
+
+  Channel(const Channel& other) = delete;
+  Channel& operator=(const Channel& other) = delete;
+
+  // Move assignment
+  Channel& operator=(Channel&& other) noexcept {
+    w = other.w;
+    h = other.h;
+    plane = std::move(other.plane);
+    return *this;
+  }
+
+  // Move constructor
+  Channel(Channel&& other) noexcept = default;
+
+  JXL_INLINE pixel_type* Row(const size_t y) { return plane.Row(y); }
+  JXL_INLINE const pixel_type* Row(const size_t y) const {
+    return plane.Row(y);
+  }
+};
+
+class Image {
+ public:
+  // image data
+  std::vector<Channel> channel;
+
+  // image dimensions
+  size_t w, h;
+
+  Image() : w(0), h(0) {}
+  Image(size_t iw, size_t ih, int nb_chans) : w(iw), h(ih) {
+    for (int i = 0; i < nb_chans; i++) {
+      channel.emplace_back(Channel(iw, ih));
+    }
+  }
+
+  Image(const Image& other) = delete;
+  Image& operator=(const Image& other) = delete;
+
+  Image& operator=(Image&& other) noexcept {
+    w = other.w;
+    h = other.h;
+    channel = std::move(other.channel);
+    return *this;
+  }
+  Image(Image&& other) noexcept = default;
+};
+
+using PropertyVal = int32_t;
+using Properties = std::vector<PropertyVal>;
+
+enum class Predictor : uint32_t {
+  Zero = 0,
+  Left = 1,
+  Top = 2,
+  Average0 = 3,
+  Select = 4,
+  Gradient = 5,
+  TopRight = 7,
+  TopLeft = 8,
+  LeftLeft = 9,
+  Average1 = 10,
+  Average2 = 11,
+  Average3 = 12,
+  Average4 = 13,
+};
+
+static constexpr ssize_t kNumStaticProperties = 2;  // channel, group_id.
+static constexpr size_t kNumProperties = kNumStaticProperties + 14;
+constexpr size_t kGradientProp = 9;
+
+// Stores a node and its two children at the same time. This significantly
+// reduces the number of branches needed during decoding.
+struct FlatDecisionNode {
+  // Property + splitval of the top node.
+  int32_t property0;  // -1 if leaf.
+  union {
+    PropertyVal splitval0;
+    Predictor predictor;
+  };
+  uint32_t childID;  // childID is ctx id if leaf.
+  // Property+splitval of the two child nodes.
+  union {
+    PropertyVal splitvals[2];
+    int32_t multiplier;
+  };
+  union {
+    int32_t properties[2];
+    int64_t predictor_offset;
+  };
+};
+using FlatTree = std::vector<FlatDecisionNode>;
 
 enum MATreeContext : size_t {
   kSplitValContext = 0,
@@ -78,15 +181,15 @@ struct PropertyDecisionNode {
 
 using Tree = std::vector<PropertyDecisionNode>;
 
-FlatTree FilterTree(const Tree &global_tree,
-                    std::array<pixel_type, kNumStaticProperties> &static_props,
-                    size_t *num_props, bool *gradient_only);
+FlatTree FilterTree(const Tree& global_tree,
+                    std::array<pixel_type, kNumStaticProperties>& static_props,
+                    bool* gradient_only);
 
-void TokenizeTree(const Tree &tree, std::vector<Token> *tokens,
-                  Tree *decoder_tree);
+void TokenizeTree(const Tree& tree, std::vector<Token>* tokens,
+                  Tree* decoder_tree);
 
 template <typename T>
-bool TreeToLookupTable(const FlatTree &tree,
+bool TreeToLookupTable(const FlatTree& tree,
                        T context_lookup[2 * kPropRangeFast],
                        int8_t offsets[2 * kPropRangeFast],
                        int8_t multipliers[2 * kPropRangeFast] = nullptr) {
@@ -106,7 +209,7 @@ bool TreeToLookupTable(const FlatTree &tree,
       // Tree is outside the allowed range, exit.
       return false;
     }
-    auto &node = tree[cur.pos];
+    auto& node = tree[cur.pos];
     // Leaf.
     if (node.property0 == -1) {
       if (node.predictor_offset < std::numeric_limits<int8_t>::min() ||
@@ -151,4 +254,4 @@ bool TreeToLookupTable(const FlatTree &tree,
 
 }  // namespace jxl
 
-#endif  // ENCODER_MODULAR_ENCODING_ENCODING_H_
+#endif  // ENCODER_MODULAR_H_

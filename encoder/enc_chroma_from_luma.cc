@@ -28,7 +28,6 @@
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/image_ops.h"
-#include "encoder/modular/encoding/encoding.h"
 #include "encoder/quantizer.h"
 
 HWY_BEFORE_NAMESPACE();

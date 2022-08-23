@@ -4,38 +4,15 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef ENCODER_MODULAR_ENCODING_CONTEXT_PREDICT_H_
-#define ENCODER_MODULAR_ENCODING_CONTEXT_PREDICT_H_
+#ifndef ENCODER_CONTEXT_PREDICT_H_
+#define ENCODER_CONTEXT_PREDICT_H_
 
 #include <utility>
 #include <vector>
 
-#include "encoder/modular/modular_image.h"
-#include "encoder/modular/options.h"
+#include "encoder/modular.h"
 
 namespace jxl {
-
-// Stores a node and its two children at the same time. This significantly
-// reduces the number of branches needed during decoding.
-struct FlatDecisionNode {
-  // Property + splitval of the top node.
-  int32_t property0;  // -1 if leaf.
-  union {
-    PropertyVal splitval0;
-    Predictor predictor;
-  };
-  uint32_t childID;  // childID is ctx id if leaf.
-  // Property+splitval of the two child nodes.
-  union {
-    PropertyVal splitvals[2];
-    int32_t multiplier;
-  };
-  union {
-    int32_t properties[2];
-    int64_t predictor_offset;
-  };
-};
-using FlatTree = std::vector<FlatDecisionNode>;
 
 class MATreeLookup {
  public:
@@ -66,11 +43,6 @@ class MATreeLookup {
   const FlatTree &nodes_;
 };
 
-static constexpr size_t kExtraPropsPerChannel = 4;
-static constexpr size_t kNumNonrefProperties = kNumStaticProperties + 14;
-
-constexpr size_t kGradientProp = 9;
-
 // Clamps gradient to the min/max of n, w (and l, implicitly).
 static JXL_INLINE int32_t ClampedGradient(const int32_t n, const int32_t w,
                                           const int32_t l) {
@@ -98,57 +70,12 @@ inline pixel_type_w Select(pixel_type_w a, pixel_type_w b, pixel_type_w c) {
   return pa < pb ? a : b;
 }
 
-inline void PrecomputeReferences(const Channel &ch, size_t y,
-                                 const Image &image, uint32_t i,
-                                 Channel *references) {
-  ZeroFillImage(&references->plane);
-  uint32_t offset = 0;
-  size_t num_extra_props = references->w;
-  intptr_t onerow = references->plane.PixelsPerRow();
-  for (int32_t j = static_cast<int32_t>(i) - 1;
-       j >= 0 && offset < num_extra_props; j--) {
-    if (image.channel[j].w != image.channel[i].w ||
-        image.channel[j].h != image.channel[i].h) {
-      continue;
-    }
-    if (image.channel[j].hshift != image.channel[i].hshift) continue;
-    if (image.channel[j].vshift != image.channel[i].vshift) continue;
-    pixel_type *JXL_RESTRICT rp = references->Row(0) + offset;
-    const pixel_type *JXL_RESTRICT rpp = image.channel[j].Row(y);
-    const pixel_type *JXL_RESTRICT rpprev = image.channel[j].Row(y ? y - 1 : 0);
-    for (size_t x = 0; x < ch.w; x++, rp += onerow) {
-      pixel_type_w v = rpp[x];
-      rp[0] = std::abs(v);
-      rp[1] = v;
-      pixel_type_w vleft = (x ? rpp[x - 1] : 0);
-      pixel_type_w vtop = (y ? rpprev[x] : vleft);
-      pixel_type_w vtopleft = (x && y ? rpprev[x - 1] : vleft);
-      pixel_type_w vpredicted = ClampedGradient(vleft, vtop, vtopleft);
-      rp[2] = std::abs(v - vpredicted);
-      rp[3] = v - vpredicted;
-    }
-
-    offset += kExtraPropsPerChannel;
-  }
-}
-
 struct PredictionResult {
   int context = 0;
   pixel_type_w guess = 0;
   Predictor predictor;
   int32_t multiplier;
 };
-
-inline void InitPropsRow(
-    Properties *p,
-    const std::array<pixel_type, kNumStaticProperties> &static_props,
-    const int y) {
-  for (size_t i = 0; i < kNumStaticProperties; i++) {
-    (*p)[i] = static_props[i];
-  }
-  (*p)[2] = y;
-  (*p)[9] = 0;  // local gradient.
-}
 
 namespace detail {
 enum PredictorMode {
@@ -200,7 +127,6 @@ JXL_INLINE PredictionResult Predict(Properties *p, size_t w,
                                     const intptr_t onerow, const size_t x,
                                     const size_t y, Predictor predictor,
                                     const MATreeLookup *lookup,
-                                    const Channel *references,
                                     pixel_type_w *predictions) {
   // We start in position 3 because of 2 static properties + y.
   size_t offset = 3;
@@ -236,14 +162,6 @@ JXL_INLINE PredictionResult Predict(Properties *p, size_t w,
     (*p)[offset++] = left - leftleft;
   }
 
-  if (compute_properties) {
-    offset += 1;
-    // Extra properties.
-    const pixel_type *JXL_RESTRICT rp = references->Row(x);
-    for (size_t i = 0; i < references->w; i++) {
-      (*p)[offset++] = rp[i];
-    }
-  }
   PredictionResult result;
   if (mode & kUseTree) {
     MATreeLookup::LookupResult lr = lookup->Lookup(*p);
@@ -266,20 +184,19 @@ inline PredictionResult PredictNoTreeNoWP(size_t w,
                                           const int y, Predictor predictor) {
   return detail::Predict</*mode=*/0>(
       /*p=*/nullptr, w, pp, onerow, x, y, predictor, /*lookup=*/nullptr,
-      /*references=*/nullptr, /*predictions=*/nullptr);
+      /*predictions=*/nullptr);
 }
 
 inline PredictionResult PredictTreeNoWP(Properties *p, size_t w,
                                         const pixel_type *JXL_RESTRICT pp,
                                         const intptr_t onerow, const int x,
                                         const int y,
-                                        const MATreeLookup &tree_lookup,
-                                        const Channel &references) {
-  return detail::Predict<detail::kUseTree>(
-      p, w, pp, onerow, x, y, Predictor::Zero, &tree_lookup, &references,
-      /*predictions=*/nullptr);
+                                        const MATreeLookup &tree_lookup) {
+  return detail::Predict<detail::kUseTree>(p, w, pp, onerow, x, y,
+                                           Predictor::Zero, &tree_lookup,
+                                           /*predictions=*/nullptr);
 }
 
 }  // namespace jxl
 
-#endif  // ENCODER_MODULAR_ENCODING_CONTEXT_PREDICT_H_
+#endif  // ENCODER_CONTEXT_PREDICT_H_
