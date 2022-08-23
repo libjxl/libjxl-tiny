@@ -25,12 +25,8 @@
 
 namespace jxl {
 
-Status ModularGenericCompress(Image &image, const ModularOptions &opts,
-                              BitWriter *writer, size_t group_id = 0,
-                              size_t *total_pixels = nullptr,
-                              const Tree *tree = nullptr,
-                              std::vector<Token> *tokens = nullptr,
-                              size_t *widths = nullptr);
+Status ModularGenericCompress(Image &image, size_t group_id, const Tree &tree,
+                              std::vector<Token> *tokens, size_t *widths);
 }  // namespace jxl
 
 #endif  // ENCODER_MODULAR_ENCODING_ENC_ENCODING_H_

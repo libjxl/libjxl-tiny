@@ -73,7 +73,7 @@ void WriteSize(uint32_t size, BitWriter* writer) {
 }  // namespace
 
 Status WriteSizeHeader(size_t xsize64, size_t ysize64, BitWriter* writer) {
-  if (xsize64 > 0xFFFFFFFFull || ysize64 > 0xFFFFFFFFull) {
+  if (xsize64 > 0x3FFFFFFFull || ysize64 > 0x3FFFFFFFull) {
     return JXL_FAILURE("Image too large");
   }
   const uint32_t xsize32 = static_cast<uint32_t>(xsize64);

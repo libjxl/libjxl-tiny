@@ -374,18 +374,13 @@ class HistogramBuilder {
         writer->Write(1, 1);  // Simple code
         writer->Write(2, 0);  // 0 bits per entry.
       } else {
-        std::vector<std::vector<Token>> tokens(1);
-        EntropyEncodingData codes;
-        std::vector<uint8_t> dummy_context_map;
+        std::vector<Token> tokens;
         for (size_t i = 0; i < context_map->size(); i++) {
-          tokens[0].emplace_back(0, (*context_map)[i]);
+          tokens.emplace_back(0, (*context_map)[i]);
         }
-        HistogramParams params;
         writer->Write(1, 0);
         writer->Write(1, 0);  // Don't use MTF.
-        BuildAndEncodeHistograms(params, 1, tokens, &codes, &dummy_context_map,
-                                 writer);
-        WriteTokens(tokens[0], codes, dummy_context_map, writer);
+        WriteHistogramsAndTokens(HistogramParams(), 1, tokens, writer);
       }
     }
     codes->uint_config.resize(clustered_histograms.size());
@@ -692,6 +687,17 @@ void WriteTokens(const std::vector<Token>& tokens,
     writer->Write(out_nbits[i - 1], out[i - 1]);
   }
   allotment.Reclaim(writer);
+}
+
+void WriteHistogramsAndTokens(const HistogramParams& params,
+                              size_t num_contexts, std::vector<Token>& tokens,
+                              BitWriter* writer) {
+  std::vector<std::vector<Token>> tokens_vec(1, tokens);
+  EntropyEncodingData codes;
+  std::vector<uint8_t> dummy_context_map;
+  BuildAndEncodeHistograms(params, num_contexts, tokens_vec, &codes,
+                           &dummy_context_map, writer);
+  WriteTokens(tokens_vec[0], codes, dummy_context_map, writer);
 }
 
 }  // namespace jxl

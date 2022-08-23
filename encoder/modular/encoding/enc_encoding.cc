@@ -19,7 +19,6 @@
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/enc_ans.h"
-#include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/image_ops.h"
 #include "encoder/modular/encoding/context_predict.h"
@@ -135,10 +134,8 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
   return true;
 }
 
-Status ModularEncode(const Image &image, const ModularOptions &options,
-                     BitWriter *writer, size_t group_id, size_t *total_pixels,
-                     const Tree *tree, std::vector<Token> *tokens,
-                     size_t *width) {
+Status ModularEncode(const Image &image, size_t group_id, const Tree &tree,
+                     std::vector<Token> *tokens, size_t *width) {
   if (image.error) return JXL_FAILURE("Invalid image");
   size_t nb_channels = image.channel.size();
   JXL_DEBUG_V(
@@ -149,76 +146,38 @@ Status ModularEncode(const Image &image, const ModularOptions &options,
     return true;  // is there any use for a zero-channel image?
   }
 
-  size_t total_pixels_storage = 0;
-  if (!total_pixels) total_pixels = &total_pixels_storage;
-
-  JXL_ASSERT(tree);
-
-  Tree tree_storage;
   std::vector<std::vector<Token>> tokens_storage(1);
 
   size_t image_width = 0;
   size_t total_tokens = 0;
   for (size_t i = 0; i < nb_channels; i++) {
-    if (i >= image.nb_meta_channels &&
-        (image.channel[i].w > options.max_chan_size ||
-         image.channel[i].h > options.max_chan_size)) {
-      break;
-    }
     if (image.channel[i].w > image_width) image_width = image.channel[i].w;
     total_tokens += image.channel[i].w * image.channel[i].h;
   }
-  if (options.zero_tokens) {
-    tokens->resize(tokens->size() + total_tokens, {0, 0});
-  } else {
-    // Do one big allocation for all the tokens we'll need,
-    // to avoid reallocs that might require copying.
-    size_t pos = tokens->size();
-    tokens->resize(pos + total_tokens);
-    Token *tokenp = tokens->data() + pos;
-    for (size_t i = 0; i < nb_channels; i++) {
-      if (!image.channel[i].w || !image.channel[i].h) {
-        continue;  // skip empty channels
-      }
-      if (i >= image.nb_meta_channels &&
-          (image.channel[i].w > options.max_chan_size ||
-           image.channel[i].h > options.max_chan_size)) {
-        break;
-      }
-      JXL_RETURN_IF_ERROR(
-          EncodeModularChannelMAANS(image, i, *tree, &tokenp, group_id));
+  // Do one big allocation for all the tokens we'll need,
+  // to avoid reallocs that might require copying.
+  size_t pos = tokens->size();
+  tokens->resize(pos + total_tokens);
+  Token *tokenp = tokens->data() + pos;
+  for (size_t i = 0; i < nb_channels; i++) {
+    if (!image.channel[i].w || !image.channel[i].h) {
+      continue;  // skip empty channels
     }
-    // Make sure we actually wrote all tokens
-    JXL_CHECK(tokenp == tokens->data() + tokens->size());
+    JXL_RETURN_IF_ERROR(
+        EncodeModularChannelMAANS(image, i, tree, &tokenp, group_id));
   }
+  // Make sure we actually wrote all tokens
+  JXL_CHECK(tokenp == tokens->data() + tokens->size());
 
   *width = image_width;
   return true;
 }
 
-Status ModularGenericCompress(Image &image, const ModularOptions &opts,
-                              BitWriter *writer, size_t group_id,
-                              size_t *total_pixels, const Tree *tree,
+Status ModularGenericCompress(Image &image, size_t group_id, const Tree &tree,
                               std::vector<Token> *tokens, size_t *width) {
   if (image.w == 0 || image.h == 0) return true;
-  ModularOptions options = opts;  // Make a copy to modify it.
 
-  if (options.predictor == static_cast<Predictor>(-1)) {
-    options.predictor = Predictor::Gradient;
-  }
-
-  size_t bits = writer ? writer->BitsWritten() : 0;
-  JXL_RETURN_IF_ERROR(ModularEncode(image, options, writer, group_id,
-                                    total_pixels, tree, tokens, width));
-  bits = writer ? writer->BitsWritten() - bits : 0;
-  if (writer) {
-    JXL_DEBUG_V(4,
-                "Modular-encoded a %" PRIuS "x%" PRIuS
-                " bitdepth=%i nbchans=%" PRIuS " image in %" PRIuS " bytes",
-                image.w, image.h, image.bitdepth, image.channel.size(),
-                bits / 8);
-  }
-  (void)bits;
+  JXL_RETURN_IF_ERROR(ModularEncode(image, group_id, tree, tokens, width));
   return true;
 }
 
