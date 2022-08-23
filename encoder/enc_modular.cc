@@ -128,15 +128,13 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
 }
 
 Status ModularEncode(const Image &image, size_t group_id, const Tree &tree,
-                     std::vector<Token> *tokens, size_t *width) {
+                     std::vector<Token> *tokens) {
   size_t nb_channels = image.channel.size();
   if (nb_channels < 1) {
     return true;  // is there any use for a zero-channel image?
   }
-  size_t image_width = 0;
   size_t total_tokens = 0;
   for (size_t i = 0; i < nb_channels; i++) {
-    if (image.channel[i].w > image_width) image_width = image.channel[i].w;
     total_tokens += image.channel[i].w * image.channel[i].h;
   }
   // Do one big allocation for all the tokens we'll need,
@@ -154,15 +152,6 @@ Status ModularEncode(const Image &image, size_t group_id, const Tree &tree,
   // Make sure we actually wrote all tokens
   JXL_CHECK(tokenp == tokens->data() + tokens->size());
 
-  *width = image_width;
-  return true;
-}
-
-Status ModularGenericCompress(Image &image, size_t group_id, const Tree &tree,
-                              std::vector<Token> *tokens, size_t *width) {
-  if (image.w == 0 || image.h == 0) return true;
-
-  JXL_RETURN_IF_ERROR(ModularEncode(image, group_id, tree, tokens, width));
   return true;
 }
 

@@ -234,8 +234,8 @@ void EncodePermutation(const coeff_order_t* JXL_RESTRICT order, size_t skip,
   TokenizePermutation(order, skip, size, &tokens[0]);
   std::vector<uint8_t> context_map;
   EntropyEncodingData codes;
-  BuildAndEncodeHistograms(HistogramParams(), kPermutationContexts, tokens,
-                           &codes, &context_map, writer);
+  BuildAndEncodeHistograms(kPermutationContexts, tokens, &codes, &context_map,
+                           writer);
   WriteTokens(tokens[0], codes, context_map, writer);
 }
 
@@ -278,8 +278,8 @@ void EncodeCoeffOrders(uint16_t used_orders,
   if (used_orders != 0) {
     std::vector<uint8_t> context_map;
     EntropyEncodingData codes;
-    BuildAndEncodeHistograms(HistogramParams(), kPermutationContexts, tokens,
-                             &codes, &context_map, writer);
+    BuildAndEncodeHistograms(kPermutationContexts, tokens, &codes, &context_map,
+                             writer);
     WriteTokens(tokens[0], codes, context_map, writer);
   }
 }
