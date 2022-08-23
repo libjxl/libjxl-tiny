@@ -4,6 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
+#include "encoder/enc_modular.h"
+
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -18,12 +20,11 @@
 #include "encoder/base/printf_macros.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
+#include "encoder/context_predict.h"
 #include "encoder/enc_ans.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/image_ops.h"
-#include "encoder/modular/encoding/context_predict.h"
-#include "encoder/modular/encoding/encoding.h"
-#include "encoder/modular/options.h"
+#include "encoder/modular.h"
 
 namespace jxl {
 
@@ -34,19 +35,11 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
   Token *tokenp = *tokenpp;
   JXL_ASSERT(channel.w != 0 && channel.h != 0);
 
-  JXL_DEBUG_V(6,
-              "Encoding %" PRIuS "x%" PRIuS
-              " channel %d, "
-              "(shift=%i,%i)",
-              channel.w, channel.h, chan, channel.hshift, channel.vshift);
-
   std::array<pixel_type, kNumStaticProperties> static_props = {
       {chan, (int)group_id}};
   bool is_gradient_only;
-  size_t num_props;
-  FlatTree tree =
-      FilterTree(global_tree, static_props, &num_props, &is_gradient_only);
-  Properties properties(num_props);
+  FlatTree tree = FilterTree(global_tree, static_props, &is_gradient_only);
+  Properties properties(kNumProperties);
   MATreeLookup tree_lookup(tree);
   JXL_DEBUG_V(3, "Encoding using a MA tree with %" PRIuS " nodes", tree.size());
 
@@ -115,15 +108,15 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
 
   } else {
     const intptr_t onerow = channel.plane.PixelsPerRow();
-    Channel references(properties.size() - kNumNonrefProperties, channel.w);
     for (size_t y = 0; y < channel.h; y++) {
       const pixel_type *JXL_RESTRICT p = channel.Row(y);
-      PrecomputeReferences(channel, y, image, chan, &references);
-      InitPropsRow(&properties, static_props, y);
+      properties[0] = chan;
+      properties[1] = group_id;
+      properties[2] = y;
+      properties[9] = 0;  // local gradient
       for (size_t x = 0; x < channel.w; x++) {
-        PredictionResult res =
-            PredictTreeNoWP(&properties, channel.w, p + x, onerow, x, y,
-                            tree_lookup, references);
+        PredictionResult res = PredictTreeNoWP(&properties, channel.w, p + x,
+                                               onerow, x, y, tree_lookup);
         pixel_type_w residual = p[x] - res.guess;
         JXL_ASSERT(residual % res.multiplier == 0);
         *tokenp++ = Token(res.context, PackSigned(residual / res.multiplier));
@@ -136,18 +129,10 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
 
 Status ModularEncode(const Image &image, size_t group_id, const Tree &tree,
                      std::vector<Token> *tokens, size_t *width) {
-  if (image.error) return JXL_FAILURE("Invalid image");
   size_t nb_channels = image.channel.size();
-  JXL_DEBUG_V(
-      2, "Encoding %" PRIuS "-channel, %i-bit, %" PRIuS "x%" PRIuS " image.",
-      nb_channels, image.bitdepth, image.w, image.h);
-
   if (nb_channels < 1) {
     return true;  // is there any use for a zero-channel image?
   }
-
-  std::vector<std::vector<Token>> tokens_storage(1);
-
   size_t image_width = 0;
   size_t total_tokens = 0;
   for (size_t i = 0; i < nb_channels; i++) {

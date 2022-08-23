@@ -4,16 +4,16 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#include "encoder/modular/encoding/encoding.h"
+#include "encoder/modular.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <array>
 #include <queue>
 
 #include "encoder/base/printf_macros.h"
-#include "encoder/modular/encoding/context_predict.h"
-#include "encoder/modular/options.h"
+#include "encoder/context_predict.h"
 
 namespace jxl {
 
@@ -23,8 +23,7 @@ namespace jxl {
 // using the weighted predictor.
 FlatTree FilterTree(const Tree &global_tree,
                     std::array<pixel_type, kNumStaticProperties> &static_props,
-                    size_t *num_props, bool *gradient_only) {
-  *num_props = 0;
+                    bool *gradient_only) {
   *gradient_only = true;
   const auto mark_property = [&](int32_t p) {
     if (p >= kNumStaticProperties && p != kGradientProp) {
@@ -66,7 +65,6 @@ FlatTree FilterTree(const Tree &global_tree,
     flat.childID = output.size() + nodes.size() + 1;
 
     flat.property0 = global_tree[cur].property;
-    *num_props = std::max<size_t>(flat.property0 + 1, *num_props);
     flat.splitval0 = global_tree[cur].splitval;
 
     for (size_t i = 0; i < 2; i++) {
@@ -93,21 +91,12 @@ FlatTree FilterTree(const Tree &global_tree,
         flat.splitvals[i] = global_tree[cur_child].splitval;
         nodes.push(global_tree[cur_child].lchild);
         nodes.push(global_tree[cur_child].rchild);
-        *num_props = std::max<size_t>(flat.properties[i] + 1, *num_props);
       }
     }
 
     for (size_t j = 0; j < 2; j++) mark_property(flat.properties[j]);
     mark_property(flat.property0);
     output.push_back(flat);
-  }
-  if (*num_props > kNumNonrefProperties) {
-    *num_props =
-        DivCeil(*num_props - kNumNonrefProperties, kExtraPropsPerChannel) *
-            kExtraPropsPerChannel +
-        kNumNonrefProperties;
-  } else {
-    *num_props = kNumNonrefProperties;
   }
 
   return output;

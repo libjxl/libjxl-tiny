@@ -32,6 +32,7 @@
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
+#include "encoder/context_predict.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_ac_strategy.h"
 #include "encoder/enc_adaptive_quantization.h"
@@ -42,16 +43,13 @@
 #include "encoder/enc_coeff_order.h"
 #include "encoder/enc_entropy_coder.h"
 #include "encoder/enc_group.h"
+#include "encoder/enc_modular.h"
 #include "encoder/enc_toc.h"
 #include "encoder/enc_xyb.h"
 #include "encoder/gaborish.h"
 #include "encoder/image.h"
 #include "encoder/image_ops.h"
-#include "encoder/modular/encoding/context_predict.h"
-#include "encoder/modular/encoding/enc_encoding.h"
-#include "encoder/modular/encoding/encoding.h"
-#include "encoder/modular/modular_image.h"
-#include "encoder/modular/options.h"
+#include "encoder/modular.h"
 #include "encoder/quant_weights.h"
 #include "encoder/quantizer.h"
 
@@ -299,7 +297,7 @@ class ModularFrameEncoder {
 
     size_t stream_id = ModularStreamId::VarDCTDC(group_index).ID(frame_dim_);
 
-    stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 8, 3);
+    stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 3);
     for (size_t c : {1, 0, 2}) {
       float inv_factor = shared->quantizer.GetInvDcStep(c);
       float y_factor = shared->quantizer.GetDcStep(1);
@@ -331,7 +329,7 @@ class ModularFrameEncoder {
     size_t stream_id = ModularStreamId::ACMetadata(group_index).ID(frame_dim_);
     // YToX, YToB, ACS + QF, EPF
     Image& image = stream_images_[stream_id];
-    image = Image(r.xsize(), r.ysize(), 8, 4);
+    image = Image(r.xsize(), r.ysize(), 4);
     static_assert(kColorTileDimInBlocks == 8, "Color tile size changed");
     Rect cr(r.x0() >> 3, r.y0() >> 3, (r.xsize() + 7) >> 3,
             (r.ysize() + 7) >> 3);

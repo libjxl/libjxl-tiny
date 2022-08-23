@@ -20,8 +20,6 @@
 #include "encoder/enc_bit_writer.h"
 #include "encoder/entropy_coder.h"
 #include "encoder/lehmer_code.h"
-#include "encoder/modular/encoding/encoding.h"
-#include "encoder/modular/modular_image.h"
 #include "hwy/aligned_allocator.h"
 
 namespace jxl {
