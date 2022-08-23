@@ -24,7 +24,6 @@
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/status.h"
-#include "encoder/enc_ans_params.h"
 #include "encoder/enc_bit_writer.h"
 
 namespace jxl {
@@ -147,30 +146,9 @@ class ANSCoder {
   uint32_t state_;
 };
 
-struct LZ77Params {
-  bool enabled = false;
-
-  // Symbols above min_symbol use a special hybrid uint encoding and
-  // represent a length, to be added to min_length.
-  uint32_t min_symbol = 224;
-  uint32_t min_length = 3;
-
-  HybridUintConfig length_uint_config{0, 0, 0};
-
-  size_t nonserialized_distance_context;
-};
-
 struct ANSCode {
   CacheAlignedUniquePtr alias_tables;
-  std::vector<HybridUintConfig> uint_config;
-  std::vector<int> degenerate_symbols;
-  bool use_prefix_code;
   uint8_t log_alpha_size;  // for ANS.
-  LZ77Params lz77;
-  // Maximum number of bits necessary to represent the result of a
-  // ReadHybridUint call done with this ANSCode.
-  size_t max_num_bits = 0;
-  void UpdateMaxNumBits(size_t ctx, size_t symbol);
 };
 
 // RebalanceHistogram requires a signed type.
@@ -179,16 +157,13 @@ using ANSHistBin = int32_t;
 struct EntropyEncodingData {
   std::vector<std::vector<ANSEncSymbolInfo>> encoding_info;
   std::vector<HybridUintConfig> uint_config;
-  LZ77Params lz77;
 };
 
 // Integer to be encoded by an entropy coder, either ANS or Huffman.
 struct Token {
   Token() {}
-  Token(uint32_t c, uint32_t value)
-      : is_lz77_length(false), context(c), value(value) {}
-  uint32_t is_lz77_length : 1;
-  uint32_t context : 31;
+  Token(uint32_t c, uint32_t value) : context(c), value(value) {}
+  uint32_t context;
   uint32_t value;
 };
 
@@ -196,8 +171,7 @@ struct Token {
 // estimate of the total bits used for encoding the stream. If `writer` ==
 // nullptr, the bit estimate will not take into account the context map (which
 // does not get written if `num_contexts` == 1).
-void BuildAndEncodeHistograms(const HistogramParams& params,
-                              size_t num_contexts,
+void BuildAndEncodeHistograms(size_t num_contexts,
                               std::vector<std::vector<Token>>& tokens,
                               EntropyEncodingData* codes,
                               std::vector<uint8_t>* context_map,
@@ -208,16 +182,8 @@ void WriteTokens(const std::vector<Token>& tokens,
                  const EntropyEncodingData& codes,
                  const std::vector<uint8_t>& context_map, BitWriter* writer);
 
-void WriteHistogramsAndTokens(const HistogramParams& params,
-                              size_t num_contexts, std::vector<Token>& tokens,
+void WriteHistogramsAndTokens(size_t num_contexts, std::vector<Token>& tokens,
                               BitWriter* writer);
-
-// Exposed for tests; to be used with Writer=BitWriter only.
-template <typename Writer>
-void EncodeUintConfigs(const std::vector<HybridUintConfig>& uint_config,
-                       Writer* writer, size_t log_alpha_size);
-extern template void EncodeUintConfigs(const std::vector<HybridUintConfig>&,
-                                       BitWriter*, size_t);
 
 }  // namespace jxl
 #endif  // ENCODER_ENC_ANS_H_

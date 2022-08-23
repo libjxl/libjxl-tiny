@@ -354,8 +354,7 @@ class HistogramBuilder {
     histograms_[histo_idx].Add(symbol);
   }
 
-  void BuildAndStoreEntropyCodes(const HistogramParams& params,
-                                 const std::vector<std::vector<Token>>& tokens,
+  void BuildAndStoreEntropyCodes(const std::vector<std::vector<Token>>& tokens,
                                  EntropyEncodingData* codes,
                                  std::vector<uint8_t>* context_map,
                                  BitWriter* writer) {
@@ -364,8 +363,8 @@ class HistogramBuilder {
     context_map->resize(histograms_.size());
     if (histograms_.size() > 1) {
       std::vector<uint32_t> histogram_symbols;
-      ClusterHistograms(params, histograms_, kClustersLimit,
-                        &clustered_histograms, &histogram_symbols);
+      ClusterHistograms(histograms_, kClustersLimit, &clustered_histograms,
+                        &histogram_symbols);
       for (size_t c = 0; c < histograms_.size(); ++c) {
         (*context_map)[c] = static_cast<uint8_t>(histogram_symbols[c]);
       }
@@ -380,10 +379,9 @@ class HistogramBuilder {
         }
         writer->Write(1, 0);
         writer->Write(1, 0);  // Don't use MTF.
-        WriteHistogramsAndTokens(HistogramParams(), 1, tokens, writer);
+        WriteHistogramsAndTokens(1, tokens, writer);
       }
     }
-    codes->uint_config.resize(clustered_histograms.size());
     writer->Write(1, 0);  // use_prefix_code
     writer->Write(2, 3);  // log_alpha_size = 8
     for (size_t i = 0; i < clustered_histograms.size(); ++i) {
@@ -415,193 +413,23 @@ class HistogramBuilder {
   std::vector<Histogram> histograms_;
 };
 
-class SymbolCostEstimator {
- public:
-  SymbolCostEstimator(size_t num_contexts,
-                      const std::vector<std::vector<Token>>& tokens,
-                      const LZ77Params& lz77) {
-    HistogramBuilder builder(num_contexts);
-    // Build histograms for estimating lz77 savings.
-    HybridUintConfig uint_config;
-    for (size_t i = 0; i < tokens.size(); ++i) {
-      for (size_t j = 0; j < tokens[i].size(); ++j) {
-        const Token token = tokens[i][j];
-        uint32_t tok, nbits, bits;
-        (token.is_lz77_length ? lz77.length_uint_config : uint_config)
-            .Encode(token.value, &tok, &nbits, &bits);
-        tok += token.is_lz77_length ? lz77.min_symbol : 0;
-        builder.VisitSymbol(tok, token.context);
-      }
-    }
-    max_alphabet_size_ = 0;
-    for (size_t i = 0; i < num_contexts; i++) {
-      max_alphabet_size_ =
-          std::max(max_alphabet_size_, builder.Histo(i).data_.size());
-    }
-    bits_.resize(num_contexts * max_alphabet_size_);
-    // TODO(veluca): SIMD?
-    add_symbol_cost_.resize(num_contexts);
-    for (size_t i = 0; i < num_contexts; i++) {
-      float inv_total = 1.0f / (builder.Histo(i).total_count_ + 1e-8f);
-      float total_cost = 0;
-      for (size_t j = 0; j < builder.Histo(i).data_.size(); j++) {
-        size_t cnt = builder.Histo(i).data_[j];
-        float cost = 0;
-        if (cnt != 0 && cnt != builder.Histo(i).total_count_) {
-          cost = -FastLog2f(cnt * inv_total);
-        } else if (cnt == 0) {
-          cost = ANS_LOG_TAB_SIZE;  // Highest possible cost.
-        }
-        bits_[i * max_alphabet_size_ + j] = cost;
-        total_cost += cost * builder.Histo(i).data_[j];
-      }
-      // Penalty for adding a lz77 symbol to this contest (only used for static
-      // cost model). Higher penalty for contexts that have a very low
-      // per-symbol entropy.
-      add_symbol_cost_[i] = std::max(0.0f, 6.0f - total_cost * inv_total);
-    }
-  }
-  float Bits(size_t ctx, size_t sym) const {
-    return bits_[ctx * max_alphabet_size_ + sym];
-  }
-  float LenCost(size_t ctx, size_t len, const LZ77Params& lz77) const {
-    uint32_t nbits, bits, tok;
-    lz77.length_uint_config.Encode(len, &tok, &nbits, &bits);
-    tok += lz77.min_symbol;
-    return nbits + Bits(ctx, tok);
-  }
-  float DistCost(size_t len, const LZ77Params& lz77) const {
-    uint32_t nbits, bits, tok;
-    HybridUintConfig().Encode(len, &tok, &nbits, &bits);
-    return nbits + Bits(lz77.nonserialized_distance_context, tok);
-  }
-  float AddSymbolCost(size_t idx) const { return add_symbol_cost_[idx]; }
-
- private:
-  size_t max_alphabet_size_;
-  std::vector<float> bits_;
-  std::vector<float> add_symbol_cost_;
-};
-
-void ApplyLZ77_RLE(const HistogramParams& params, size_t num_contexts,
-                   const std::vector<std::vector<Token>>& tokens,
-                   LZ77Params& lz77,
-                   std::vector<std::vector<Token>>& tokens_lz77) {
-  // TODO(veluca): tune heuristics here.
-  SymbolCostEstimator sce(num_contexts, tokens, lz77);
-  float bit_decrease = 0;
-  size_t total_symbols = 0;
-  tokens_lz77.resize(tokens.size());
-  std::vector<float> sym_cost;
-  HybridUintConfig uint_config;
-  for (size_t stream = 0; stream < tokens.size(); stream++) {
-    size_t distance_multiplier =
-        params.image_widths.size() > stream ? params.image_widths[stream] : 0;
-    const auto& in = tokens[stream];
-    auto& out = tokens_lz77[stream];
-    total_symbols += in.size();
-    // Cumulative sum of bit costs.
-    sym_cost.resize(in.size() + 1);
-    for (size_t i = 0; i < in.size(); i++) {
-      uint32_t tok, nbits, unused_bits;
-      uint_config.Encode(in[i].value, &tok, &nbits, &unused_bits);
-      sym_cost[i + 1] = sce.Bits(in[i].context, tok) + nbits + sym_cost[i];
-    }
-    out.reserve(in.size());
-    for (size_t i = 0; i < in.size(); i++) {
-      size_t num_to_copy = 0;
-      size_t distance_symbol = 0;  // 1 for RLE.
-      if (distance_multiplier != 0) {
-        distance_symbol = 1;  // Special distance 1 if enabled.
-      }
-      if (i > 0) {
-        for (; i + num_to_copy < in.size(); num_to_copy++) {
-          if (in[i + num_to_copy].value != in[i - 1].value) {
-            break;
-          }
-        }
-      }
-      if (num_to_copy == 0) {
-        out.push_back(in[i]);
-        continue;
-      }
-      float cost = sym_cost[i + num_to_copy] - sym_cost[i];
-      // This subtraction might overflow, but that's OK.
-      size_t lz77_len = num_to_copy - lz77.min_length;
-      float lz77_cost = num_to_copy >= lz77.min_length
-                            ? CeilLog2Nonzero(lz77_len + 1) + 1
-                            : 0;
-      if (num_to_copy < lz77.min_length || cost <= lz77_cost) {
-        for (size_t j = 0; j < num_to_copy; j++) {
-          out.push_back(in[i + j]);
-        }
-        i += num_to_copy - 1;
-        continue;
-      }
-      // Output the LZ77 length
-      out.emplace_back(in[i].context, lz77_len);
-      out.back().is_lz77_length = true;
-      i += num_to_copy - 1;
-      bit_decrease += cost - lz77_cost;
-      // Output the LZ77 copy distance.
-      out.emplace_back(lz77.nonserialized_distance_context, distance_symbol);
-    }
-  }
-
-  if (bit_decrease > total_symbols * 0.2 + 16) {
-    lz77.enabled = true;
-  }
-}
-
-void ApplyLZ77(const HistogramParams& params, size_t num_contexts,
-               const std::vector<std::vector<Token>>& tokens, LZ77Params& lz77,
-               std::vector<std::vector<Token>>& tokens_lz77) {
-  lz77.enabled = false;
-  lz77.min_symbol = 224;
-  if (params.lz77_method == HistogramParams::LZ77Method::kNone) {
-    return;
-  }
-  ApplyLZ77_RLE(params, num_contexts, tokens, lz77, tokens_lz77);
-}
 }  // namespace
 
-void BuildAndEncodeHistograms(const HistogramParams& params,
-                              size_t num_contexts,
+void BuildAndEncodeHistograms(size_t num_contexts,
                               std::vector<std::vector<Token>>& tokens,
                               EntropyEncodingData* codes,
                               std::vector<uint8_t>* context_map,
                               BitWriter* writer) {
-  codes->lz77.nonserialized_distance_context = num_contexts;
-  std::vector<std::vector<Token>> tokens_lz77;
-  ApplyLZ77(params, num_contexts, tokens, codes->lz77, tokens_lz77);
-
   const size_t max_contexts = std::min(num_contexts, kClustersLimit);
   BitWriter::Allotment allotment(writer,
                                  1024 + num_contexts * 40 + max_contexts * 96);
-  writer->Write(1, codes->lz77.enabled);
-  if (codes->lz77.enabled) {
-    writer->Write(2, 0);  // min_symbol 224
-    writer->Write(2, 0);  // min_length 3
-    writer->Write(4, 0);  // uint config 0,0,0
-    num_contexts += 1;
-    tokens = std::move(tokens_lz77);
-  }
+  writer->Write(1, 0);  // no lz77
   size_t total_tokens = 0;
   // Build histograms.
   HistogramBuilder builder(num_contexts);
-  HybridUintConfig uint_config;  //  Default config for clustering.
+  HybridUintConfig uint_config;
   for (size_t i = 0; i < tokens.size(); ++i) {
-    if (codes->lz77.enabled) {
-      for (size_t j = 0; j < tokens[i].size(); ++j) {
-        const Token& token = tokens[i][j];
-        total_tokens++;
-        uint32_t tok, nbits, bits;
-        (token.is_lz77_length ? codes->lz77.length_uint_config : uint_config)
-            .Encode(token.value, &tok, &nbits, &bits);
-        tok += token.is_lz77_length ? codes->lz77.min_symbol : 0;
-        builder.VisitSymbol(tok, token.context);
-      }
-    } else if (num_contexts == 1) {
+    if (num_contexts == 1) {
       for (size_t j = 0; j < tokens[i].size(); ++j) {
         const Token& token = tokens[i][j];
         total_tokens++;
@@ -621,7 +449,7 @@ void BuildAndEncodeHistograms(const HistogramParams& params,
   }
 
   // Encode histograms.
-  builder.BuildAndStoreEntropyCodes(params, tokens, codes, context_map, writer);
+  builder.BuildAndStoreEntropyCodes(tokens, codes, context_map, writer);
   allotment.FinishedHistogram(writer);
   allotment.Reclaim(writer);
 }
@@ -652,15 +480,13 @@ void WriteTokens(const std::vector<Token>& tokens,
   };
   const int end = tokens.size();
   ANSCoder ans;
-  if (codes.lz77.enabled || context_map.size() > 1) {
+  HybridUintConfig uint_config;
+  if (context_map.size() > 1) {
     for (int i = end - 1; i >= 0; --i) {
       const Token token = tokens[i];
       const uint8_t histo = context_map[token.context];
       uint32_t tok, nbits, bits;
-      (token.is_lz77_length ? codes.lz77.length_uint_config
-                            : codes.uint_config[histo])
-          .Encode(tokens[i].value, &tok, &nbits, &bits);
-      tok += token.is_lz77_length ? codes.lz77.min_symbol : 0;
+      uint_config.Encode(tokens[i].value, &tok, &nbits, &bits);
       const ANSEncSymbolInfo& info = codes.encoding_info[histo][tok];
       // Extra bits first as this is reversed.
       addbits(bits, nbits);
@@ -671,7 +497,7 @@ void WriteTokens(const std::vector<Token>& tokens,
   } else {
     for (int i = end - 1; i >= 0; --i) {
       uint32_t tok, nbits, bits;
-      codes.uint_config[0].Encode(tokens[i].value, &tok, &nbits, &bits);
+      uint_config.Encode(tokens[i].value, &tok, &nbits, &bits);
       const ANSEncSymbolInfo& info = codes.encoding_info[0][tok];
       // Extra bits first as this is reversed.
       addbits(bits, nbits);
@@ -689,14 +515,13 @@ void WriteTokens(const std::vector<Token>& tokens,
   allotment.Reclaim(writer);
 }
 
-void WriteHistogramsAndTokens(const HistogramParams& params,
-                              size_t num_contexts, std::vector<Token>& tokens,
+void WriteHistogramsAndTokens(size_t num_contexts, std::vector<Token>& tokens,
                               BitWriter* writer) {
   std::vector<std::vector<Token>> tokens_vec(1, tokens);
   EntropyEncodingData codes;
   std::vector<uint8_t> dummy_context_map;
-  BuildAndEncodeHistograms(params, num_contexts, tokens_vec, &codes,
-                           &dummy_context_map, writer);
+  BuildAndEncodeHistograms(num_contexts, tokens_vec, &codes, &dummy_context_map,
+                           writer);
   WriteTokens(tokens_vec[0], codes, dummy_context_map, writer);
 }
 

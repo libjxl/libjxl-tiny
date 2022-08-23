@@ -180,15 +180,10 @@ void HistogramReindex(std::vector<Histogram>* out,
 // Clusters similar histograms in 'in' together, the selected histograms are
 // placed in 'out', and for each index in 'in', *histogram_symbols will
 // indicate which of the 'out' histograms is the best approximation.
-void ClusterHistograms(const HistogramParams params,
-                       const std::vector<Histogram>& in, size_t max_histograms,
+void ClusterHistograms(const std::vector<Histogram>& in, size_t max_histograms,
                        std::vector<Histogram>* out,
                        std::vector<uint32_t>* histogram_symbols) {
-  max_histograms = std::min(max_histograms, params.max_histograms);
   max_histograms = std::min(max_histograms, in.size());
-  if (params.clustering == HistogramParams::ClusteringType::kFastest) {
-    max_histograms = std::min(max_histograms, static_cast<size_t>(4));
-  }
 
   HWY_DYNAMIC_DISPATCH(FastClusterHistograms)
   (in, max_histograms, out, histogram_symbols);

@@ -241,14 +241,14 @@ class ModularFrameEncoder {
     Tree decoded_tree;
     TokenizeTree(tree_, &tree_tokens_, &decoded_tree);
     tree_ = std::move(decoded_tree);
-    image_widths_.resize(num_streams);
     JXL_RETURN_IF_ERROR(RunOnPool(
         pool, 0, num_streams, ThreadPool::NoInit,
         [&](const uint32_t stream_id, size_t /* thread */) {
           tokens_[stream_id].clear();
-          JXL_CHECK(ModularGenericCompress(stream_images_[stream_id], stream_id,
-                                           tree_, &tokens_[stream_id],
-                                           &image_widths_[stream_id]));
+          const Image& image = stream_images_[stream_id];
+          if (image.w == 0 || image.h == 0) return;
+          JXL_CHECK(
+              ModularEncode(image, stream_id, tree_, &tokens_[stream_id]));
         },
         "ComputeTokens"));
     return true;
@@ -260,13 +260,9 @@ class ModularFrameEncoder {
     allotment.Reclaim(writer);
 
     // Write tree
-    HistogramParams params;
-    params.clustering = HistogramParams::ClusteringType::kFast;
-    params.lz77_method = HistogramParams::LZ77Method::kNone;
-    WriteHistogramsAndTokens(params, kNumTreeContexts, tree_tokens_, writer);
-    params.image_widths = image_widths_;
+    WriteHistogramsAndTokens(kNumTreeContexts, tree_tokens_, writer);
     // Write histograms.
-    BuildAndEncodeHistograms(params, (tree_.size() + 1) / 2, tokens_, &code_,
+    BuildAndEncodeHistograms((tree_.size() + 1) / 2, tokens_, &code_,
                              &context_map_, writer);
     return true;
   }
@@ -368,7 +364,6 @@ class ModularFrameEncoder {
   EntropyEncodingData code_;
   std::vector<uint8_t> context_map_;
   FrameDimensions frame_dim_;
-  std::vector<size_t> image_widths_;
 };
 
 void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
@@ -675,10 +670,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                       &enc_state.shared.coeff_orders[0], writer);
 
     // Encode histograms.
-    HistogramParams hist_params;
-    hist_params.lz77_method = HistogramParams::LZ77Method::kNone;
-    BuildAndEncodeHistograms(hist_params,
-                             enc_state.shared.num_histograms *
+    BuildAndEncodeHistograms(enc_state.shared.num_histograms *
                                  enc_state.shared.block_ctx_map.NumACContexts(),
                              enc_state.passes[0].ac_tokens,
                              &enc_state.passes[0].codes,
