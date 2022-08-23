@@ -70,7 +70,6 @@ struct ModularStreamId {
   Kind kind;
   size_t quant_table_id;
   size_t group_id;  // DC or AC group id.
-  size_t pass_id;   // Only for kModularAC.
   size_t ID(const FrameDimensions& frame_dim) const {
     size_t id = 0;
     switch (kind) {
@@ -90,158 +89,134 @@ struct ModularStreamId {
         id = 1 + 3 * frame_dim.num_dc_groups + quant_table_id;
         break;
       case kModularAC:
-        id = 1 + 3 * frame_dim.num_dc_groups + DequantMatrices::kNum +
-             frame_dim.num_groups * pass_id + group_id;
+        id = 1 + 3 * frame_dim.num_dc_groups + DequantMatrices::kNum + group_id;
         break;
     };
     return id;
   }
-  static ModularStreamId Global() {
-    return ModularStreamId{kGlobalData, 0, 0, 0};
-  }
+  static ModularStreamId Global() { return ModularStreamId{kGlobalData, 0, 0}; }
   static ModularStreamId VarDCTDC(size_t group_id) {
-    return ModularStreamId{kVarDCTDC, 0, group_id, 0};
+    return ModularStreamId{kVarDCTDC, 0, group_id};
   }
   static ModularStreamId ModularDC(size_t group_id) {
-    return ModularStreamId{kModularDC, 0, group_id, 0};
+    return ModularStreamId{kModularDC, 0, group_id};
   }
   static ModularStreamId ACMetadata(size_t group_id) {
-    return ModularStreamId{kACMetadata, 0, group_id, 0};
+    return ModularStreamId{kACMetadata, 0, group_id};
   }
   static ModularStreamId QuantTable(size_t quant_table_id) {
     JXL_ASSERT(quant_table_id < DequantMatrices::kNum);
-    return ModularStreamId{kQuantTable, quant_table_id, 0, 0};
+    return ModularStreamId{kQuantTable, quant_table_id, 0};
   }
-  static ModularStreamId ModularAC(size_t group_id, size_t pass_id) {
-    return ModularStreamId{kModularAC, 0, group_id, pass_id};
+  static ModularStreamId ModularAC(size_t group_id) {
+    return ModularStreamId{kModularAC, 0, group_id};
   }
-  static size_t Num(const FrameDimensions& frame_dim, size_t passes) {
-    return ModularAC(0, passes).ID(frame_dim);
+  static size_t Num(const FrameDimensions& frame_dim) {
+    return ModularAC(0).ID(frame_dim) + frame_dim.num_groups;
   }
   std::string DebugString() const;
 };
 
-// `cutoffs` must be sorted.
-Tree MakeFixedTree(int property, const std::vector<int32_t>& cutoffs,
-                   Predictor pred, size_t num_pixels) {
-  size_t log_px = CeilLog2Nonzero(num_pixels);
-  size_t min_gap = 0;
-  // Reduce fixed tree height when encoding small images.
-  if (log_px < 14) {
-    min_gap = 8 * (14 - log_px);
-  }
-  Tree tree;
-  struct NodeInfo {
-    size_t begin, end, pos;
-  };
-  std::queue<NodeInfo> q;
-  // Leaf IDs will be set by roundtrip decoding the tree.
-  tree.push_back(PropertyDecisionNode::Leaf(pred));
-  q.push(NodeInfo{0, cutoffs.size(), 0});
-  while (!q.empty()) {
-    NodeInfo info = q.front();
-    q.pop();
-    if (info.begin + min_gap >= info.end) continue;
-    uint32_t split = (info.begin + info.end) / 2;
-    tree[info.pos] =
-        PropertyDecisionNode::Split(property, cutoffs[split], tree.size());
-    q.push(NodeInfo{split + 1, info.end, tree.size()});
-    tree.push_back(PropertyDecisionNode::Leaf(pred));
-    q.push(NodeInfo{info.begin, split, tree.size()});
-    tree.push_back(PropertyDecisionNode::Leaf(pred));
-  }
+Tree MakeFixedTree(size_t num_dc_groups) {
+  Tree tree(95);
+  tree[0] = PropertyDecisionNode::Split(1, num_dc_groups + 1, 1, 28);
+  // ACMetadata
+  tree[1] = PropertyDecisionNode::Split(0, 1, 2);
+  tree[2] = PropertyDecisionNode::Split(0, 2, 4);
+  tree[3] = PropertyDecisionNode::Split(0, 0, 6);
+  tree[4] = PropertyDecisionNode::Split(6, 0, 22);
+  tree[5] = PropertyDecisionNode::Split(2, 0, 8);
+  tree[6] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[7] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[8] = PropertyDecisionNode::Split(7, 5, 10);
+  tree[9] = PropertyDecisionNode::Split(7, 5, 16);
+  tree[10] = PropertyDecisionNode::Split(7, 11, 12);
+  tree[11] = PropertyDecisionNode::Split(7, 3, 14);
+  tree[12] = PropertyDecisionNode::Leaf(Predictor::Left);
+  tree[13] = PropertyDecisionNode::Leaf(Predictor::Left);
+  tree[14] = PropertyDecisionNode::Leaf(Predictor::Left);
+  tree[15] = PropertyDecisionNode::Leaf(Predictor::Left);
+  tree[16] = PropertyDecisionNode::Split(7, 11, 18);
+  tree[17] = PropertyDecisionNode::Split(7, 3, 20);
+  tree[18] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[19] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[20] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[21] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[22] = PropertyDecisionNode::Split(7, 0, 24);
+  tree[23] = PropertyDecisionNode::Split(7, 0, 26);
+  tree[24] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[25] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[26] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  tree[27] = PropertyDecisionNode::Leaf(Predictor::Zero);
+  // VarDCTDC
+  tree[28] = PropertyDecisionNode::Split(9, 0, 29);
+  tree[29] = PropertyDecisionNode::Split(9, 47, 31);
+  tree[30] = PropertyDecisionNode::Split(9, -31, 33);
+  tree[31] = PropertyDecisionNode::Split(9, 191, 35);
+  tree[32] = PropertyDecisionNode::Split(9, 11, 37);
+  tree[33] = PropertyDecisionNode::Split(9, -7, 39);
+  tree[34] = PropertyDecisionNode::Split(9, -127, 41);
+  tree[35] = PropertyDecisionNode::Split(9, 392, 43);
+  tree[36] = PropertyDecisionNode::Split(9, 95, 45);
+  tree[37] = PropertyDecisionNode::Split(9, 23, 47);
+  tree[38] = PropertyDecisionNode::Split(9, 5, 49);
+  tree[39] = PropertyDecisionNode::Split(9, -3, 51);
+  tree[40] = PropertyDecisionNode::Split(9, -15, 53);
+  tree[41] = PropertyDecisionNode::Split(9, -63, 55);
+  tree[42] = PropertyDecisionNode::Split(9, -255, 57);
+  tree[43] = PropertyDecisionNode::Split(9, 500, 59);
+  tree[44] = PropertyDecisionNode::Split(9, 255, 61);
+  tree[45] = PropertyDecisionNode::Split(9, 127, 63);
+  tree[46] = PropertyDecisionNode::Split(9, 63, 65);
+  tree[47] = PropertyDecisionNode::Split(9, 31, 67);
+  tree[48] = PropertyDecisionNode::Split(9, 15, 69);
+  tree[49] = PropertyDecisionNode::Split(9, 7, 71);
+  tree[50] = PropertyDecisionNode::Split(9, 3, 73);
+  tree[51] = PropertyDecisionNode::Split(9, -1, 75);
+  tree[52] = PropertyDecisionNode::Split(9, -4, 77);
+  tree[53] = PropertyDecisionNode::Split(9, -11, 79);
+  tree[54] = PropertyDecisionNode::Split(9, -23, 81);
+  tree[55] = PropertyDecisionNode::Split(9, -47, 83);
+  tree[56] = PropertyDecisionNode::Split(9, -95, 85);
+  tree[57] = PropertyDecisionNode::Split(9, -191, 87);
+  tree[58] = PropertyDecisionNode::Split(9, -392, 89);
+  tree[59] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[60] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[61] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[62] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[63] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[64] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[65] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[66] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[67] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[68] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[69] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[70] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[71] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[72] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[73] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[74] = PropertyDecisionNode::Split(9, 1, 91);
+  tree[75] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[76] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[77] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[78] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[79] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[80] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[81] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[82] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[83] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[84] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[85] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[86] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[87] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[88] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[89] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[90] = PropertyDecisionNode::Split(9, -500, 93);
+  tree[91] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[92] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[93] = PropertyDecisionNode::Leaf(Predictor::Gradient);
+  tree[94] = PropertyDecisionNode::Leaf(Predictor::Gradient);
   return tree;
-}
-
-Tree PredefinedTree(ModularOptions::TreeKind tree_kind, size_t total_pixels) {
-  if (tree_kind == ModularOptions::TreeKind::kACMeta) {
-    // Small image.
-    if (total_pixels < 1024) {
-      return {PropertyDecisionNode::Leaf(Predictor::Left)};
-    }
-    Tree tree;
-    // 0: c > 1
-    tree.push_back(PropertyDecisionNode::Split(0, 1, 1));
-    // 1: c > 2
-    tree.push_back(PropertyDecisionNode::Split(0, 2, 3));
-    // 2: c > 0
-    tree.push_back(PropertyDecisionNode::Split(0, 0, 5));
-    // 3: EPF control field (all 0 or 4), top > 0
-    tree.push_back(PropertyDecisionNode::Split(6, 0, 21));
-    // 4: ACS+QF, y > 0
-    tree.push_back(PropertyDecisionNode::Split(2, 0, 7));
-    // 5: CfL x
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Gradient));
-    // 6: CfL b
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Gradient));
-    // 7: QF: split according to the left quant value.
-    tree.push_back(PropertyDecisionNode::Split(7, 5, 9));
-    // 8: ACS: split in 4 segments (8x8 from 0 to 3, large square 4-5, large
-    // rectangular 6-11, 8x8 12+), according to previous ACS value.
-    tree.push_back(PropertyDecisionNode::Split(7, 5, 15));
-    // QF
-    tree.push_back(PropertyDecisionNode::Split(7, 11, 11));
-    tree.push_back(PropertyDecisionNode::Split(7, 3, 13));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Left));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Left));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Left));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Left));
-    // ACS
-    tree.push_back(PropertyDecisionNode::Split(7, 11, 17));
-    tree.push_back(PropertyDecisionNode::Split(7, 3, 19));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    // EPF, left > 0
-    tree.push_back(PropertyDecisionNode::Split(7, 0, 23));
-    tree.push_back(PropertyDecisionNode::Split(7, 0, 25));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    tree.push_back(PropertyDecisionNode::Leaf(Predictor::Zero));
-    return tree;
-  }
-  if (tree_kind == ModularOptions::TreeKind::kGradientFixedDC) {
-    std::vector<int32_t> cutoffs = {
-        -500, -392, -255, -191, -127, -95, -63, -47, -31, -23, -15,
-        -11,  -7,   -4,   -3,   -1,   0,   1,   3,   5,   7,   11,
-        15,   23,   31,   47,   63,   95,  127, 191, 255, 392, 500};
-    return MakeFixedTree(kGradientProp, cutoffs, Predictor::Gradient,
-                         total_pixels);
-  }
-  JXL_ABORT("Unreachable");
-  return {};
-}
-
-// Merges the trees in `trees` using nodes that decide on stream_id, as defined
-// by `tree_splits`.
-void MergeTrees(const std::vector<Tree>& trees,
-                const std::vector<size_t>& tree_splits, size_t begin,
-                size_t end, Tree* tree) {
-  JXL_ASSERT(trees.size() + 1 == tree_splits.size());
-  JXL_ASSERT(end > begin);
-  JXL_ASSERT(end <= trees.size());
-  if (end == begin + 1) {
-    // Insert the tree, adding the opportune offset to all child nodes.
-    // This will make the leaf IDs wrong, but subsequent roundtripping will fix
-    // them.
-    size_t sz = tree->size();
-    tree->insert(tree->end(), trees[begin].begin(), trees[begin].end());
-    for (size_t i = sz; i < tree->size(); i++) {
-      (*tree)[i].lchild += sz;
-      (*tree)[i].rchild += sz;
-    }
-    return;
-  }
-  size_t mid = (begin + end) / 2;
-  size_t splitval = tree_splits[mid] - 1;
-  size_t cur = tree->size();
-  tree->emplace_back(1 /*stream_id*/, splitval, 0, 0, Predictor::Zero, 0, 1);
-  (*tree)[cur].lchild = tree->size();
-  MergeTrees(trees, tree_splits, mid, end, tree);
-  (*tree)[cur].rchild = tree->size();
-  MergeTrees(trees, tree_splits, begin, mid, tree);
 }
 
 struct EncCache {
@@ -259,105 +234,25 @@ class ModularFrameEncoder {
  public:
   ModularFrameEncoder(const FrameDimensions& frame_dim)
       : frame_dim_(frame_dim) {
-    size_t num_streams = ModularStreamId::Num(frame_dim_, 1);
-    ModularOptions options;
+    size_t num_streams = ModularStreamId::Num(frame_dim_);
     stream_images_.resize(num_streams);
-    options.splitting_heuristics_node_threshold = 192;
-    // Set properties.
-    std::vector<uint32_t> prop_order;
-    prop_order = {0, 1, 15, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7, 8};
-    options.splitting_heuristics_properties.assign(prop_order.begin(),
-                                                   prop_order.begin() + 8);
-    options.max_property_values = 32;
-    // Gradient in previous channels.
-    for (int i = 0; i < options.max_properties; i++) {
-      options.splitting_heuristics_properties.push_back(kNumNonrefProperties +
-                                                        i * 4 + 3);
-    }
-
-    if (options.predictor == static_cast<Predictor>(-1)) {
-      // no explicit predictor(s) given, set a good default
-      options.predictor = Predictor::Gradient;
-    } else {
-      delta_pred_ = options.predictor;
-    }
-    tree_splits_.push_back(0);
-    options.fast_decode_multiplier = 1.0f;
-    tree_splits_.push_back(ModularStreamId::VarDCTDC(0).ID(frame_dim_));
-    tree_splits_.push_back(ModularStreamId::ModularDC(0).ID(frame_dim_));
-    tree_splits_.push_back(ModularStreamId::ACMetadata(0).ID(frame_dim_));
-    tree_splits_.push_back(ModularStreamId::QuantTable(0).ID(frame_dim_));
-    tree_splits_.push_back(ModularStreamId::ModularAC(0, 0).ID(frame_dim_));
     ac_metadata_size.resize(frame_dim_.num_dc_groups);
-    extra_dc_precision.resize(frame_dim_.num_dc_groups);
-    tree_splits_.push_back(num_streams);
-    options.max_chan_size = frame_dim_.group_dim;
-    options.group_dim = frame_dim_.group_dim;
-
-    // TODO(veluca): figure out how to use different predictor sets per channel.
-    stream_options_.resize(num_streams, options);
   }
   Status ComputeEncodingData(ThreadPool* pool) {
-    if (!tree_.empty()) return true;
-
-    // Compute tree.
     size_t num_streams = stream_images_.size();
     tokens_.resize(num_streams);
-
-    // Avoid creating a tree with leaves that don't correspond to any pixels.
-    std::vector<size_t> useful_splits;
-    useful_splits.reserve(tree_splits_.size());
-    for (size_t chunk = 0; chunk < tree_splits_.size() - 1; chunk++) {
-      bool has_pixels = false;
-      size_t start = tree_splits_[chunk];
-      size_t stop = tree_splits_[chunk + 1];
-      for (size_t i = start; i < stop; i++) {
-        if (!stream_images_[i].empty()) has_pixels = true;
-      }
-      if (has_pixels) {
-        useful_splits.push_back(tree_splits_[chunk]);
-      }
-    }
-    // Don't do anything if modular mode does not have any pixels in this image
-    if (useful_splits.empty()) return true;
-    useful_splits.push_back(tree_splits_.back());
-
-    std::vector<Tree> trees(useful_splits.size() - 1);
-    for (uint32_t chunk = 0; chunk + 1 < useful_splits.size(); ++chunk) {
-      size_t total_pixels = 0;
-      uint32_t start = useful_splits[chunk];
-      uint32_t stop = useful_splits[chunk + 1];
-      while (start < stop && stream_images_[start].empty()) ++start;
-      while (start < stop && stream_images_[stop - 1].empty()) --stop;
-      for (size_t i = start; i < stop; i++) {
-        for (const Channel& ch : stream_images_[i].channel) {
-          total_pixels += ch.w * ch.h;
-        }
-      }
-      trees[chunk] =
-          PredefinedTree(stream_options_[start].tree_kind, total_pixels);
-    }
-    tree_.clear();
-    MergeTrees(trees, useful_splits, 0, useful_splits.size() - 1, &tree_);
-    tree_tokens_.resize(1);
-    tree_tokens_[0].clear();
+    tree_ = MakeFixedTree(frame_dim_.num_dc_groups);
     Tree decoded_tree;
-    TokenizeTree(tree_, &tree_tokens_[0], &decoded_tree);
-    JXL_ASSERT(tree_.size() == decoded_tree.size());
+    TokenizeTree(tree_, &tree_tokens_, &decoded_tree);
     tree_ = std::move(decoded_tree);
-
     image_widths_.resize(num_streams);
     JXL_RETURN_IF_ERROR(RunOnPool(
         pool, 0, num_streams, ThreadPool::NoInit,
         [&](const uint32_t stream_id, size_t /* thread */) {
           tokens_[stream_id].clear();
-          JXL_CHECK(ModularGenericCompress(
-              stream_images_[stream_id], stream_options_[stream_id],
-              /*writer=*/nullptr, stream_id,
-              /*total_pixels=*/nullptr,
-              /*tree=*/&tree_,
-              /*tokens=*/&tokens_[stream_id],
-              /*widths=*/&image_widths_[stream_id]));
+          JXL_CHECK(ModularGenericCompress(stream_images_[stream_id], stream_id,
+                                           tree_, &tokens_[stream_id],
+                                           &image_widths_[stream_id]));
         },
         "ComputeTokens"));
     return true;
@@ -365,22 +260,14 @@ class ModularFrameEncoder {
   // Encodes global info (tree + histograms) in the `writer`.
   Status EncodeGlobalInfo(BitWriter* writer) {
     BitWriter::Allotment allotment(writer, 1);
-    // If we are using brotli, or not using modular mode.
-    if (tree_tokens_.empty() || tree_tokens_[0].empty()) {
-      writer->Write(1, 0);
-      allotment.Reclaim(writer);
-      return true;
-    }
-    writer->Write(1, 1);
+    writer->Write(1, 1);  // not an empty tree
     allotment.Reclaim(writer);
 
     // Write tree
     HistogramParams params;
     params.clustering = HistogramParams::ClusteringType::kFast;
     params.lz77_method = HistogramParams::LZ77Method::kNone;
-    BuildAndEncodeHistograms(params, kNumTreeContexts, tree_tokens_, &code_,
-                             &context_map_, writer);
-    WriteTokens(tree_tokens_[0], code_, context_map_, writer);
+    WriteHistogramsAndTokens(params, kNumTreeContexts, tree_tokens_, writer);
     params.image_widths = image_widths_;
     // Write histograms.
     BuildAndEncodeHistograms(params, (tree_.size() + 1) / 2, tokens_, &code_,
@@ -409,13 +296,8 @@ class ModularFrameEncoder {
   void AddVarDCTDC(const Image3F& dc, size_t group_index,
                    PassesSharedState* shared) {
     const Rect r = shared->DCGroupRect(group_index);
-    extra_dc_precision[group_index] = 0;
 
     size_t stream_id = ModularStreamId::VarDCTDC(group_index).ID(frame_dim_);
-    stream_options_[stream_id].max_chan_size = 0xFFFFFF;
-    stream_options_[stream_id].predictor = Predictor::Gradient;
-    stream_options_[stream_id].tree_kind =
-        ModularOptions::TreeKind::kGradientFixedDC;
 
     stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 8, 3);
     for (size_t c : {1, 0, 2}) {
@@ -447,9 +329,6 @@ class ModularFrameEncoder {
   void AddACMetadata(size_t group_index, PassesSharedState* shared) {
     const Rect r = shared->DCGroupRect(group_index);
     size_t stream_id = ModularStreamId::ACMetadata(group_index).ID(frame_dim_);
-    stream_options_[stream_id].max_chan_size = 0xFFFFFF;
-    stream_options_[stream_id].wp_tree_mode = ModularOptions::TreeMode::kNoWP;
-    stream_options_[stream_id].tree_kind = ModularOptions::TreeKind::kACMeta;
     // YToX, YToB, ACS + QF, EPF
     Image& image = stream_images_[stream_id];
     image = Image(r.xsize(), r.ysize(), 8, 4);
@@ -483,23 +362,17 @@ class ModularFrameEncoder {
     ac_metadata_size[group_index] = num;
   }
   std::vector<size_t> ac_metadata_size;
-  std::vector<uint8_t> extra_dc_precision;
 
  private:
   std::vector<Image> stream_images_;
-  std::vector<ModularOptions> stream_options_;
 
   Tree tree_;
-  std::vector<std::vector<Token>> tree_tokens_;
+  std::vector<Token> tree_tokens_;
   std::vector<std::vector<Token>> tokens_;
   EntropyEncodingData code_;
   std::vector<uint8_t> context_map_;
   FrameDimensions frame_dim_;
-  std::vector<size_t> tree_splits_;
-  std::vector<ModularMultiplierInfo> multiplier_info_;
-  std::vector<std::vector<uint32_t>> gi_channel_;
   std::vector<size_t> image_widths_;
-  Predictor delta_pred_ = Predictor::Average4;
 };
 
 void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
@@ -560,8 +433,6 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   shared.coeff_order_size = kCoeffOrderMaxSize;
   shared.coeff_orders.resize(kCoeffOrderMaxSize);
 
-  enc_state.passes.clear();
-
   std::unique_ptr<ModularFrameEncoder> modular_frame_encoder =
       jxl::make_unique<ModularFrameEncoder>(frame_dim);
 
@@ -585,8 +456,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     }
   }
 
-  Image3F opsin(RoundUpToBlockDim(linear.xsize()),
-                RoundUpToBlockDim(linear.ysize()));
+  Image3F opsin(frame_dim.xsize_padded, frame_dim.ysize_padded);
   opsin.ShrinkTo(linear.xsize(), linear.ysize());
   ToXYB(linear, pool, &opsin);
   PadImageToBlockMultipleInPlace(&opsin);
@@ -696,9 +566,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                                 "Compute AC Metadata"));
 
   enc_state.passes.resize(1);
-  for (PassesEncoderState::PassData& pass : enc_state.passes) {
-    pass.ac_tokens.resize(shared.frame_dim.num_groups);
-  }
+  enc_state.passes[0].ac_tokens.resize(shared.frame_dim.num_groups);
 
   auto used_orders_info = ComputeUsedOrders(
       enc_state.shared.ac_strategy, Rect(enc_state.shared.raw_quant_field));
@@ -718,20 +586,17 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                                   const size_t thread) {
     // Tokenize coefficients.
     const Rect rect = shared.BlockGroupRect(group_index);
-    for (size_t idx_pass = 0; idx_pass < enc_state.passes.size(); idx_pass++) {
-      JXL_ASSERT(enc_state.coeffs[idx_pass]->Type() == ACType::k32);
-      const int32_t* JXL_RESTRICT ac_rows[3] = {
-          enc_state.coeffs[idx_pass]->PlaneRow(0, group_index, 0).ptr32,
-          enc_state.coeffs[idx_pass]->PlaneRow(1, group_index, 0).ptr32,
-          enc_state.coeffs[idx_pass]->PlaneRow(2, group_index, 0).ptr32,
-      };
-      // Ensure group cache is initialized.
-      group_caches[thread].InitOnce();
-      TokenizeCoefficients(
-          &shared.coeff_orders[idx_pass * shared.coeff_order_size], rect,
-          ac_rows, shared.ac_strategy, &group_caches[thread].num_nzeroes,
-          &enc_state.passes[idx_pass].ac_tokens[group_index]);
-    }
+    JXL_ASSERT(enc_state.coeffs[0]->Type() == ACType::k32);
+    const int32_t* JXL_RESTRICT ac_rows[3] = {
+        enc_state.coeffs[0]->PlaneRow(0, group_index, 0).ptr32,
+        enc_state.coeffs[0]->PlaneRow(1, group_index, 0).ptr32,
+        enc_state.coeffs[0]->PlaneRow(2, group_index, 0).ptr32,
+    };
+    // Ensure group cache is initialized.
+    group_caches[thread].InitOnce();
+    TokenizeCoefficients(&shared.coeff_orders[0], rect, ac_rows,
+                         shared.ac_strategy, &group_caches[thread].num_nzeroes,
+                         &enc_state.passes[0].ac_tokens[group_index]);
   };
   JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, shared.frame_dim.num_groups,
                                 tokenize_group_init, tokenize_group,
@@ -773,7 +638,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     BitWriter* output = get_output(group_index + 1);
     {
       BitWriter::Allotment allotment(output, 2);
-      output->Write(2, modular_frame_encoder->extra_dc_precision[group_index]);
+      output->Write(2, 0);  // extra_dc_precision
       allotment.Reclaim(output);
       JXL_CHECK(modular_frame_encoder->EncodeStream(
           output, ModularStreamId::VarDCTDC(group_index)));

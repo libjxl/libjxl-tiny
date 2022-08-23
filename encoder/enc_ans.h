@@ -209,6 +209,10 @@ void WriteTokens(const std::vector<Token>& tokens,
                  const EntropyEncodingData& codes,
                  const std::vector<uint8_t>& context_map, BitWriter* writer);
 
+void WriteHistogramsAndTokens(const HistogramParams& params,
+                              size_t num_contexts, std::vector<Token>& tokens,
+                              BitWriter* writer);
+
 // Exposed for tests; to be used with Writer=BitWriter only.
 template <typename Writer>
 void EncodeUintConfigs(const std::vector<HybridUintConfig>& uint_config,

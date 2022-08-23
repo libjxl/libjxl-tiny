@@ -148,10 +148,6 @@ bool TreeToLookupTable(const FlatTree &tree,
   }
   return true;
 }
-// TODO(veluca): make cleaner interfaces.
-
-Status ValidateChannelDimensions(const Image &image,
-                                 const ModularOptions &options);
 
 }  // namespace jxl
 
