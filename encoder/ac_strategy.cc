@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "encoder/base/bits.h"
-#include "encoder/base/profiler.h"
 #include "encoder/common.h"
 #include "encoder/image_ops.h"
 

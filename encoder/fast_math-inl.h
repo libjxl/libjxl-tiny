@@ -90,62 +90,6 @@ V FastPowf(const DF df, V base, V exponent) {
   return FastPow2f(df, Mul(FastLog2f(df, base), exponent));
 }
 
-// Computes cosine like std::cos.
-// L1 error 7e-5.
-template <class DF, class V>
-V FastCosf(const DF df, V x) {
-  // Step 1: range reduction to [0, 2pi)
-  const auto pi2 = Set(df, kPi * 2.0f);
-  const auto pi2_inv = Set(df, 0.5f / kPi);
-  const auto npi2 = Mul(Floor(Mul(x, pi2_inv)), pi2);
-  const auto xmodpi2 = Sub(x, npi2);
-  // Step 2: range reduction to [0, pi]
-  const auto x_pi = Min(xmodpi2, Sub(pi2, xmodpi2));
-  // Step 3: range reduction to [0, pi/2]
-  const auto above_pihalf = Ge(x_pi, Set(df, kPi / 2.0f));
-  const auto x_pihalf = IfThenElse(above_pihalf, Sub(Set(df, kPi), x_pi), x_pi);
-  // Step 4: Taylor-like approximation, scaled by 2**0.75 to make angle
-  // duplication steps faster, on x/4.
-  const auto xs = Mul(x_pihalf, Set(df, 0.25f));
-  const auto x2 = Mul(xs, xs);
-  const auto x4 = Mul(x2, x2);
-  const auto cosx_prescaling =
-      MulAdd(x4, Set(df, 0.06960438),
-             MulAdd(x2, Set(df, -0.84087373), Set(df, 1.68179268)));
-  // Step 5: angle duplication.
-  const auto cosx_scale1 =
-      MulAdd(cosx_prescaling, cosx_prescaling, Set(df, -1.414213562));
-  const auto cosx_scale2 = MulAdd(cosx_scale1, cosx_scale1, Set(df, -1));
-  // Step 6: change sign if needed.
-  const Rebind<uint32_t, DF> du;
-  auto signbit = ShiftLeft<31>(BitCast(du, VecFromMask(df, above_pihalf)));
-  return BitCast(df, Xor(signbit, BitCast(du, cosx_scale2)));
-}
-
-// Computes the error function like std::erf.
-// L1 error 7e-4.
-template <class DF, class V>
-V FastErff(const DF df, V x) {
-  // Formula from
-  // https://en.wikipedia.org/wiki/Error_function#Numerical_approximations
-  // but constants have been recomputed.
-  const auto xle0 = Le(x, Zero(df));
-  const auto absx = Abs(x);
-  // Compute 1 - 1 / ((((x * a + b) * x + c) * x + d) * x + 1)**4
-  const auto denom1 =
-      MulAdd(absx, Set(df, 7.77394369e-02), Set(df, 2.05260015e-04));
-  const auto denom2 = MulAdd(denom1, absx, Set(df, 2.32120216e-01));
-  const auto denom3 = MulAdd(denom2, absx, Set(df, 2.77820801e-01));
-  const auto denom4 = MulAdd(denom3, absx, Set(df, 1.0f));
-  const auto denom5 = Mul(denom4, denom4);
-  const auto inv_denom5 = Div(Set(df, 1.0f), denom5);
-  const auto result = NegMulAdd(inv_denom5, inv_denom5, Set(df, 1.0f));
-  // Change sign if needed.
-  const Rebind<uint32_t, DF> du;
-  auto signbit = ShiftLeft<31>(BitCast(du, VecFromMask(df, xle0)));
-  return BitCast(df, Xor(signbit, BitCast(du, result)));
-}
-
 inline float FastLog2f(float f) {
   HWY_CAPPED(float, 1) D;
   return GetLane(FastLog2f(D, Set(D, f)));
@@ -159,16 +103,6 @@ inline float FastPow2f(float f) {
 inline float FastPowf(float b, float e) {
   HWY_CAPPED(float, 1) D;
   return GetLane(FastPowf(D, Set(D, b), Set(D, e)));
-}
-
-inline float FastCosf(float f) {
-  HWY_CAPPED(float, 1) D;
-  return GetLane(FastCosf(D, Set(D, f)));
-}
-
-inline float FastErff(float f) {
-  HWY_CAPPED(float, 1) D;
-  return GetLane(FastErff(D, Set(D, f)));
 }
 
 // Returns cbrt(x) + add with 6 ulp max error.
@@ -229,8 +163,6 @@ inline float FastPow2f(float f) { return HWY_STATIC_DISPATCH(FastPow2f)(f); }
 inline float FastPowf(float b, float e) {
   return HWY_STATIC_DISPATCH(FastPowf)(b, e);
 }
-inline float FastCosf(float f) { return HWY_STATIC_DISPATCH(FastCosf)(f); }
-inline float FastErff(float f) { return HWY_STATIC_DISPATCH(FastErff)(f); }
 }  // namespace jxl
 
 #endif  // FAST_MATH_ONCE

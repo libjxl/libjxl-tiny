@@ -18,7 +18,6 @@
 #include "encoder/ac_strategy.h"
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
-#include "encoder/base/profiler.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_bit_writer.h"
@@ -43,7 +42,6 @@ void QuantizeBlockAC(const Quantizer& quantizer, size_t c, int32_t quant,
                      float qm_multiplier, size_t quant_kind, size_t xsize,
                      size_t ysize, const float* JXL_RESTRICT block_in,
                      int32_t* JXL_RESTRICT block_out) {
-  PROFILER_FUNC;
   const float* JXL_RESTRICT qm = quantizer.InvDequantMatrix(quant_kind, c);
   const float qac = quantizer.Scale() * quant;
   // Not SIMD-fied for now.
@@ -109,7 +107,6 @@ void QuantizeRoundtripYBlockAC(const Quantizer& quantizer, int32_t quant,
   QuantizeBlockAC(quantizer, 1, quant, 1.0f, quant_kind, xsize, ysize, inout,
                   quantized);
 
-  PROFILER_ZONE("enc quant adjust bias");
   const float* JXL_RESTRICT dequant_matrix =
       quantizer.DequantMatrix(quant_kind, 1);
 
@@ -126,7 +123,6 @@ void QuantizeRoundtripYBlockAC(const Quantizer& quantizer, int32_t quant,
 
 void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
                          const Image3F& opsin, Image3F* dc) {
-  PROFILER_FUNC;
   const Rect block_group_rect = enc_state->shared.BlockGroupRect(group_idx);
   const Rect group_rect = enc_state->shared.GroupRect(group_idx);
   const Rect cmap_rect(

@@ -21,7 +21,6 @@
 #include <hwy/highway.h>
 
 #include "encoder/ac_context.h"
-#include "encoder/base/profiler.h"
 #include "encoder/fast_math-inl.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -87,7 +86,6 @@ float HistogramDistance(const Histogram& a, const Histogram& b) {
 void FastClusterHistograms(const std::vector<Histogram>& in,
                            size_t max_histograms, std::vector<Histogram>* out,
                            std::vector<uint32_t>* histogram_symbols) {
-  PROFILER_FUNC;
   out->clear();
   out->reserve(max_histograms);
   histogram_symbols->clear();

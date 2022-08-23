@@ -38,9 +38,6 @@ POST_MESSAGE_ON_ERROR="${POST_MESSAGE_ON_ERROR:-1}"
 export CC=${CC:-clang}
 export CXX=${CXX:-clang++}
 
-# Time limit for the "fuzz" command in seconds (0 means no limit).
-FUZZER_MAX_TIME="${FUZZER_MAX_TIME:-0}"
-
 SANITIZER="none"
 
 
@@ -76,7 +73,6 @@ fi
 
 # Version inferred from the CI variables.
 CI_COMMIT_SHA=${CI_COMMIT_SHA:-${GITHUB_SHA:-}}
-JPEGXL_VERSION=${JPEGXL_VERSION:-${CI_COMMIT_SHA:0:8}}
 
 # Benchmark parameters
 STORE_IMAGES=${STORE_IMAGES:-1}
@@ -339,14 +335,11 @@ cmake_configure() {
     -DCMAKE_EXE_LINKER_FLAGS="${CMAKE_EXE_LINKER_FLAGS}"
     -DCMAKE_MODULE_LINKER_FLAGS="${CMAKE_MODULE_LINKER_FLAGS}"
     -DCMAKE_SHARED_LINKER_FLAGS="${CMAKE_SHARED_LINKER_FLAGS}"
-    -DJPEGXL_VERSION="${JPEGXL_VERSION}"
     -DSANITIZER="${SANITIZER}"
     # These are not enabled by default in cmake.
     -DJPEGXL_ENABLE_VIEWERS=ON
     -DJPEGXL_ENABLE_PLUGINS=ON
     -DJPEGXL_ENABLE_DEVTOOLS=ON
-    # We always use libfuzzer in the ci.sh wrapper.
-    -DJPEGXL_FUZZER_LINK_FLAGS="-fsanitize=fuzzer"
   )
   if [[ "${BUILD_TARGET}" != *mingw32 ]]; then
     args+=(
@@ -455,7 +448,7 @@ cmake_configure() {
 cmake_build_and_test() {
   # gtest_discover_tests() runs the test binaries to discover the list of tests
   # at build time, which fails under qemu.
-  ASAN_OPTIONS=detect_leaks=0 cmake --build "${BUILD_DIR}" -- all doc
+  ASAN_OPTIONS=detect_leaks=0 cmake --build "${BUILD_DIR}" -- all
   # Pack test binaries if requested.
   if [[ "${PACK_TEST:-}" == "1" ]]; then
     (cd "${BUILD_DIR}"
@@ -589,27 +582,6 @@ cmd_gbench() {
      --benchmark_out_format=json \
      --benchmark_out=gbench.json "$@"
   )
-}
-
-cmd_asanfuzz() {
-  CMAKE_CXX_FLAGS+=" -fsanitize=fuzzer-no-link -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION=1"
-  CMAKE_C_FLAGS+=" -fsanitize=fuzzer-no-link -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION=1"
-  cmd_asan -DJPEGXL_ENABLE_FUZZERS=ON "$@"
-}
-
-cmd_msanfuzz() {
-  # Install msan if needed before changing the flags.
-  detect_clang_version
-  local msan_prefix="${HOME}/.msan/${CLANG_VERSION}"
-  if [[ ! -d "${msan_prefix}" || -e "${msan_prefix}/lib/libc++abi.a" ]]; then
-    # Install msan libraries for this version if needed or if an older version
-    # with libc++abi was installed.
-    cmd_msan_install
-  fi
-
-  CMAKE_CXX_FLAGS+=" -fsanitize=fuzzer-no-link -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION=1"
-  CMAKE_C_FLAGS+=" -fsanitize=fuzzer-no-link -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION=1"
-  cmd_msan -DJPEGXL_ENABLE_FUZZERS=ON "$@"
 }
 
 cmd_asan() {
@@ -752,180 +724,11 @@ cmd_msan_install() {
   done
 }
 
-# Internal build step shared between all cmd_ossfuzz_* commands.
-_cmd_ossfuzz() {
-  local sanitizer="$1"
-  shift
-  mkdir -p "${BUILD_DIR}"
-  local real_build_dir=$(realpath "${BUILD_DIR}")
-
-  # oss-fuzz defines three directories:
-  # * /work, with the working directory to do re-builds
-  # * /src, with the source code to build
-  # * /out, with the output directory where to copy over the built files.
-  # We use $BUILD_DIR as the /work and the script directory as the /src. The
-  # /out directory is ignored as developers are used to look for the fuzzers in
-  # $BUILD_DIR/tools/ directly.
-
-  if [[ "${sanitizer}" = "memory" && ! -d "${BUILD_DIR}/msan" ]]; then
-    sudo docker run --rm -i \
-      --user $(id -u):$(id -g) \
-      -v "${real_build_dir}":/work \
-      gcr.io/oss-fuzz-base/msan-libs-builder \
-      bash -c "cp -r /msan /work"
-  fi
-
-  # Args passed to ninja. These will be evaluated as a string separated by
-  # spaces.
-  local jpegxl_extra_args="$@"
-
-  sudo docker run --rm -i \
-    -e JPEGXL_UID=$(id -u) \
-    -e JPEGXL_GID=$(id -g) \
-    -e FUZZING_ENGINE="${FUZZING_ENGINE:-libfuzzer}" \
-    -e SANITIZER="${sanitizer}" \
-    -e ARCHITECTURE=x86_64 \
-    -e FUZZING_LANGUAGE=c++ \
-    -e MSAN_LIBS_PATH="/work/msan" \
-    -e JPEGXL_EXTRA_ARGS="${jpegxl_extra_args}" \
-    -v "${MYDIR}":/src/libjxl \
-    -v "${MYDIR}/tools/ossfuzz-build.sh":/src/build.sh \
-    -v "${real_build_dir}":/work \
-    gcr.io/oss-fuzz/libjxl
-}
-
-cmd_ossfuzz_asan() {
-  _cmd_ossfuzz address "$@"
-}
-cmd_ossfuzz_msan() {
-  _cmd_ossfuzz memory "$@"
-}
-cmd_ossfuzz_ubsan() {
-  _cmd_ossfuzz undefined "$@"
-}
-
-cmd_ossfuzz_ninja() {
-  [[ -e "${BUILD_DIR}/build.ninja" ]]
-  local real_build_dir=$(realpath "${BUILD_DIR}")
-
-  if [[ -e "${BUILD_DIR}/msan" ]]; then
-    echo "ossfuzz_ninja doesn't work with msan builds. Use ossfuzz_msan." >&2
-    exit 1
-  fi
-
-  sudo docker run --rm -i \
-    --user $(id -u):$(id -g) \
-    -v "${MYDIR}":/src/libjxl \
-    -v "${real_build_dir}":/work \
-    gcr.io/oss-fuzz/libjxl \
-    ninja -C /work "$@"
-}
-
-cmd_fast_benchmark() {
-  local small_corpus_tar="${BENCHMARK_CORPORA}/jyrki-full.tar"
-  mkdir -p "${BENCHMARK_CORPORA}"
-  curl --show-error -o "${small_corpus_tar}" -z "${small_corpus_tar}" \
-    "https://storage.googleapis.com/artifacts.jpegxl.appspot.com/corpora/jyrki-full.tar"
-
-  local tmpdir=$(mktemp -d)
-  CLEANUP_FILES+=("${tmpdir}")
-  tar -xf "${small_corpus_tar}" -C "${tmpdir}"
-
-  run_benchmark "${tmpdir}" 1048576
-}
-
-cmd_benchmark() {
-  local nikon_corpus_tar="${BENCHMARK_CORPORA}/nikon-subset.tar"
-  mkdir -p "${BENCHMARK_CORPORA}"
-  curl --show-error -o "${nikon_corpus_tar}" -z "${nikon_corpus_tar}" \
-    "https://storage.googleapis.com/artifacts.jpegxl.appspot.com/corpora/nikon-subset.tar"
-
-  local tmpdir=$(mktemp -d)
-  CLEANUP_FILES+=("${tmpdir}")
-  tar -xvf "${nikon_corpus_tar}" -C "${tmpdir}"
-
-  local sem_id="jpegxl_benchmark-$$"
-  local nprocs=$(nproc --all || echo 1)
-  images=()
-  local filename
-  while IFS= read -r filename; do
-    # This removes the './'
-    filename="${filename:2}"
-    local mode
-    if [[ "${filename:0:4}" == "srgb" ]]; then
-      mode="RGB_D65_SRG_Rel_SRG"
-    elif [[ "${filename:0:5}" == "adobe" ]]; then
-      mode="RGB_D65_Ado_Rel_Ado"
-    else
-      echo "Unknown image colorspace: ${filename}" >&2
-      exit 1
-    fi
-    png_filename="${filename%.ppm}.png"
-    png_filename=$(echo "${png_filename}" | tr '/' '_')
-    sem --bg --id "${sem_id}" -j"${nprocs}" -- \
-      "${BUILD_DIR}/tools/decode_and_encode" \
-        "${tmpdir}/${filename}" "${mode}" "${tmpdir}/${png_filename}"
-    images+=( "${png_filename}" )
-  done < <(cd "${tmpdir}"; ${FIND_BIN} . -name '*.ppm' -type f)
-  sem --id "${sem_id}" --wait
-
-  # We need about 10 GiB per thread on these images.
-  run_benchmark "${tmpdir}" 10485760
-}
-
 get_mem_available() {
   if [[ "${OS}" == "Darwin" ]]; then
     echo $(vm_stat | grep -F 'Pages free:' | awk '{print $3 * 4}')
   else
     echo $(grep -F MemAvailable: /proc/meminfo | awk '{print $2}')
-  fi
-}
-
-run_benchmark() {
-  local src_img_dir="$1"
-  local mem_per_thread="${2:-10485760}"
-
-  local output_dir="${BUILD_DIR}/benchmark_results"
-  mkdir -p "${output_dir}"
-
-  # The memory available at the beginning of the benchmark run in kB. The number
-  # of threads depends on the available memory, and the passed memory per
-  # thread. We also add a 2 GiB of constant memory.
-  local mem_available="$(get_mem_available)"
-  # Check that we actually have a MemAvailable value.
-  [[ -n "${mem_available}" ]]
-  local num_threads=$(( (${mem_available} - 1048576) / ${mem_per_thread} ))
-  if [[ ${num_threads} -le 0 ]]; then
-    num_threads=1
-  fi
-
-  local benchmark_args=(
-    --input "${src_img_dir}/*.png"
-    --codec=jpeg:yuv420:q85,webp:q80,jxl:d1:6,jxl:d1:6:downsampling=8,jxl:d5:6,jxl:d5:6:downsampling=8
-    --output_dir "${output_dir}"
-    --noprofiler --show_progress
-    --num_threads="${num_threads}"
-  )
-  if [[ "${STORE_IMAGES}" == "1" ]]; then
-    benchmark_args+=(--save_decompressed --save_compressed)
-  fi
-  (
-    [[ "${TEST_STACK_LIMIT}" == "none" ]] || ulimit -s "${TEST_STACK_LIMIT}"
-    "${BUILD_DIR}/tools/benchmark_xl" "${benchmark_args[@]}" | \
-       tee "${output_dir}/results.txt"
-
-    # Check error code for benckmark_xl command. This will exit if not.
-    return ${PIPESTATUS[0]}
-  )
-
-  if [[ -n "${CI_BUILD_NAME:-}" ]]; then
-    { set +x; } 2>/dev/null
-    local message="Results for ${CI_BUILD_NAME} @ ${CI_COMMIT_SHORT_SHA} (job ${CI_JOB_URL:-}):
-
-$(cat "${output_dir}/results.txt")
-"
-    cmd_post_mr_comment "${message}"
-    set -x
   fi
 }
 
@@ -1168,23 +971,6 @@ $(column -t -s "	" "${runs_file}")
   fi
 }
 
-# Generate a corpus and run the fuzzer on that corpus.
-cmd_fuzz() {
-  local corpus_dir=$(realpath "${BUILD_DIR}/fuzzer_corpus")
-  local fuzzer_crash_dir=$(realpath "${BUILD_DIR}/fuzzer_crash")
-  mkdir -p "${corpus_dir}" "${fuzzer_crash_dir}"
-  # Generate step.
-  "${BUILD_DIR}/tools/fuzzer_corpus" "${corpus_dir}"
-  # Run step:
-  local nprocs=$(nproc --all || echo 1)
-  (
-   cd "${BUILD_DIR}"
-   "tools/djxl_fuzzer" "${fuzzer_crash_dir}" "${corpus_dir}" \
-     -max_total_time="${FUZZER_MAX_TIME}" -jobs=${nprocs} \
-     -artifact_prefix="${fuzzer_crash_dir}/"
-  )
-}
-
 # Runs the linter (clang-format) on the pending CLs.
 cmd_lint() {
   merge_request_commits
@@ -1193,15 +979,7 @@ cmd_lint() {
   local clang_format_bins=("${versions[@]/#/clang-format-}" clang-format)
   local tmpdir=$(mktemp -d)
   CLEANUP_FILES+=("${tmpdir}")
-
   local ret=0
-  local build_patch="${tmpdir}/build_cleaner.patch"
-  if ! "${MYDIR}/tools/build_cleaner.py" >"${build_patch}"; then
-    ret=1
-    echo "build_cleaner.py findings:" >&2
-    "${COLORDIFF_BIN}" <"${build_patch}"
-    echo "Run \`tools/build_cleaner.py --update\` to apply them" >&2
-  fi
 
   local installed=()
   local clang_patch
@@ -1406,9 +1184,6 @@ cmd_bump_version() {
     -e "s/(set\\(JPEGXL_PATCH_VERSION) [0-9]+\\)/\\1 ${patch})/" \
     -i lib/CMakeLists.txt
 
-  # Update lib.gni
-  tools/build_cleaner.py --update
-
   # Mark the previous version as "unstable".
   DEBCHANGE_RELEASE_HEURISTIC=log dch -M --distribution unstable --release ''
   DEBCHANGE_RELEASE_HEURISTIC=log dch -M \
@@ -1443,15 +1218,9 @@ Where cmd is one of:
  msan      Build and test an MSan (MemorySanitizer) build. Needs to have msan
            c++ libs installed with msan_install first.
  tsan      Build and test a TSan (ThreadSanitizer) build.
- asanfuzz  Build and test an ASan (AddressSanitizer) build for fuzzing.
- msanfuzz  Build and test an MSan (MemorySanitizer) build for fuzzing.
  test      Run the tests build by opt, debug, release, asan or msan. Useful when
            building with SKIP_TEST=1.
  gbench    Run the Google benchmark tests.
- fuzz      Generate the fuzzer corpus and run the fuzzer on it. Useful after
-           building with asan or msan.
- benchmark Run the benchmark over the default corpus.
- fast_benchmark Run the benchmark over the small corpus.
 
  coverage  Buils and run tests with coverage support. Runs coverage_report as
            well.
@@ -1468,22 +1237,12 @@ Where cmd is one of:
  debian_build <srcpkg> Build the given source package.
  debian_stats  Print stats about the built packages.
 
-oss-fuzz commands:
- ossfuzz_asan   Build the local source inside oss-fuzz docker with asan.
- ossfuzz_msan   Build the local source inside oss-fuzz docker with msan.
- ossfuzz_ubsan  Build the local source inside oss-fuzz docker with ubsan.
- ossfuzz_ninja  Run ninja on the BUILD_DIR inside the oss-fuzz docker. Extra
-                parameters are passed to ninja, for example "djxl_fuzzer" will
-                only build that ninja target. Use for faster build iteration
-                after one of the ossfuzz_*san commands.
-
 You can pass some optional environment variables as well:
  - BUILD_DIR: The output build directory (by default "$$repo/build")
  - BUILD_TARGET: The target triplet used when cross-compiling.
  - CMAKE_FLAGS: Convenience flag to pass both CMAKE_C_FLAGS and CMAKE_CXX_FLAGS.
  - CMAKE_PREFIX_PATH: Installation prefixes to be searched by the find_package.
  - ENABLE_WASM_SIMD=1: enable experimental SIMD in WASM build (only).
- - FUZZER_MAX_TIME: "fuzz" command fuzzer running timeout in seconds.
  - LINT_OUTPUT: Path to the output patch from the "lint" command.
  - SKIP_CPUSET=1: Skip modifying the cpuset in the arm_benchmark.
  - SKIP_TEST=1: Skip the test stage.

@@ -22,7 +22,6 @@
 #include "encoder/ac_strategy.h"
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"

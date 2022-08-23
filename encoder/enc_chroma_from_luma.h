@@ -42,10 +42,10 @@ struct CfLHeuristics {
   void ComputeTile(const Rect& r, const Image3F& opsin,
                    const DequantMatrices& dequant,
                    const AcStrategyImage* ac_strategy,
-                   const Quantizer* quantizer, bool fast, size_t thread,
+                   const Quantizer* quantizer, size_t thread,
                    ColorCorrelationMap* cmap);
 
-  void ComputeDC(bool fast, ColorCorrelationMap* cmap);
+  void ComputeDC(ColorCorrelationMap* cmap);
 
   ImageF dc_values;
   hwy::AlignedFreeUniquePtr<float[]> mem;

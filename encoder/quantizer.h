@@ -19,13 +19,11 @@
 #include "encoder/ac_strategy.h"
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/image.h"
-#include "encoder/linalg.h"
 #include "encoder/quant_weights.h"
 
 // Quantizes DC and AC coefficients, with separate quantization tables according

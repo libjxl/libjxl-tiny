@@ -23,14 +23,11 @@
 #include "encoder/ac_strategy.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/data_parallel.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/status.h"
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
-#include "encoder/convolve.h"
 #include "encoder/enc_group.h"
 #include "encoder/fast_math-inl.h"
-#include "encoder/gauss_blur.h"
 #include "encoder/image.h"
 #include "encoder/image_ops.h"
 #include "encoder/opsin_params.h"
@@ -432,7 +429,6 @@ struct AdaptiveQuantizationImpl {
 
   void ComputeTile(float butteraugli_target, float scale, const Image3F& xyb,
                    const Rect& rect, const int thread, ImageF* mask) {
-    PROFILER_ZONE("aq DiffPrecompute");
     const size_t xsize = xyb.xsize();
     const size_t ysize = xyb.ysize();
 
@@ -567,8 +563,6 @@ ImageF AdaptiveQuantizationMap(const float butteraugli_target,
                                const Image3F& xyb,
                                const FrameDimensions& frame_dim, float scale,
                                ThreadPool* pool, ImageF* mask) {
-  PROFILER_ZONE("aq AdaptiveQuantMap");
-
   AdaptiveQuantizationImpl impl;
   impl.Init(xyb);
   *mask = ImageF(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
@@ -663,7 +657,6 @@ float InitialQuantDC(float butteraugli_target) {
 ImageF InitialQuantField(const float butteraugli_target, const Image3F& opsin,
                          const FrameDimensions& frame_dim, ThreadPool* pool,
                          float rescale, ImageF* mask) {
-  PROFILER_FUNC;
   const float quant_ac = kAcQuant / butteraugli_target;
   return HWY_DYNAMIC_DISPATCH(AdaptiveQuantizationMap)(
       butteraugli_target, opsin, frame_dim, quant_ac * rescale, pool, mask);

@@ -12,7 +12,6 @@
 
 #include "encoder/ans_params.h"
 #include "encoder/base/padded_bytes.h"
-#include "encoder/base/profiler.h"
 #include "encoder/base/span.h"
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"

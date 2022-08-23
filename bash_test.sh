@@ -170,45 +170,6 @@ test_merge_conflict() {
   return ${ret}
 }
 
-# Check that the library and the package have the same version. This prevents
-# accidentally having them out of sync.
-get_version() {
-  local varname=$1
-  local line=$(grep -F "set(${varname} " lib/CMakeLists.txt | head -n 1)
-  [[ -n "${line}" ]]
-  line="${line#set(${varname} }"
-  line="${line%)}"
-  echo "${line}"
-}
-
-test_version() {
-  local major=$(get_version JPEGXL_MAJOR_VERSION)
-  local minor=$(get_version JPEGXL_MINOR_VERSION)
-  local patch=$(get_version JPEGXL_PATCH_VERSION)
-  # Check that the version is not empty
-  if [[ -z "${major}${minor}${patch}" ]]; then
-    echo "Couldn't parse version from CMakeLists.txt" >&2
-    return 1
-  fi
-  local pkg_version=$(head -n 1 debian/changelog)
-  # Get only the part between the first "jpeg-xl (" and the following ")".
-  pkg_version="${pkg_version#jpeg-xl (}"
-  pkg_version="${pkg_version%%)*}"
-  if [[ -z "${pkg_version}" ]]; then
-    echo "Couldn't parse version from debian package" >&2
-    return 1
-  fi
-
-  local lib_version="${major}.${minor}.${patch}"
-  lib_version="${lib_version%.0}"
-  if [[ "${pkg_version}" != "${lib_version}"* ]]; then
-    echo "Debian package version (${pkg_version}) doesn't match library" \
-      "version (${lib_version})." >&2
-    return 1
-  fi
-  return 0
-}
-
 # Check that the SHA versions in deps.sh matches the git submodules.
 test_deps_version() {
   while IFS= read -r line; do

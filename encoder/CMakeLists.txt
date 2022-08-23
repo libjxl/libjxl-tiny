@@ -32,11 +32,7 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   entropy_coder.cc
   quantizer.cc
   gaborish.cc
-  convolve_slow.cc
-  convolve_symmetric3.cc
   convolve_symmetric5.cc
-  convolve_separable5.cc
-  convolve_separable7.cc
   chroma_from_luma.cc
   cmdline.cc
   file_io.cc
