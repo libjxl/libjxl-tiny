@@ -25,14 +25,14 @@ constexpr uint32_t kDCTOrderContextStart = 0;
 // 10, inclusive.
 constexpr uint32_t kNonZeroBuckets = 37;
 
-static const uint16_t kCoeffFreqContext[64] = {
+static constexpr uint16_t kCoeffFreqContext[64] = {
     0xBAD, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
     15,    15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22,
     23,    23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 25, 26, 26, 26, 26,
     27,    27, 27, 27, 28, 28, 28, 28, 29, 29, 29, 29, 30, 30, 30, 30,
 };
 
-static const uint16_t kCoeffNumNonzeroContext[64] = {
+static constexpr uint16_t kCoeffNumNonzeroContext[64] = {
     0xBAD, 0,   31,  62,  62,  93,  93,  93,  93,  123, 123, 123, 123,
     152,   152, 152, 152, 152, 152, 152, 152, 180, 180, 180, 180, 180,
     180,   180, 180, 180, 180, 180, 180, 206, 206, 206, 206, 206, 206,
@@ -44,6 +44,15 @@ static const uint16_t kCoeffNumNonzeroContext[64] = {
 constexpr int kZeroDensityContextCount = 458;
 // Supremum of ZeroDensityContext(x, y) + 1.
 constexpr int kZeroDensityContextLimit = 474;
+
+static constexpr uint8_t kBlockCtxMap[] = {
+    0,  1,  2,  2,  3,  3,  4, 5, 6, 6, 6,  6,  6,  7,  8,  9,  9,  10, 11, 12,
+    13, 14, 14, 14, 14, 14, 7, 8, 9, 9, 10, 11, 12, 13, 14, 14, 14, 14, 14,
+};
+static constexpr size_t kNumBlockCtxs = 15;
+
+static constexpr size_t kNumACContexts =
+    kNumBlockCtxs * (kNonZeroBuckets + kZeroDensityContextCount);
 
 /* This function is used for entropy-sources pre-clustering.
  *

@@ -612,20 +612,19 @@ static const float kAcQuant = 0.8294f;
 
 }  // namespace
 
-void AdjustQuantField(const AcStrategyImage& ac_strategy, const Rect& rect,
-                      ImageF* quant_field) {
+void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field) {
   // Replace the whole quant_field in non-8x8 blocks with the maximum of each
   // 8x8 block.
   size_t stride = quant_field->PixelsPerRow();
-  for (size_t y = 0; y < rect.ysize(); ++y) {
-    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(rect, y);
-    float* JXL_RESTRICT quant_row = rect.Row(quant_field, y);
-    for (size_t x = 0; x < rect.xsize(); ++x) {
+  for (size_t y = 0; y < quant_field->ysize(); ++y) {
+    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(y);
+    int* JXL_RESTRICT quant_row = quant_field->Row(y);
+    for (size_t x = 0; x < quant_field->xsize(); ++x) {
       AcStrategy acs = ac_strategy_row[x];
       if (!acs.IsFirstBlock()) continue;
       JXL_ASSERT(x + acs.covered_blocks_x() <= quant_field->xsize());
       JXL_ASSERT(y + acs.covered_blocks_y() <= quant_field->ysize());
-      float max = quant_row[x];
+      int max = quant_row[x];
       for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
         for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
           max = std::max(quant_row[x + ix + iy * stride], max);

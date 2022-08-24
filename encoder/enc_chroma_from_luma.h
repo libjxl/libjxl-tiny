@@ -32,31 +32,9 @@ namespace jxl {
 
 void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer);
 
-struct CfLHeuristics {
-  void Init(const Image3F& opsin);
-
-  void PrepareForThreads(size_t num_threads) {
-    mem = hwy::AllocateAligned<float>(num_threads * kItemsPerThread);
-  }
-
-  void ComputeTile(const Rect& r, const Image3F& opsin,
-                   const DequantMatrices& dequant,
-                   const AcStrategyImage* ac_strategy,
-                   const Quantizer* quantizer, size_t thread,
-                   ColorCorrelationMap* cmap);
-
-  void ComputeDC(ColorCorrelationMap* cmap);
-
-  ImageF dc_values;
-  hwy::AlignedFreeUniquePtr<float[]> mem;
-
-  // Working set is too large for stack; allocate dynamically.
-  constexpr static size_t kItemsPerThread =
-      AcStrategy::kMaxCoeffArea * 3        // Blocks
-      + kColorTileDim * kColorTileDim * 4  // AC coeff storage
-      + AcStrategy::kMaxCoeffArea * 2;     // Scratch space
-};
-
+Status ComputeColorCorrelationMap(const Image3F& opsin,
+                                  const DequantMatrices& dequant,
+                                  ThreadPool* pool, ColorCorrelationMap* cmap);
 }  // namespace jxl
 
 #endif  // ENCODER_ENC_CHROMA_FROM_LUMA_H_

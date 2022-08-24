@@ -10,20 +10,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "encoder/ac_strategy.h"
 #include "encoder/base/status.h"
+#include "encoder/chroma_from_luma.h"
+#include "encoder/dct_util.h"
 #include "encoder/enc_bit_writer.h"
-#include "encoder/enc_cache.h"
+#include "encoder/image.h"
+#include "encoder/quantizer.h"
 
 namespace jxl {
 
-// Fills DC
-void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
-                         const Image3F& opsin, Image3F* dc);
-
-Status EncodeGroupTokenizedCoefficients(size_t group_idx, size_t pass_idx,
-                                        size_t histogram_idx,
-                                        const PassesEncoderState& enc_state,
-                                        BitWriter* writer);
+void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
+                         const ImageI& raw_quant_field,
+                         const Quantizer& quantizer,
+                         const ColorCorrelationMap& cmap,
+                         const AcStrategyImage& ac_strategy,
+                         const float x_qm_mul, ACImage* coeffs, Image3F* dc);
 
 }  // namespace jxl
 

@@ -114,8 +114,7 @@ void Quantizer::SetQuant(float quant_dc, float quant_ac,
   FillImage(val, raw_quant_field);
 }
 
-Status Quantizer::Encode(BitWriter* writer) const {
-  BitWriter::Allotment allotment(writer, 1024);
+void Quantizer::Encode(BitWriter* writer) const {
   if (global_scale_ < 2049) {
     writer->Write(2, 0);
     writer->Write(11, global_scale_ - 1);
@@ -141,8 +140,6 @@ Status Quantizer::Encode(BitWriter* writer) const {
     writer->Write(2, 3);
     writer->Write(16, quant_dc_ - 1);
   }
-  allotment.Reclaim(writer);
-  return true;
 }
 
 void Quantizer::DumpQuantizationMap(const ImageI& raw_quant_field) const {

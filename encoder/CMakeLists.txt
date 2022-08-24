@@ -23,12 +23,10 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_group.cc
   enc_toc.cc
   enc_xyb.cc
-  enc_modular.cc
   read_pfm.cc
   quant_weights.cc
   base/data_parallel.cc
   ans_common.cc
-  modular.cc
   entropy_coder.cc
   quantizer.cc
   gaborish.cc

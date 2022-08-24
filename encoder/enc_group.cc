@@ -121,10 +121,22 @@ void QuantizeRoundtripYBlockAC(const Quantizer& quantizer, int32_t quant,
   }
 }
 
-void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
-                         const Image3F& opsin, Image3F* dc) {
-  const Rect block_group_rect = enc_state->shared.BlockGroupRect(group_idx);
-  const Rect group_rect = enc_state->shared.GroupRect(group_idx);
+void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
+                         const ImageI& raw_quant_field,
+                         const Quantizer& quantizer,
+                         const ColorCorrelationMap& cmap,
+                         const AcStrategyImage& ac_strategy,
+                         const float x_qm_mul, ACImage* coeffs_out,
+                         Image3F* dc) {
+  const size_t xsize_groups = DivCeil(opsin.xsize(), kGroupDim);
+  const size_t gx = group_idx % xsize_groups;
+  const size_t gy = group_idx / xsize_groups;
+  const Rect block_group_rect(gx * kGroupDimInBlocks, gy * kGroupDimInBlocks,
+                              kGroupDimInBlocks, kGroupDimInBlocks,
+                              DivCeil(opsin.xsize(), kBlockDim),
+                              DivCeil(opsin.ysize(), kBlockDim));
+  const Rect group_rect(gx * kGroupDim, gy * kGroupDim, kGroupDim, kGroupDim,
+                        opsin.xsize(), opsin.ysize());
   const Rect cmap_rect(
       block_group_rect.x0() / kColorTileDimInBlocks,
       block_group_rect.y0() / kColorTileDimInBlocks,
@@ -137,8 +149,6 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
   const size_t dc_stride = static_cast<size_t>(dc->PixelsPerRow());
   const size_t opsin_stride = static_cast<size_t>(opsin.PixelsPerRow());
 
-  const ImageI& full_quant_field = enc_state->shared.raw_quant_field;
-
   // TODO(veluca): consider strategies to reduce this memory.
   auto mem = hwy::AllocateAligned<int32_t>(3 * AcStrategy::kMaxCoeffArea);
   auto fmem = hwy::AllocateAligned<float>(5 * AcStrategy::kMaxCoeffArea);
@@ -147,11 +157,11 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
   {
     constexpr HWY_CAPPED(float, kDCTBlockSize) d;
 
-    int32_t* JXL_RESTRICT coeffs[kMaxNumPasses][3] = {};
+    int32_t* JXL_RESTRICT coeffs[3] = {};
     // TODO(veluca): 16-bit quantized coeffs are not implemented yet.
-    JXL_ASSERT(enc_state->coeffs[0]->Type() == ACType::k32);
+    JXL_ASSERT(coeffs_out->Type() == ACType::k32);
     for (size_t c = 0; c < 3; c++) {
-      coeffs[0][c] = enc_state->coeffs[0]->PlaneRow(c, group_idx, 0).ptr32;
+      coeffs[c] = coeffs_out->PlaneRow(c, group_idx, 0).ptr32;
     }
 
     HWY_ALIGN float* coeffs_in = fmem.get();
@@ -161,12 +171,12 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
 
     for (size_t by = 0; by < ysize_blocks; ++by) {
       const int32_t* JXL_RESTRICT row_quant_ac =
-          block_group_rect.ConstRow(full_quant_field, by);
+          block_group_rect.ConstRow(raw_quant_field, by);
       size_t ty = by / kColorTileDimInBlocks;
       const int8_t* JXL_RESTRICT row_cmap[3] = {
-          cmap_rect.ConstRow(enc_state->shared.cmap.ytox_map, ty),
+          cmap_rect.ConstRow(cmap.ytox_map, ty),
           nullptr,
-          cmap_rect.ConstRow(enc_state->shared.cmap.ytob_map, ty),
+          cmap_rect.ConstRow(cmap.ytob_map, ty),
       };
       const float* JXL_RESTRICT opsin_rows[3] = {
           group_rect.ConstPlaneRow(opsin, 0, by * kBlockDim),
@@ -179,13 +189,11 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
           block_group_rect.PlaneRow(dc, 2, by),
       };
       AcStrategyRow ac_strategy_row =
-          enc_state->shared.ac_strategy.ConstRow(block_group_rect, by);
+          ac_strategy.ConstRow(block_group_rect, by);
       for (size_t tx = 0; tx < DivCeil(xsize_blocks, kColorTileDimInBlocks);
            tx++) {
-        const auto x_factor =
-            Set(d, enc_state->shared.cmap.YtoXRatio(row_cmap[0][tx]));
-        const auto b_factor =
-            Set(d, enc_state->shared.cmap.YtoBRatio(row_cmap[2][tx]));
+        const auto x_factor = Set(d, cmap.YtoXRatio(row_cmap[0][tx]));
+        const auto b_factor = Set(d, cmap.YtoBRatio(row_cmap[2][tx]));
         for (size_t bx = tx * kColorTileDimInBlocks;
              bx < xsize_blocks && bx < (tx + 1) * kColorTileDimInBlocks; ++bx) {
           const AcStrategy acs = ac_strategy_row[bx];
@@ -204,9 +212,9 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
                               opsin_stride, coeffs_in + size, scratch_space);
           DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size,
                                   dc_rows[1] + bx, dc_stride);
-          QuantizeRoundtripYBlockAC(
-              enc_state->shared.quantizer, quant_ac, acs.RawStrategy(), xblocks,
-              yblocks, kDefaultQuantBias, coeffs_in + size, quantized + size);
+          QuantizeRoundtripYBlockAC(quantizer, quant_ac, acs.RawStrategy(),
+                                    xblocks, yblocks, kDefaultQuantBias,
+                                    coeffs_in + size, quantized + size);
 
           // DCT X and B channels
           for (size_t c : {0, 2}) {
@@ -228,16 +236,14 @@ void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
 
           // Quantize X and B channels and set DC.
           for (size_t c : {0, 2}) {
-            QuantizeBlockAC(enc_state->shared.quantizer, c, quant_ac,
-                            c == 0 ? enc_state->x_qm_multiplier
-                                   : enc_state->b_qm_multiplier,
+            QuantizeBlockAC(quantizer, c, quant_ac, c == 0 ? x_qm_mul : 1.0,
                             acs.RawStrategy(), xblocks, yblocks,
                             coeffs_in + c * size, quantized + c * size);
             DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size,
                                     dc_rows[c] + bx, dc_stride);
           }
           for (size_t c = 0; c < 3; c++) {
-            memcpy(coeffs[0][c] + offset, quantized + c * size,
+            memcpy(coeffs[c] + offset, quantized + c * size,
                    sizeof(quantized[0]) * size);
           }
           offset += size;
@@ -255,32 +261,15 @@ HWY_AFTER_NAMESPACE();
 #if HWY_ONCE
 namespace jxl {
 HWY_EXPORT(ComputeCoefficients);
-void ComputeCoefficients(size_t group_idx, PassesEncoderState* enc_state,
-                         const Image3F& opsin, Image3F* dc) {
-  return HWY_DYNAMIC_DISPATCH(ComputeCoefficients)(group_idx, enc_state, opsin,
-                                                   dc);
-}
-
-Status EncodeGroupTokenizedCoefficients(size_t group_idx, size_t pass_idx,
-                                        size_t histogram_idx,
-                                        const PassesEncoderState& enc_state,
-                                        BitWriter* writer) {
-  // Select which histogram to use among those of the current pass.
-  const size_t num_histograms = enc_state.shared.num_histograms;
-  // num_histograms is 0 only for lossless.
-  JXL_ASSERT(num_histograms == 0 || histogram_idx < num_histograms);
-  size_t histo_selector_bits = CeilLog2Nonzero(num_histograms);
-
-  if (histo_selector_bits != 0) {
-    BitWriter::Allotment allotment(writer, histo_selector_bits);
-    writer->Write(histo_selector_bits, histogram_idx);
-    allotment.Reclaim(writer);
-  }
-  WriteTokens(enc_state.passes[pass_idx].ac_tokens[group_idx],
-              enc_state.passes[pass_idx].codes,
-              enc_state.passes[pass_idx].context_map, writer);
-
-  return true;
+void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
+                         const ImageI& raw_quant_field,
+                         const Quantizer& quantizer,
+                         const ColorCorrelationMap& cmap,
+                         const AcStrategyImage& ac_strategy,
+                         const float x_qm_mul, ACImage* coeffs, Image3F* dc) {
+  return HWY_DYNAMIC_DISPATCH(ComputeCoefficients)(
+      group_idx, opsin, raw_quant_field, quantizer, cmap, ac_strategy, x_qm_mul,
+      coeffs, dc);
 }
 
 }  // namespace jxl

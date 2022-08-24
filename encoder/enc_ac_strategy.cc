@@ -516,9 +516,9 @@ void FindBestFirstLevelDivisionForSquare(
   }
 }
 
-void ProcessRectACS(PassesEncoderState* JXL_RESTRICT enc_state,
-                    float butteraugli_target, const ACSConfig& config,
-                    const Rect& rect) {
+void ProcessRectACS(AcStrategyImage* ac_strategy,
+                    const ColorCorrelationMap& cmap, float butteraugli_target,
+                    const ACSConfig& config, const Rect& rect) {
   // Main philosophy here:
   // 1. First find best 8x8 transform for each area.
   // 2. Merging them into larger transforms where possibly, but
@@ -529,7 +529,6 @@ void ProcessRectACS(PassesEncoderState* JXL_RESTRICT enc_state,
   // maps happen to be at that resolution, and having
   // integral transforms cross these boundaries leads to
   // additional complications.
-  AcStrategyImage* ac_strategy = &enc_state->shared.ac_strategy;
   // TODO(veluca): reuse allocations
   auto mem = hwy::AllocateAligned<float>(5 * AcStrategy::kMaxCoeffArea);
   auto qmem = hwy::AllocateAligned<uint32_t>(AcStrategy::kMaxCoeffArea);
@@ -543,11 +542,9 @@ void ProcessRectACS(PassesEncoderState* JXL_RESTRICT enc_state,
   size_t tx = bx / kColorTileDimInBlocks;
   size_t ty = by / kColorTileDimInBlocks;
   const float cmap_factors[3] = {
-      enc_state->shared.cmap.YtoXRatio(
-          enc_state->shared.cmap.ytox_map.ConstRow(ty)[tx]),
+      cmap.YtoXRatio(cmap.ytox_map.ConstRow(ty)[tx]),
       0.0f,
-      enc_state->shared.cmap.YtoBRatio(
-          enc_state->shared.cmap.ytob_map.ConstRow(ty)[tx]),
+      cmap.YtoBRatio(cmap.ytob_map.ConstRow(ty)[tx]),
   };
   // First compute the best 8x8 transform for each square. Later, we do not
   // experiment with different combinations, but only use the best of the 8x8s
@@ -754,9 +751,14 @@ namespace jxl {
 HWY_EXPORT(ProcessRectACS);
 
 void AcStrategyHeuristics::Init(const Image3F& src, float distance,
-                                PassesEncoderState* enc_state) {
-  this->enc_state = enc_state;
-  config.dequant = &enc_state->shared.matrices;
+                                const ColorCorrelationMap& cmap,
+                                const ImageF& quant_field,
+                                const ImageF& masking_field,
+                                DequantMatrices* matrices,
+                                AcStrategyImage* ac_strategy) {
+  this->ac_strategy = ac_strategy;
+  this->cmap = &cmap;
+  config.dequant = matrices;
   butteraugli_target = distance;
 
   uint32_t acs_mask = 0;
@@ -764,14 +766,14 @@ void AcStrategyHeuristics::Init(const Image3F& src, float distance,
   for (size_t i = 0; i < AcStrategy::DCT128X128; i++) {
     acs_mask |= (1 << i);
   }
-  JXL_CHECK(enc_state->shared.matrices.EnsureComputed(acs_mask));
+  JXL_CHECK(matrices->EnsureComputed(acs_mask));
 
   // Image row pointers and strides.
-  config.quant_field_row = enc_state->initial_quant_field.Row(0);
-  config.quant_field_stride = enc_state->initial_quant_field.PixelsPerRow();
-  auto& mask = enc_state->initial_quant_masking;
+  config.quant_field_row = quant_field.ConstRow(0);
+  config.quant_field_stride = quant_field.PixelsPerRow();
+  auto& mask = masking_field;
   if (mask.xsize() > 0 && mask.ysize() > 0) {
-    config.masking_field_row = mask.Row(0);
+    config.masking_field_row = mask.ConstRow(0);
     config.masking_field_stride = mask.PixelsPerRow();
   }
 
@@ -798,18 +800,41 @@ void AcStrategyHeuristics::Init(const Image3F& src, float distance,
   config.cost1 = 1 + slope * 8.8703248061477744f;
   config.cost2 = 4.4628149885273363f;
   config.cost_delta = 5.3359184934516337f;
-  JXL_ASSERT(enc_state->shared.ac_strategy.xsize() ==
-             enc_state->shared.frame_dim.xsize_blocks);
-  JXL_ASSERT(enc_state->shared.ac_strategy.ysize() ==
-             enc_state->shared.frame_dim.ysize_blocks);
 }
 
 void AcStrategyHeuristics::ProcessRect(const Rect& rect) {
   // In Falcon mode, use DCT8 everywhere and uniform quantization.
-  // enc_state->shared.ac_strategy.FillDCT8(rect);
+  // ac_strategy->FillDCT8(rect);
   // return;
   HWY_DYNAMIC_DISPATCH(ProcessRectACS)
-  (enc_state, butteraugli_target, config, rect);
+  (ac_strategy, *cmap, butteraugli_target, config, rect);
+}
+
+Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
+                              const ColorCorrelationMap& cmap,
+                              const ImageF& quant_field,
+                              const ImageF& masking_field, ThreadPool* pool,
+                              DequantMatrices* matrices,
+                              AcStrategyImage* ac_strategy) {
+  size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
+  size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
+  size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
+  size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
+  AcStrategyHeuristics acs_heuristics;
+  acs_heuristics.Init(opsin, distance, cmap, quant_field, masking_field,
+                      matrices, ac_strategy);
+  auto process_tile_acs = [&](const uint32_t tid, const size_t thread) {
+    size_t tx = tid % xsize_tiles;
+    size_t ty = tid / xsize_tiles;
+    size_t by0 = ty * kColorTileDimInBlocks;
+    size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks, ysize_blocks);
+    size_t bx0 = tx * kColorTileDimInBlocks;
+    size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
+    Rect r(bx0, by0, bx1 - bx0, by1 - by0);
+    acs_heuristics.ProcessRect(r);
+  };
+  return RunOnPool(pool, 0, xsize_tiles * ysize_tiles, ThreadPool::NoInit,
+                   process_tile_acs, "Acs Heuristics");
 }
 
 }  // namespace jxl
