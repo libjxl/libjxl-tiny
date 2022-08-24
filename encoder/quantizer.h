@@ -114,7 +114,7 @@ class Quantizer {
   // Dequantize by multiplying with this times dequant_matrix.
   float inv_quant_ac(int32_t quant) const { return inv_global_scale_ / quant; }
 
-  Status Encode(BitWriter* writer) const;
+  void Encode(BitWriter* writer) const;
 
   void DumpQuantizationMap(const ImageI& raw_quant_field) const;
 

@@ -13,7 +13,6 @@
 #include "encoder/base/data_parallel.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
-#include "encoder/enc_cache.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
 #include "encoder/quantizer.h"
@@ -38,8 +37,7 @@ ImageF InitialQuantField(float butteraugli_target, const Image3F& opsin,
 
 float InitialQuantDC(float butteraugli_target);
 
-void AdjustQuantField(const AcStrategyImage& ac_strategy, const Rect& rect,
-                      ImageF* quant_field);
+void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field);
 
 }  // namespace jxl
 

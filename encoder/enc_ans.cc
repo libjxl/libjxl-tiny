@@ -344,114 +344,89 @@ void BuildAndStoreANSEncodingData(const ANSHistBin* histogram,
   return;
 }
 
-class HistogramBuilder {
- public:
-  explicit HistogramBuilder(const size_t num_contexts)
-      : histograms_(num_contexts) {}
-
-  void VisitSymbol(int symbol, size_t histo_idx) {
-    JXL_DASSERT(histo_idx < histograms_.size());
-    histograms_[histo_idx].Add(symbol);
-  }
-
-  void BuildAndStoreEntropyCodes(const std::vector<std::vector<Token>>& tokens,
-                                 EntropyEncodingData* codes,
-                                 std::vector<uint8_t>* context_map,
-                                 BitWriter* writer) {
-    codes->encoding_info.clear();
-    std::vector<Histogram> clustered_histograms(histograms_);
-    context_map->resize(histograms_.size());
-    if (histograms_.size() > 1) {
-      std::vector<uint32_t> histogram_symbols;
-      ClusterHistograms(histograms_, kClustersLimit, &clustered_histograms,
-                        &histogram_symbols);
-      for (size_t c = 0; c < histograms_.size(); ++c) {
-        (*context_map)[c] = static_cast<uint8_t>(histogram_symbols[c]);
-      }
-      size_t num_histograms = clustered_histograms.size();
-      if (num_histograms == 1) {
-        writer->Write(1, 1);  // Simple code
-        writer->Write(2, 0);  // 0 bits per entry.
-      } else {
-        std::vector<Token> tokens;
-        for (size_t i = 0; i < context_map->size(); i++) {
-          tokens.emplace_back(0, (*context_map)[i]);
-        }
-        writer->Write(1, 0);
-        writer->Write(1, 0);  // Don't use MTF.
-        WriteHistogramsAndTokens(1, tokens, writer);
-      }
-    }
-    writer->Write(1, 0);  // use_prefix_code
-    writer->Write(2, 3);  // log_alpha_size = 8
-    for (size_t i = 0; i < clustered_histograms.size(); ++i) {
-      writer->Write(4, 4);  // split_exponent
-      writer->Write(3, 2);  // msb_in_token
-      writer->Write(2, 0);  // lsb_in_token
-    }
-    for (size_t c = 0; c < clustered_histograms.size(); ++c) {
-      size_t num_symbol = 0;
-      for (size_t i = 0; i < clustered_histograms[c].data_.size(); i++) {
-        if (clustered_histograms[c].data_[i]) num_symbol = i + 1;
-      }
-      codes->encoding_info.emplace_back();
-      codes->encoding_info.back().resize(std::max<size_t>(1, num_symbol));
-
-      BitWriter::Allotment allotment(writer, 256 + num_symbol * 24);
-      BuildAndStoreANSEncodingData(clustered_histograms[c].data_.data(),
-                                   num_symbol, /*log_alpha_size=*/8,
-                                   codes->encoding_info.back().data(), writer);
-      allotment.FinishedHistogram(writer);
-      allotment.Reclaim(writer);
-    }
-    return;
-  }
-
-  const Histogram& Histo(size_t i) const { return histograms_[i]; }
-
- private:
-  std::vector<Histogram> histograms_;
-};
-
 }  // namespace
+
+void HistogramBuilder::VisitSymbol(int symbol, size_t histo_idx) {
+  JXL_DASSERT(histo_idx < histograms_.size());
+  histograms_[histo_idx].Add(symbol);
+}
+
+void HistogramBuilder::BuildAndStoreEntropyCodes(
+    EntropyEncodingData* codes, std::vector<uint8_t>* context_map,
+    BitWriter* writer) {
+  const size_t max_contexts = std::min(histograms_.size(), kClustersLimit);
+  BitWriter::Allotment allotment(
+      writer, 1024 + histograms_.size() * 40 + max_contexts * 96);
+  writer->Write(1, 0);  // no lz77
+  codes->encoding_info.clear();
+  std::vector<Histogram> clustered_histograms(histograms_);
+  context_map->resize(histograms_.size());
+  if (histograms_.size() > 1) {
+    std::vector<uint32_t> histogram_symbols;
+    ClusterHistograms(histograms_, kClustersLimit, &clustered_histograms,
+                      &histogram_symbols);
+    for (size_t c = 0; c < histograms_.size(); ++c) {
+      (*context_map)[c] = static_cast<uint8_t>(histogram_symbols[c]);
+    }
+    size_t num_histograms = clustered_histograms.size();
+    if (num_histograms == 1) {
+      writer->Write(1, 1);  // Simple code
+      writer->Write(2, 0);  // 0 bits per entry.
+    } else {
+      std::vector<Token> tokens;
+      for (size_t i = 0; i < context_map->size(); i++) {
+        tokens.emplace_back(0, (*context_map)[i]);
+      }
+      writer->Write(1, 0);
+      writer->Write(1, 0);  // Don't use MTF.
+      WriteHistogramsAndTokens(1, tokens, writer);
+    }
+  }
+  writer->Write(1, 0);  // use_prefix_code
+  writer->Write(2, 3);  // log_alpha_size = 8
+  for (size_t i = 0; i < clustered_histograms.size(); ++i) {
+    writer->Write(4, 4);  // split_exponent
+    writer->Write(3, 2);  // msb_in_token
+    writer->Write(2, 0);  // lsb_in_token
+  }
+  for (size_t c = 0; c < clustered_histograms.size(); ++c) {
+    size_t num_symbol = 0;
+    for (size_t i = 0; i < clustered_histograms[c].data_.size(); i++) {
+      if (clustered_histograms[c].data_[i]) num_symbol = i + 1;
+    }
+    codes->encoding_info.emplace_back();
+    codes->encoding_info.back().resize(std::max<size_t>(1, num_symbol));
+
+    BitWriter::Allotment allotment(writer, 256 + num_symbol * 24);
+    BuildAndStoreANSEncodingData(clustered_histograms[c].data_.data(),
+                                 num_symbol, /*log_alpha_size=*/8,
+                                 codes->encoding_info.back().data(), writer);
+    allotment.FinishedHistogram(writer);
+    allotment.Reclaim(writer);
+  }
+  allotment.Reclaim(writer);
+}
+
+void HistogramBuilder::AddTokens(const std::vector<Token>& tokens) {
+  HybridUintConfig uint_config;
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const Token& token = tokens[i];
+    uint32_t tok, nbits, bits;
+    uint_config.Encode(token.value, &tok, &nbits, &bits);
+    VisitSymbol(tok, token.context);
+  }
+}
 
 void BuildAndEncodeHistograms(size_t num_contexts,
                               std::vector<std::vector<Token>>& tokens,
                               EntropyEncodingData* codes,
                               std::vector<uint8_t>* context_map,
                               BitWriter* writer) {
-  const size_t max_contexts = std::min(num_contexts, kClustersLimit);
-  BitWriter::Allotment allotment(writer,
-                                 1024 + num_contexts * 40 + max_contexts * 96);
-  writer->Write(1, 0);  // no lz77
-  size_t total_tokens = 0;
   // Build histograms.
   HistogramBuilder builder(num_contexts);
-  HybridUintConfig uint_config;
-  for (size_t i = 0; i < tokens.size(); ++i) {
-    if (num_contexts == 1) {
-      for (size_t j = 0; j < tokens[i].size(); ++j) {
-        const Token& token = tokens[i][j];
-        total_tokens++;
-        uint32_t tok, nbits, bits;
-        uint_config.Encode(token.value, &tok, &nbits, &bits);
-        builder.VisitSymbol(tok, /*token.context=*/0);
-      }
-    } else {
-      for (size_t j = 0; j < tokens[i].size(); ++j) {
-        const Token& token = tokens[i][j];
-        total_tokens++;
-        uint32_t tok, nbits, bits;
-        uint_config.Encode(token.value, &tok, &nbits, &bits);
-        builder.VisitSymbol(tok, token.context);
-      }
-    }
-  }
-
+  for (const auto& t : tokens) builder.AddTokens(t);
   // Encode histograms.
-  builder.BuildAndStoreEntropyCodes(tokens, codes, context_map, writer);
-  allotment.FinishedHistogram(writer);
-  allotment.Reclaim(writer);
+  builder.BuildAndStoreEntropyCodes(codes, context_map, writer);
 }
 
 void WriteTokens(const std::vector<Token>& tokens,

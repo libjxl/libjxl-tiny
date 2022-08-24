@@ -14,7 +14,6 @@
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
-#include "encoder/enc_cache.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
 
@@ -29,9 +28,9 @@ struct ACSConfig {
   const DequantMatrices* JXL_RESTRICT dequant;
   float info_loss_multiplier;
   float info_loss_multiplier2;
-  float* JXL_RESTRICT quant_field_row;
+  const float* JXL_RESTRICT quant_field_row;
   size_t quant_field_stride;
-  float* JXL_RESTRICT masking_field_row;
+  const float* JXL_RESTRICT masking_field_row;
   size_t masking_field_stride;
   const float* JXL_RESTRICT src_rows[3];
   size_t src_stride;
@@ -56,12 +55,22 @@ struct ACSConfig {
 };
 
 struct AcStrategyHeuristics {
-  void Init(const Image3F& src, float distance, PassesEncoderState* enc_state);
+  void Init(const Image3F& src, float distance, const ColorCorrelationMap& cmap,
+            const ImageF& quant_field, const ImageF& masking_field,
+            DequantMatrices* matrices, AcStrategyImage* ac_strategy);
   void ProcessRect(const Rect& rect);
   ACSConfig config;
-  PassesEncoderState* enc_state;
+  AcStrategyImage* ac_strategy;
+  const ColorCorrelationMap* cmap;
   float butteraugli_target;
 };
+
+Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
+                              const ColorCorrelationMap& cmap,
+                              const ImageF& quant_field,
+                              const ImageF& masking_field, ThreadPool* pool,
+                              DequantMatrices* matrices,
+                              AcStrategyImage* ac_strategy);
 
 }  // namespace jxl
 

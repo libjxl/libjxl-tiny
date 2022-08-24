@@ -30,341 +30,51 @@
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
-#include "encoder/context_predict.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_ac_strategy.h"
 #include "encoder/enc_adaptive_quantization.h"
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
-#include "encoder/enc_cache.h"
 #include "encoder/enc_chroma_from_luma.h"
 #include "encoder/enc_coeff_order.h"
 #include "encoder/enc_entropy_coder.h"
 #include "encoder/enc_group.h"
-#include "encoder/enc_modular.h"
 #include "encoder/enc_toc.h"
 #include "encoder/enc_xyb.h"
 #include "encoder/gaborish.h"
 #include "encoder/image.h"
-#include "encoder/image_ops.h"
-#include "encoder/modular.h"
 #include "encoder/quant_weights.h"
 #include "encoder/quantizer.h"
 
 namespace jxl {
 namespace {
 
-struct ModularStreamId {
-  enum Kind {
-    kGlobalData,
-    kVarDCTDC,
-    kModularDC,
-    kACMetadata,
-    kQuantTable,
-    kModularAC
-  };
-  Kind kind;
-  size_t quant_table_id;
-  size_t group_id;  // DC or AC group id.
-  size_t ID(const FrameDimensions& frame_dim) const {
-    size_t id = 0;
-    switch (kind) {
-      case kGlobalData:
-        id = 0;
-        break;
-      case kVarDCTDC:
-        id = 1 + group_id;
-        break;
-      case kModularDC:
-        id = 1 + frame_dim.num_dc_groups + group_id;
-        break;
-      case kACMetadata:
-        id = 1 + 2 * frame_dim.num_dc_groups + group_id;
-        break;
-      case kQuantTable:
-        id = 1 + 3 * frame_dim.num_dc_groups + quant_table_id;
-        break;
-      case kModularAC:
-        id = 1 + 3 * frame_dim.num_dc_groups + DequantMatrices::kNum + group_id;
-        break;
-    };
-    return id;
+uint32_t ComputeXQuantScale(float distance) {
+  uint32_t x_qm_scale = 2;
+  float x_qm_scale_steps[2] = {1.25f, 9.0f};
+  for (float x_qm_scale_step : x_qm_scale_steps) {
+    if (distance > x_qm_scale_step) {
+      x_qm_scale++;
+    }
   }
-  static ModularStreamId Global() { return ModularStreamId{kGlobalData, 0, 0}; }
-  static ModularStreamId VarDCTDC(size_t group_id) {
-    return ModularStreamId{kVarDCTDC, 0, group_id};
+  if (distance < 0.299f) {
+    // Favor chromacity preservation for making images appear more
+    // faithful to original even with extreme (5-10x) zooming.
+    x_qm_scale++;
   }
-  static ModularStreamId ModularDC(size_t group_id) {
-    return ModularStreamId{kModularDC, 0, group_id};
-  }
-  static ModularStreamId ACMetadata(size_t group_id) {
-    return ModularStreamId{kACMetadata, 0, group_id};
-  }
-  static ModularStreamId QuantTable(size_t quant_table_id) {
-    JXL_ASSERT(quant_table_id < DequantMatrices::kNum);
-    return ModularStreamId{kQuantTable, quant_table_id, 0};
-  }
-  static ModularStreamId ModularAC(size_t group_id) {
-    return ModularStreamId{kModularAC, 0, group_id};
-  }
-  static size_t Num(const FrameDimensions& frame_dim) {
-    return ModularAC(0).ID(frame_dim) + frame_dim.num_groups;
-  }
-  std::string DebugString() const;
-};
-
-Tree MakeFixedTree(size_t num_dc_groups) {
-  Tree tree(95);
-  tree[0] = PropertyDecisionNode::Split(1, num_dc_groups + 1, 1, 28);
-  // ACMetadata
-  tree[1] = PropertyDecisionNode::Split(0, 1, 2);
-  tree[2] = PropertyDecisionNode::Split(0, 2, 4);
-  tree[3] = PropertyDecisionNode::Split(0, 0, 6);
-  tree[4] = PropertyDecisionNode::Split(6, 0, 22);
-  tree[5] = PropertyDecisionNode::Split(2, 0, 8);
-  tree[6] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[7] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[8] = PropertyDecisionNode::Split(7, 5, 10);
-  tree[9] = PropertyDecisionNode::Split(7, 5, 16);
-  tree[10] = PropertyDecisionNode::Split(7, 11, 12);
-  tree[11] = PropertyDecisionNode::Split(7, 3, 14);
-  tree[12] = PropertyDecisionNode::Leaf(Predictor::Left);
-  tree[13] = PropertyDecisionNode::Leaf(Predictor::Left);
-  tree[14] = PropertyDecisionNode::Leaf(Predictor::Left);
-  tree[15] = PropertyDecisionNode::Leaf(Predictor::Left);
-  tree[16] = PropertyDecisionNode::Split(7, 11, 18);
-  tree[17] = PropertyDecisionNode::Split(7, 3, 20);
-  tree[18] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[19] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[20] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[21] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[22] = PropertyDecisionNode::Split(7, 0, 24);
-  tree[23] = PropertyDecisionNode::Split(7, 0, 26);
-  tree[24] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[25] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[26] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  tree[27] = PropertyDecisionNode::Leaf(Predictor::Zero);
-  // VarDCTDC
-  tree[28] = PropertyDecisionNode::Split(9, 0, 29);
-  tree[29] = PropertyDecisionNode::Split(9, 47, 31);
-  tree[30] = PropertyDecisionNode::Split(9, -31, 33);
-  tree[31] = PropertyDecisionNode::Split(9, 191, 35);
-  tree[32] = PropertyDecisionNode::Split(9, 11, 37);
-  tree[33] = PropertyDecisionNode::Split(9, -7, 39);
-  tree[34] = PropertyDecisionNode::Split(9, -127, 41);
-  tree[35] = PropertyDecisionNode::Split(9, 392, 43);
-  tree[36] = PropertyDecisionNode::Split(9, 95, 45);
-  tree[37] = PropertyDecisionNode::Split(9, 23, 47);
-  tree[38] = PropertyDecisionNode::Split(9, 5, 49);
-  tree[39] = PropertyDecisionNode::Split(9, -3, 51);
-  tree[40] = PropertyDecisionNode::Split(9, -15, 53);
-  tree[41] = PropertyDecisionNode::Split(9, -63, 55);
-  tree[42] = PropertyDecisionNode::Split(9, -255, 57);
-  tree[43] = PropertyDecisionNode::Split(9, 500, 59);
-  tree[44] = PropertyDecisionNode::Split(9, 255, 61);
-  tree[45] = PropertyDecisionNode::Split(9, 127, 63);
-  tree[46] = PropertyDecisionNode::Split(9, 63, 65);
-  tree[47] = PropertyDecisionNode::Split(9, 31, 67);
-  tree[48] = PropertyDecisionNode::Split(9, 15, 69);
-  tree[49] = PropertyDecisionNode::Split(9, 7, 71);
-  tree[50] = PropertyDecisionNode::Split(9, 3, 73);
-  tree[51] = PropertyDecisionNode::Split(9, -1, 75);
-  tree[52] = PropertyDecisionNode::Split(9, -4, 77);
-  tree[53] = PropertyDecisionNode::Split(9, -11, 79);
-  tree[54] = PropertyDecisionNode::Split(9, -23, 81);
-  tree[55] = PropertyDecisionNode::Split(9, -47, 83);
-  tree[56] = PropertyDecisionNode::Split(9, -95, 85);
-  tree[57] = PropertyDecisionNode::Split(9, -191, 87);
-  tree[58] = PropertyDecisionNode::Split(9, -392, 89);
-  tree[59] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[60] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[61] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[62] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[63] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[64] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[65] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[66] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[67] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[68] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[69] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[70] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[71] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[72] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[73] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[74] = PropertyDecisionNode::Split(9, 1, 91);
-  tree[75] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[76] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[77] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[78] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[79] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[80] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[81] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[82] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[83] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[84] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[85] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[86] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[87] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[88] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[89] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[90] = PropertyDecisionNode::Split(9, -500, 93);
-  tree[91] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[92] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[93] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  tree[94] = PropertyDecisionNode::Leaf(Predictor::Gradient);
-  return tree;
+  return x_qm_scale;
 }
 
-struct EncCache {
-  // Allocates memory when first called, shrinks images to current group size.
-  void InitOnce() {
-    if (num_nzeroes.xsize() == 0) {
-      num_nzeroes = Image3I(kGroupDimInBlocks, kGroupDimInBlocks);
+uint32_t ComputeNumEpfIters(float distance) {
+  constexpr float kEpfThresholds[3] = {0.7, 1.5, 4.0};
+  uint32_t epf_iters = 0;
+  for (size_t i = 0; i < 3; i++) {
+    if (distance >= kEpfThresholds[i]) {
+      epf_iters++;
     }
   }
-  // TokenizeCoefficients
-  Image3I num_nzeroes;
-};
-
-class ModularFrameEncoder {
- public:
-  ModularFrameEncoder(const FrameDimensions& frame_dim)
-      : frame_dim_(frame_dim) {
-    size_t num_streams = ModularStreamId::Num(frame_dim_);
-    stream_images_.resize(num_streams);
-    ac_metadata_size.resize(frame_dim_.num_dc_groups);
-  }
-  Status ComputeEncodingData(ThreadPool* pool) {
-    size_t num_streams = stream_images_.size();
-    tokens_.resize(num_streams);
-    tree_ = MakeFixedTree(frame_dim_.num_dc_groups);
-    Tree decoded_tree;
-    TokenizeTree(tree_, &tree_tokens_, &decoded_tree);
-    tree_ = std::move(decoded_tree);
-    JXL_RETURN_IF_ERROR(RunOnPool(
-        pool, 0, num_streams, ThreadPool::NoInit,
-        [&](const uint32_t stream_id, size_t /* thread */) {
-          tokens_[stream_id].clear();
-          const Image& image = stream_images_[stream_id];
-          if (image.w == 0 || image.h == 0) return;
-          JXL_CHECK(
-              ModularEncode(image, stream_id, tree_, &tokens_[stream_id]));
-        },
-        "ComputeTokens"));
-    return true;
-  }
-  // Encodes global info (tree + histograms) in the `writer`.
-  Status EncodeGlobalInfo(BitWriter* writer) {
-    BitWriter::Allotment allotment(writer, 1);
-    writer->Write(1, 1);  // not an empty tree
-    allotment.Reclaim(writer);
-
-    // Write tree
-    WriteHistogramsAndTokens(kNumTreeContexts, tree_tokens_, writer);
-    // Write histograms.
-    BuildAndEncodeHistograms((tree_.size() + 1) / 2, tokens_, &code_,
-                             &context_map_, writer);
-    return true;
-  }
-  // Encodes a specific modular image (identified by `stream`) in the `writer`,
-  // assigning bits to the provided `layer`.
-  Status EncodeStream(BitWriter* writer, const ModularStreamId& stream) {
-    size_t stream_id = stream.ID(frame_dim_);
-    if (stream_images_[stream_id].channel.empty()) {
-      return true;  // Image with no channels, header never gets decoded.
-    }
-    BitWriter::Allotment allotment(writer, 1024);
-    writer->Write(1, 1);  // use global tree
-    writer->Write(1, 1);  // all default wp header
-    writer->Write(2, 0);  // no transforms
-    allotment.Reclaim(writer);
-    WriteTokens(tokens_[stream_id], code_, context_map_, writer);
-    return true;
-  }
-  // Creates a modular image for a given DC group of VarDCT mode. `dc` is the
-  // input DC image, not quantized; the group is specified by `group_index`, and
-  // `nl_dc` decides whether to apply a near-lossless processing to the DC or
-  // not.
-  void AddVarDCTDC(const Image3F& dc, size_t group_index,
-                   PassesSharedState* shared) {
-    const Rect r = shared->DCGroupRect(group_index);
-
-    size_t stream_id = ModularStreamId::VarDCTDC(group_index).ID(frame_dim_);
-
-    stream_images_[stream_id] = Image(r.xsize(), r.ysize(), 3);
-    for (size_t c : {1, 0, 2}) {
-      float inv_factor = shared->quantizer.GetInvDcStep(c);
-      float y_factor = shared->quantizer.GetDcStep(1);
-      float cfl_factor = shared->cmap.DCFactors()[c];
-      for (size_t y = 0; y < r.ysize(); y++) {
-        int32_t* quant_row =
-            stream_images_[stream_id].channel[c < 2 ? c ^ 1 : c].plane.Row(y);
-        const float* row = r.ConstPlaneRow(dc, c, y);
-        if (c == 1) {
-          for (size_t x = 0; x < r.xsize(); x++) {
-            quant_row[x] = roundf(row[x] * inv_factor);
-          }
-        } else {
-          int32_t* quant_row_y =
-              stream_images_[stream_id].channel[0].plane.Row(y);
-          for (size_t x = 0; x < r.xsize(); x++) {
-            quant_row[x] =
-                roundf((row[x] - quant_row_y[x] * (y_factor * cfl_factor)) *
-                       inv_factor);
-          }
-        }
-      }
-    }
-  }
-  // Creates a modular image for the AC metadata of the given group
-  // (`group_index`).
-  void AddACMetadata(size_t group_index, PassesSharedState* shared) {
-    const Rect r = shared->DCGroupRect(group_index);
-    size_t stream_id = ModularStreamId::ACMetadata(group_index).ID(frame_dim_);
-    // YToX, YToB, ACS + QF, EPF
-    Image& image = stream_images_[stream_id];
-    image = Image(r.xsize(), r.ysize(), 4);
-    static_assert(kColorTileDimInBlocks == 8, "Color tile size changed");
-    Rect cr(r.x0() >> 3, r.y0() >> 3, (r.xsize() + 7) >> 3,
-            (r.ysize() + 7) >> 3);
-    image.channel[0] = Channel(cr.xsize(), cr.ysize(), 3, 3);
-    image.channel[1] = Channel(cr.xsize(), cr.ysize(), 3, 3);
-    image.channel[2] = Channel(r.xsize() * r.ysize(), 2, 0, 0);
-    ConvertPlaneAndClamp(cr, shared->cmap.ytox_map,
-                         Rect(image.channel[0].plane), &image.channel[0].plane);
-    ConvertPlaneAndClamp(cr, shared->cmap.ytob_map,
-                         Rect(image.channel[1].plane), &image.channel[1].plane);
-    size_t num = 0;
-    for (size_t y = 0; y < r.ysize(); y++) {
-      AcStrategyRow row_acs = shared->ac_strategy.ConstRow(r, y);
-      const int32_t* row_qf = r.ConstRow(shared->raw_quant_field, y);
-      const uint8_t* row_epf = r.ConstRow(shared->epf_sharpness, y);
-      int32_t* out_acs = image.channel[2].plane.Row(0);
-      int32_t* out_qf = image.channel[2].plane.Row(1);
-      int32_t* row_out_epf = image.channel[3].plane.Row(y);
-      for (size_t x = 0; x < r.xsize(); x++) {
-        row_out_epf[x] = row_epf[x];
-        if (!row_acs[x].IsFirstBlock()) continue;
-        out_acs[num] = row_acs[x].RawStrategy();
-        out_qf[num] = row_qf[x] - 1;
-        num++;
-      }
-    }
-    image.channel[2].w = num;
-    ac_metadata_size[group_index] = num;
-  }
-  std::vector<size_t> ac_metadata_size;
-
- private:
-  std::vector<Image> stream_images_;
-
-  Tree tree_;
-  std::vector<Token> tree_tokens_;
-  std::vector<std::vector<Token>> tokens_;
-  EntropyEncodingData code_;
-  std::vector<uint8_t> context_map_;
-  FrameDimensions frame_dim_;
-};
+  return epf_iters;
+}
 
 void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
                       BitWriter* writer) {
@@ -400,305 +110,431 @@ void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
   allotment.Reclaim(writer);
 }
 
+// Clamps gradient to the min/max of n, w (and l, implicitly).
+JXL_INLINE int32_t ClampedGradient(const int32_t n, const int32_t w,
+                                   const int32_t l) {
+  const int32_t m = std::min(n, w);
+  const int32_t M = std::max(n, w);
+  // The end result of this operation doesn't overflow or underflow if the
+  // result is between m and M, but the intermediate value may overflow, so we
+  // do the intermediate operations in uint32_t and check later if we had an
+  // overflow or underflow condition comparing m, M and l directly.
+  // grad = M + m - l = n + w - l
+  const int32_t grad =
+      static_cast<int32_t>(static_cast<uint32_t>(n) + static_cast<uint32_t>(w) -
+                           static_cast<uint32_t>(l));
+  // We use two sets of ternary operators to force the evaluation of them in
+  // any case, allowing the compiler to avoid branches and use cmovl/cmovg in
+  // x86.
+  const int32_t grad_clamp_M = (l < m) ? M : grad;
+  return (l > M) ? m : grad_clamp_M;
+}
+
+// Modular context tree for DC and control fields.
+static constexpr size_t kNumTreeContexts = 6;
+static constexpr size_t kNumContextTreeTokens = 313;
+static const Token kContextTreeTokens[kNumContextTreeTokens] = {
+    {1, 2},   {0, 4},  {1, 1},   {0, 2},  {1, 10},   {0, 0},  {1, 1},   {0, 4},
+    {1, 1},   {0, 0},  {1, 10},  {0, 94}, {1, 10},   {0, 61}, {1, 0},   {2, 0},
+    {3, 0},   {4, 0},  {5, 0},   {1, 3},  {0, 0},    {1, 0},  {2, 5},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 5},  {3, 0},    {4, 0},  {5, 0},   {1, 10},
+    {0, 382}, {1, 10}, {0, 22},  {1, 10}, {0, 13},   {1, 10}, {0, 253}, {1, 8},
+    {0, 10},  {1, 8},  {0, 10},  {1, 10}, {0, 784},  {1, 10}, {0, 190}, {1, 10},
+    {0, 46},  {1, 10}, {0, 10},  {1, 10}, {0, 5},    {1, 10}, {0, 29},  {1, 10},
+    {0, 125}, {1, 10}, {0, 509}, {1, 8},  {0, 22},   {1, 8},  {0, 6},   {1, 8},
+    {0, 22},  {1, 8},  {0, 6},   {1, 10}, {0, 1000}, {1, 10}, {0, 510}, {1, 10},
+    {0, 254}, {1, 10}, {0, 126}, {1, 10}, {0, 62},   {1, 10}, {0, 30},  {1, 10},
+    {0, 14},  {1, 10}, {0, 6},   {1, 10}, {0, 1},    {1, 10}, {0, 7},   {1, 10},
+    {0, 21},  {1, 10}, {0, 45},  {1, 10}, {0, 93},   {1, 10}, {0, 189}, {1, 10},
+    {0, 381}, {1, 10}, {0, 783}, {1, 0},  {2, 1},    {3, 0},  {4, 0},   {5, 0},
+    {1, 0},   {2, 1},  {3, 0},   {4, 0},  {5, 0},    {1, 0},  {2, 1},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 1},  {3, 0},    {4, 0},  {5, 0},   {1, 0},
+    {2, 0},   {3, 0},  {4, 0},   {5, 0},  {1, 0},    {2, 0},  {3, 0},   {4, 0},
+    {5, 0},   {1, 0},  {2, 0},   {3, 0},  {4, 0},    {5, 0},  {1, 0},   {2, 0},
+    {3, 0},   {4, 0},  {5, 0},   {1, 0},  {2, 5},    {3, 0},  {4, 0},   {5, 0},
+    {1, 0},   {2, 5},  {3, 0},   {4, 0},  {5, 0},    {1, 0},  {2, 5},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 5},  {3, 0},    {4, 0},  {5, 0},   {1, 0},
+    {2, 5},   {3, 0},  {4, 0},   {5, 0},  {1, 0},    {2, 5},  {3, 0},   {4, 0},
+    {5, 0},   {1, 0},  {2, 5},   {3, 0},  {4, 0},    {5, 0},  {1, 0},   {2, 5},
+    {3, 0},   {4, 0},  {5, 0},   {1, 0},  {2, 5},    {3, 0},  {4, 0},   {5, 0},
+    {1, 0},   {2, 5},  {3, 0},   {4, 0},  {5, 0},    {1, 0},  {2, 5},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 5},  {3, 0},    {4, 0},  {5, 0},   {1, 0},
+    {2, 5},   {3, 0},  {4, 0},   {5, 0},  {1, 0},    {2, 5},  {3, 0},   {4, 0},
+    {5, 0},   {1, 0},  {2, 5},   {3, 0},  {4, 0},    {5, 0},  {1, 10},  {0, 2},
+    {1, 0},   {2, 5},  {3, 0},   {4, 0},  {5, 0},    {1, 0},  {2, 5},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 5},  {3, 0},    {4, 0},  {5, 0},   {1, 0},
+    {2, 5},   {3, 0},  {4, 0},   {5, 0},  {1, 0},    {2, 5},  {3, 0},   {4, 0},
+    {5, 0},   {1, 0},  {2, 5},   {3, 0},  {4, 0},    {5, 0},  {1, 0},   {2, 5},
+    {3, 0},   {4, 0},  {5, 0},   {1, 0},  {2, 5},    {3, 0},  {4, 0},   {5, 0},
+    {1, 0},   {2, 5},  {3, 0},   {4, 0},  {5, 0},    {1, 0},  {2, 5},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 5},  {3, 0},    {4, 0},  {5, 0},   {1, 0},
+    {2, 5},   {3, 0},  {4, 0},   {5, 0},  {1, 0},    {2, 5},  {3, 0},   {4, 0},
+    {5, 0},   {1, 0},  {2, 5},   {3, 0},  {4, 0},    {5, 0},  {1, 0},   {2, 5},
+    {3, 0},   {4, 0},  {5, 0},   {1, 10}, {0, 999},  {1, 0},  {2, 5},   {3, 0},
+    {4, 0},   {5, 0},  {1, 0},   {2, 5},  {3, 0},    {4, 0},  {5, 0},   {1, 0},
+    {2, 5},   {3, 0},  {4, 0},   {5, 0},  {1, 0},    {2, 5},  {3, 0},   {4, 0},
+    {5, 0},
+};
+
+// Context lookup table for DC coding. The context is given by looking up the
+// "gradient" modular property (left + top - topleft) from this table.
+static constexpr uint8_t kGradientContextLut[1024] = {
+    44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 43, 43, 43, 43, 43,
+    43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+    43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+    43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+    43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+    43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+    43, 43, 43, 43, 43, 43, 43, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 39, 39, 39, 39, 39, 39, 39, 39,
+    39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39,
+    39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39,
+    39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 38,
+    38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38,
+    38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38,
+    38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38, 38,
+    38, 38, 38, 38, 38, 38, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37,
+    37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37,
+    36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36,
+    36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 36, 35, 35, 35, 35, 35, 35,
+    35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 34, 34, 34, 34, 34, 34, 34, 34, 34,
+    34, 34, 34, 34, 34, 34, 34, 33, 33, 33, 33, 33, 33, 33, 33, 32, 32, 32, 32,
+    32, 32, 32, 32, 31, 31, 31, 31, 30, 30, 30, 30, 29, 29, 29, 28, 27, 27, 26,
+    42, 41, 41, 25, 25, 24, 24, 23, 23, 23, 23, 22, 22, 22, 22, 21, 21, 21, 21,
+    21, 21, 21, 21, 20, 20, 20, 20, 20, 20, 20, 20, 19, 19, 19, 19, 19, 19, 19,
+    19, 19, 19, 19, 19, 19, 19, 19, 19, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+    18, 18, 18, 18, 18, 18, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    14, 14, 14, 14, 14, 14, 14, 14, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+    12, 12, 12, 12, 12, 12, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+};
+static constexpr int64_t kGradRangeMin = 0;
+static constexpr int64_t kGradRangeMid = 512;
+static constexpr int64_t kGradRangeMax = 1023;
+static constexpr size_t kNumDCContexts = 45;
+
 }  // namespace
 
 Status EncodeFrame(const float distance, const Image3F& linear,
                    ThreadPool* pool, BitWriter* writer) {
-  PassesEncoderState enc_state;
-  PassesSharedState& shared = enc_state.shared;
+  // Pre-compute image dimension-derived values.
+  const size_t xsize = linear.xsize();
+  const size_t ysize = linear.ysize();
   FrameDimensions frame_dim;
   frame_dim.Set(linear.xsize(), linear.ysize());
-  shared.frame_dim = frame_dim;
-
+  const size_t xsize_blocks = DivCeil(xsize, kBlockDim);
+  const size_t ysize_blocks = DivCeil(ysize, kBlockDim);
+  const size_t xsize_groups = DivCeil(xsize, kGroupDim);
+  const size_t xsize_dc_groups = DivCeil(xsize_blocks, kGroupDim);
   const size_t num_groups = frame_dim.num_groups;
+  const size_t num_dc_groups = frame_dim.num_dc_groups;
+  auto block_rect = [&](size_t idx, size_t n, size_t m) {
+    return Rect((idx % n) * m, (idx / n) * m, m, m, xsize_blocks, ysize_blocks);
+  };
 
-  shared.ac_strategy =
-      AcStrategyImage(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
-  shared.raw_quant_field =
-      ImageI(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
-  shared.epf_sharpness = ImageB(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
-  shared.cmap = ColorCorrelationMap(frame_dim.xsize, frame_dim.ysize);
+  // Write frame header.
+  uint32_t x_qm_scale = ComputeXQuantScale(distance);
+  uint32_t epf_iters = ComputeNumEpfIters(distance);
+  WriteFrameHeader(x_qm_scale, epf_iters, writer);
 
-  // In the decoder, we allocate coeff orders afterwards, when we know how many
-  // we will actually need.
-  shared.coeff_order_size = kCoeffOrderMaxSize;
-  shared.coeff_orders.resize(kCoeffOrderMaxSize);
+  // Allocate bit writers for all sections.
+  size_t num_toc_entries = 2 + num_dc_groups + num_groups;
+  std::vector<BitWriter> group_codes(num_toc_entries);
+  const size_t global_ac_index = num_dc_groups + 1;
+  const bool is_small_image = num_groups == 1;
+  const auto get_output = [&](const size_t index) {
+    return &group_codes[is_small_image ? 0 : index];
+  };
 
-  std::unique_ptr<ModularFrameEncoder> modular_frame_encoder =
-      jxl::make_unique<ModularFrameEncoder>(frame_dim);
-
-  float x_qm_scale_steps[2] = {1.25f, 9.0f};
-  uint32_t x_qm_scale = 2;
-  for (float x_qm_scale_step : x_qm_scale_steps) {
-    if (distance > x_qm_scale_step) {
-      x_qm_scale++;
-    }
-  }
-  if (distance < 0.299f) {
-    // Favor chromacity preservation for making images appear more
-    // faithful to original even with extreme (5-10x) zooming.
-    x_qm_scale++;
-  }
-  constexpr float kEpfThresholds[3] = {0.7, 1.5, 4.0};
-  uint32_t epf_iters = 0;
-  for (size_t i = 0; i < 3; i++) {
-    if (distance >= kEpfThresholds[i]) {
-      epf_iters++;
-    }
-  }
-
+  // Transform image to XYB colorspace.
   Image3F opsin(frame_dim.xsize_padded, frame_dim.ysize_padded);
   opsin.ShrinkTo(linear.xsize(), linear.ysize());
   ToXYB(linear, pool, &opsin);
   PadImageToBlockMultipleInPlace(&opsin);
 
-  // Dependency graph:
-  //
-  // input: either XYB or input image
-  //
-  // XYB -> initial quant field
-  // XYB -> Gaborished XYB
-  // Gaborished XYB -> CfL1
-  // initial quant field, Gaborished XYB, CfL1 -> ACS
-  // initial quant field, ACS, Gaborished XYB -> EPF control field
-  // initial quant field -> adjusted initial quant field
-  // adjusted initial quant field, ACS -> raw quant field
-  // raw quant field, ACS, Gaborished XYB -> CfL2
-  //
-  // output: Gaborished XYB, CfL, ACS, raw quant field, EPF control field.
-
-  // Compute adaptive quantization field, relies on pre-gaborish values.
+  // Compute adaptive quantization field (relies on pre-gaborish values).
   const float quant_dc = InitialQuantDC(distance);
-  enc_state.initial_quant_field =
-      InitialQuantField(distance, opsin, shared.frame_dim, pool, 1.0f,
-                        &enc_state.initial_quant_masking);
-  Quantizer& quantizer = shared.quantizer;
-  quantizer.SetQuantField(quant_dc, enc_state.initial_quant_field, nullptr);
+  ImageF masking_field;
+  ImageF quant_field =
+      InitialQuantField(distance, opsin, frame_dim, pool, 1.0f, &masking_field);
+
+  // Initialize DCT8 quant weights and compute X quant matrix scale.
+  DequantMatrices matrices;
+  JXL_CHECK(matrices.EnsureComputed(1 << AcStrategy::DCT));
+  float x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
+
+  // Compute quant scales and raw quant field field.
+  Quantizer quantizer(&matrices);
+  ImageI raw_quant_field(xsize_blocks, ysize_blocks);
+  quantizer.SetQuantField(quant_dc, quant_field, &raw_quant_field);
 
   // Apply inverse-gaborish.
   GaborishInverse(&opsin, 0.9908511000000001f, pool);
 
   // Flat AR field.
-  FillPlane(static_cast<uint8_t>(4), &shared.epf_sharpness);
+  ImageB epf_sharpness(xsize_blocks, ysize_blocks);
+  FillPlane(static_cast<uint8_t>(4), &epf_sharpness);
 
-  AcStrategyHeuristics acs_heuristics;
-  CfLHeuristics cfl_heuristics;
-  cfl_heuristics.Init(opsin);
-  acs_heuristics.Init(opsin, distance, &enc_state);
+  // Compute per-tile color correlation values.
+  ColorCorrelationMap cmap(xsize, ysize);
+  JXL_RETURN_IF_ERROR(ComputeColorCorrelationMap(opsin, matrices, pool, &cmap));
 
-  auto process_tile = [&](const uint32_t tid, const size_t thread) {
-    size_t n_enc_tiles =
-        DivCeil(shared.frame_dim.xsize_blocks, kColorTileDimInBlocks);
-    size_t tx = tid % n_enc_tiles;
-    size_t ty = tid / n_enc_tiles;
-    size_t by0 = ty * kColorTileDimInBlocks;
-    size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks,
-                          shared.frame_dim.ysize_blocks);
-    size_t bx0 = tx * kColorTileDimInBlocks;
-    size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks,
-                          shared.frame_dim.xsize_blocks);
-    Rect r(bx0, by0, bx1 - bx0, by1 - by0);
+  // Compute block sizes.
+  AcStrategyImage ac_strategy(xsize_blocks, ysize_blocks);
+  JXL_RETURN_IF_ERROR(ComputeAcStrategyImage(opsin, distance, cmap, quant_field,
+                                             masking_field, pool, &matrices,
+                                             &ac_strategy));
+  AdjustQuantField(ac_strategy, &raw_quant_field);
 
-    // Choose block sizes.
-    acs_heuristics.ProcessRect(r);
-
-    // Always set the initial quant field, so we can compute the CfL map with
-    // more accuracy. The initial quant field might change in slower modes, but
-    // adjusting the quant field with butteraugli when all the other encoding
-    // parameters are fixed is likely a more reliable choice anyway.
-    AdjustQuantField(shared.ac_strategy, r, &enc_state.initial_quant_field);
-    quantizer.SetQuantFieldRect(enc_state.initial_quant_field, r,
-                                &shared.raw_quant_field);
-
-    cfl_heuristics.ComputeTile(r, opsin, shared.matrices, &shared.ac_strategy,
-                               &shared.quantizer, thread, &shared.cmap);
-  };
+  // Compute DC image and AC coefficients.
+  Image3F dc(xsize_blocks, ysize_blocks);
+  ACImageT<int32_t> ac_coeffs(kGroupDim * kGroupDim, num_groups);
   JXL_RETURN_IF_ERROR(RunOnPool(
-      pool, 0,
-      DivCeil(shared.frame_dim.xsize_blocks, kColorTileDimInBlocks) *
-          DivCeil(shared.frame_dim.ysize_blocks, kColorTileDimInBlocks),
-      [&](const size_t num_threads) {
-        cfl_heuristics.PrepareForThreads(num_threads);
-        return true;
-      },
-      process_tile, "Enc Heuristics"));
-
-  cfl_heuristics.ComputeDC(&shared.cmap);
-
-  enc_state.histogram_idx.resize(shared.frame_dim.num_groups);
-
-  enc_state.x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
-  enc_state.b_qm_multiplier = 1.0;
-
-  // Allocate enough coefficients for each group on every row.
-  enc_state.coeffs.push_back(make_unique<ACImageT<int32_t>>(
-      kGroupDim * kGroupDim, shared.frame_dim.num_groups));
-
-  Image3F dc(shared.frame_dim.xsize_blocks, shared.frame_dim.ysize_blocks);
-  JXL_RETURN_IF_ERROR(RunOnPool(
-      pool, 0, shared.frame_dim.num_groups, ThreadPool::NoInit,
+      pool, 0, num_groups, ThreadPool::NoInit,
       [&](size_t group_idx, size_t _) {
-        ComputeCoefficients(group_idx, &enc_state, opsin, &dc);
+        ComputeCoefficients(group_idx, opsin, raw_quant_field, quantizer, cmap,
+                            ac_strategy, x_qm_multiplier, &ac_coeffs, &dc);
       },
       "Compute coeffs"));
 
-  auto compute_dc_coeffs = [&](int group_index, int /* thread */) {
-    modular_frame_encoder->AddVarDCTDC(dc, group_index, &shared);
+  // Compute DC tokens.
+  std::vector<std::vector<Token>> dc_tokens(num_dc_groups);
+  auto compute_dc_tokens = [&](int group_index, int /* thread */) {
+    const Rect r = block_rect(group_index, xsize_dc_groups, kGroupDim);
+    dc_tokens[group_index].reserve(3 * r.xsize() * r.ysize());
+    Image3I quant_dc(r.xsize(), r.ysize());
+    const float y_dc_step = quantizer.GetDcStep(1);
+    for (size_t c : {1, 0, 2}) {
+      const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
+      float inv_factor = quantizer.GetInvDcStep(c);
+      float cfl_factor = c == 1 ? 0.0f : cmap.DCFactors()[c] * y_dc_step;
+      for (size_t y = 0; y < r.ysize(); y++) {
+        const float* row = r.ConstPlaneRow(dc, c, y);
+        const int32_t* qrow_y = quant_dc.PlaneRow(1, y);
+        int32_t* qrow = quant_dc.PlaneRow(c, y);
+        for (size_t x = 0; x < r.xsize(); x++) {
+          qrow[x] = roundf((row[x] - qrow_y[x] * cfl_factor) * inv_factor);
+          int64_t left = (x ? qrow[x - 1] : y ? *(qrow + x - onerow) : 0);
+          int64_t top = (y ? *(qrow + x - onerow) : left);
+          int64_t topleft = (x && y ? *(qrow + x - 1 - onerow) : left);
+          int32_t guess = ClampedGradient(top, left, topleft);
+          uint32_t gradprop = Clamp1(kGradRangeMid + top + left - topleft,
+                                     kGradRangeMin, kGradRangeMax);
+          int32_t residual = qrow[x] - guess;
+          uint32_t ctx_id = kGradientContextLut[gradprop];
+          dc_tokens[group_index].push_back(Token(ctx_id, PackSigned(residual)));
+        }
+      }
+    }
   };
-  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, shared.frame_dim.num_dc_groups,
-                                ThreadPool::NoInit, compute_dc_coeffs,
-                                "Compute DC coeffs"));
-  auto compute_ac_meta = [&](int group_index, int /* thread */) {
-    modular_frame_encoder->AddACMetadata(group_index, &shared);
+  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_dc_groups, ThreadPool::NoInit,
+                                compute_dc_tokens, "Compute DC tokens"));
+
+  // Compute control fields tokens.
+  std::vector<size_t> num_ac_blocks(num_dc_groups);
+  std::vector<std::vector<Token>> ac_meta_tokens(num_dc_groups);
+  auto compute_ac_meta_tokens = [&](int group_index, int /* thread */) {
+    const Rect r = block_rect(group_index, xsize_dc_groups, kGroupDim);
+    Rect cr(r.x0() >> 3, r.y0() >> 3, (r.xsize() + 7) >> 3,
+            (r.ysize() + 7) >> 3);
+    // YtoX and YtoB tokens.
+    for (size_t c = 0; c < 2; ++c) {
+      const ImageSB& cfl_map = (c == 0 ? cmap.ytox_map : cmap.ytob_map);
+      ImageI cfl_imap(cr.xsize(), cr.ysize());
+      ConvertPlaneAndClamp(cr, cfl_map, Rect(cfl_imap), &cfl_imap);
+      const intptr_t onerow = cfl_imap.PixelsPerRow();
+      for (size_t y = 0; y < cr.ysize(); y++) {
+        const int32_t* row = cfl_imap.ConstRow(y);
+        for (size_t x = 0; x < cr.xsize(); x++) {
+          int64_t left = (x ? row[x - 1] : y ? *(row + x - onerow) : 0);
+          int64_t top = (y ? *(row + x - onerow) : left);
+          int64_t topleft = (x && y ? *(row + x - 1 - onerow) : left);
+          int32_t guess = ClampedGradient(top, left, topleft);
+          int32_t residual = row[x] - guess;
+          uint32_t ctx_id = 2u - c;
+          Token token(ctx_id, PackSigned(residual));
+          ac_meta_tokens[group_index].push_back(token);
+        }
+      }
+    }
+    // Ac strategy tokens.
+    size_t num = 0;
+    int32_t left = 0;
+    for (size_t y = 0; y < r.ysize(); y++) {
+      AcStrategyRow row_acs = ac_strategy.ConstRow(r, y);
+      for (size_t x = 0; x < r.xsize(); x++) {
+        if (!row_acs[x].IsFirstBlock()) continue;
+        int32_t cur = row_acs[x].RawStrategy();
+        uint32_t ctx_id = (left > 11 ? 7 : left > 5 ? 8 : left > 3 ? 9 : 10);
+        Token token(ctx_id, PackSigned(cur));
+        ac_meta_tokens[group_index].push_back(token);
+        left = cur;
+        num++;
+      }
+    }
+    num_ac_blocks[group_index] = num;
+    // Quant field tokens.
+    left = ac_strategy.ConstRow(r, 0)[0].RawStrategy();
+    for (size_t y = 0; y < r.ysize(); y++) {
+      AcStrategyRow row_acs = ac_strategy.ConstRow(r, y);
+      const int32_t* row_qf = r.ConstRow(raw_quant_field, y);
+      for (size_t x = 0; x < r.xsize(); x++) {
+        if (!row_acs[x].IsFirstBlock()) continue;
+        size_t cur = row_qf[x] - 1;
+        int32_t residual = cur - left;
+        uint32_t ctx_id = (left > 11 ? 3 : left > 5 ? 4 : left > 3 ? 5 : 6);
+        Token token(ctx_id, PackSigned(residual));
+        ac_meta_tokens[group_index].push_back(token);
+        left = cur;
+      }
+    }
+    // EPF tokens.
+    for (size_t i = 0; i < r.ysize() * r.xsize(); ++i) {
+      ac_meta_tokens[group_index].push_back(Token(0, PackSigned(4)));
+    }
   };
-  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, shared.frame_dim.num_dc_groups,
-                                ThreadPool::NoInit, compute_ac_meta,
-                                "Compute AC Metadata"));
+  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_dc_groups, ThreadPool::NoInit,
+                                compute_ac_meta_tokens,
+                                "Compute AC Metadata tokens"));
 
-  enc_state.passes.resize(1);
-  enc_state.passes[0].ac_tokens.resize(shared.frame_dim.num_groups);
+  // Write DC global and compute DC and control fields histograms.
+  HistogramBuilder dc_builder(kNumDCContexts);
+  EntropyEncodingData dc_code;
+  std::vector<uint8_t> dc_context_map;
+  {
+    BitWriter* group_writer = get_output(0);
+    BitWriter::Allotment allotment(group_writer, 1024);
+    group_writer->Write(1, 1);  // default quant dc
+    quantizer.Encode(group_writer);
+    group_writer->Write(1, 1);  // default BlockCtxMap
+    ColorCorrelationMapEncodeDC(&cmap, group_writer);
+    group_writer->Write(1, 1);  // not an empty tree
+    allotment.Reclaim(group_writer);
+    std::vector<Token> tree_tokens(kContextTreeTokens,
+                                   kContextTreeTokens + kNumContextTreeTokens);
+    tree_tokens[1].value = PackSigned(1 + num_dc_groups);
+    WriteHistogramsAndTokens(kNumTreeContexts, tree_tokens, group_writer);
+    for (const auto& t : dc_tokens) dc_builder.AddTokens(t);
+    for (const auto& t : ac_meta_tokens) dc_builder.AddTokens(t);
+    dc_builder.BuildAndStoreEntropyCodes(&dc_code, &dc_context_map,
+                                         group_writer);
+  }
 
-  auto used_orders_info = ComputeUsedOrders(
-      enc_state.shared.ac_strategy, Rect(enc_state.shared.raw_quant_field));
-  enc_state.used_orders.clear();
-  enc_state.used_orders.resize(1, used_orders_info.second);
-  ComputeCoeffOrder(*enc_state.coeffs[0], enc_state.shared.ac_strategy,
-                    shared.frame_dim, enc_state.used_orders[0],
-                    used_orders_info.first, &enc_state.shared.coeff_orders[0]);
-  shared.num_histograms = 1;
+  // Write DC groups and control fields.
+  const auto process_dc_group = [&](const uint32_t group_index,
+                                    const size_t thread) {
+    BitWriter* writer = get_output(group_index + 1);
+    {
+      BitWriter::Allotment allotment(writer, 1024);
+      writer->Write(2, 0);  // extra_dc_precision
+      writer->Write(4, 3);  // use global tree, default wp, no transforms
+      allotment.Reclaim(writer);
+      WriteTokens(dc_tokens[group_index], dc_code, dc_context_map, writer);
+    }
+    {
+      const Rect r = block_rect(group_index, xsize_dc_groups, kGroupDim);
+      BitWriter::Allotment allotment(writer, 1024);
+      size_t nb_bits = CeilLog2Nonzero(r.xsize() * r.ysize());
+      if (nb_bits != 0) writer->Write(nb_bits, num_ac_blocks[group_index] - 1);
+      writer->Write(4, 3);  // use global tree, default wp, no transforms
+      allotment.Reclaim(writer);
+      WriteTokens(ac_meta_tokens[group_index], dc_code, dc_context_map, writer);
+    }
+  };
+  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_dc_groups, ThreadPool::NoInit,
+                                process_dc_group, "EncodeDCGroup"));
 
-  std::vector<EncCache> group_caches;
+  // Compute AC coefficient orders.
+  auto used_orders_info = ComputeUsedOrders(ac_strategy, Rect(raw_quant_field));
+  std::vector<coeff_order_t> coeff_orders(kCoeffOrderMaxSize);
+  ComputeCoeffOrder(ac_coeffs, ac_strategy, frame_dim, used_orders_info.second,
+                    used_orders_info.first, &coeff_orders[0]);
+
+  // Compute AC tokens.
+  std::vector<std::vector<Token>> ac_tokens(num_groups);
+  std::vector<Image3I> num_nzeroes;
   const auto tokenize_group_init = [&](const size_t num_threads) {
-    group_caches.resize(num_threads);
+    num_nzeroes.resize(num_threads);
+    for (size_t t = 0; t < num_threads; ++t) {
+      num_nzeroes[t] = Image3I(kGroupDimInBlocks, kGroupDimInBlocks);
+    }
     return true;
   };
   const auto tokenize_group = [&](const uint32_t group_index,
                                   const size_t thread) {
-    // Tokenize coefficients.
-    const Rect rect = shared.BlockGroupRect(group_index);
-    JXL_ASSERT(enc_state.coeffs[0]->Type() == ACType::k32);
+    const Rect r = block_rect(group_index, xsize_groups, kGroupDimInBlocks);
+    JXL_ASSERT(ac_coeffs.Type() == ACType::k32);
     const int32_t* JXL_RESTRICT ac_rows[3] = {
-        enc_state.coeffs[0]->PlaneRow(0, group_index, 0).ptr32,
-        enc_state.coeffs[0]->PlaneRow(1, group_index, 0).ptr32,
-        enc_state.coeffs[0]->PlaneRow(2, group_index, 0).ptr32,
+        ac_coeffs.PlaneRow(0, group_index, 0).ptr32,
+        ac_coeffs.PlaneRow(1, group_index, 0).ptr32,
+        ac_coeffs.PlaneRow(2, group_index, 0).ptr32,
     };
-    // Ensure group cache is initialized.
-    group_caches[thread].InitOnce();
-    TokenizeCoefficients(&shared.coeff_orders[0], rect, ac_rows,
-                         shared.ac_strategy, &group_caches[thread].num_nzeroes,
-                         &enc_state.passes[0].ac_tokens[group_index]);
+    TokenizeCoefficients(&coeff_orders[0], r, ac_rows, ac_strategy,
+                         &num_nzeroes[thread], &ac_tokens[group_index]);
   };
-  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, shared.frame_dim.num_groups,
-                                tokenize_group_init, tokenize_group,
-                                "TokenizeGroup"));
+  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_groups, tokenize_group_init,
+                                tokenize_group, "TokenizeGroup"));
 
-  // needs to happen *AFTER* VarDCT-ComputeEncodingData.
-  JXL_RETURN_IF_ERROR(modular_frame_encoder->ComputeEncodingData(pool));
-
-  WriteFrameHeader(x_qm_scale, epf_iters, writer);
-
-  // DC global info + DC groups + AC global info + AC groups
-  size_t num_toc_entries = 2 + frame_dim.num_dc_groups + frame_dim.num_groups;
-  std::vector<BitWriter> group_codes(num_toc_entries);
-  const size_t global_ac_index = frame_dim.num_dc_groups + 1;
-  const bool is_small_image = frame_dim.num_groups == 1;
-  const auto get_output = [&](const size_t index) {
-    return &group_codes[is_small_image ? 0 : index];
-  };
-
+  // Write AC global and compute AC histograms.
+  std::vector<uint8_t> context_map;
+  EntropyEncodingData codes;
   {
-    BitWriter* writer = get_output(0);
-    BitWriter::Allotment allotment(writer, 2);
-    writer->Write(1, 1);  // default quant dc
-    allotment.Reclaim(writer);
-  }
-  {
-    BitWriter* writer = get_output(0);
-    // Encode quantizer DC and global scale.
-    JXL_RETURN_IF_ERROR(enc_state.shared.quantizer.Encode(writer));
-    writer->Write(1, 1);  // default BlockCtxMap
-    ColorCorrelationMapEncodeDC(&enc_state.shared.cmap, writer);
-  }
-  JXL_RETURN_IF_ERROR(modular_frame_encoder->EncodeGlobalInfo(get_output(0)));
-  JXL_RETURN_IF_ERROR(modular_frame_encoder->EncodeStream(
-      get_output(0), ModularStreamId::Global()));
-
-  const auto process_dc_group = [&](const uint32_t group_index,
-                                    const size_t thread) {
-    BitWriter* output = get_output(group_index + 1);
-    {
-      BitWriter::Allotment allotment(output, 2);
-      output->Write(2, 0);  // extra_dc_precision
-      allotment.Reclaim(output);
-      JXL_CHECK(modular_frame_encoder->EncodeStream(
-          output, ModularStreamId::VarDCTDC(group_index)));
-    }
-    {
-      const Rect& rect = enc_state.shared.DCGroupRect(group_index);
-      size_t nb_bits = CeilLog2Nonzero(rect.xsize() * rect.ysize());
-      if (nb_bits != 0) {
-        BitWriter::Allotment allotment(output, nb_bits);
-        output->Write(nb_bits,
-                      modular_frame_encoder->ac_metadata_size[group_index] - 1);
-        allotment.Reclaim(output);
-      }
-      JXL_CHECK(modular_frame_encoder->EncodeStream(
-          output, ModularStreamId::ACMetadata(group_index)));
-    }
-  };
-  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, frame_dim.num_dc_groups,
-                                ThreadPool::NoInit, process_dc_group,
-                                "EncodeDCGroup"));
-  {
-    BitWriter* writer = get_output(global_ac_index);
-    {
-      BitWriter::Allotment allotment(writer, 1024);
-      writer->Write(1, 1);  // all default quant matrices
-      size_t num_histo_bits =
-          CeilLog2Nonzero(enc_state.shared.frame_dim.num_groups);
-      if (num_histo_bits != 0) {
-        writer->Write(num_histo_bits, enc_state.shared.num_histograms - 1);
-      }
-      allotment.Reclaim(writer);
-    }
-
-    BitWriter::Allotment allotment(writer, 1024);
-    writer->Write(2, 3);
-    writer->Write(kNumOrders, enc_state.used_orders[0]);
-    allotment.Reclaim(writer);
-    EncodeCoeffOrders(enc_state.used_orders[0],
-                      &enc_state.shared.coeff_orders[0], writer);
-
-    // Encode histograms.
-    BuildAndEncodeHistograms(enc_state.shared.num_histograms *
-                                 enc_state.shared.block_ctx_map.NumACContexts(),
-                             enc_state.passes[0].ac_tokens,
-                             &enc_state.passes[0].codes,
-                             &enc_state.passes[0].context_map, writer);
+    BitWriter* group_writer = get_output(global_ac_index);
+    BitWriter::Allotment allotment(group_writer, 1024);
+    group_writer->Write(1, 1);  // all default quant matrices
+    size_t num_histo_bits = CeilLog2Nonzero(num_groups);
+    if (num_histo_bits != 0) group_writer->Write(num_histo_bits, 0);
+    group_writer->Write(2, 3);
+    group_writer->Write(kNumOrders, used_orders_info.second);
+    allotment.Reclaim(group_writer);
+    EncodeCoeffOrders(used_orders_info.second, &coeff_orders[0], group_writer);
+    BuildAndEncodeHistograms(kNumACContexts, ac_tokens, &codes, &context_map,
+                             group_writer);
   }
 
-  std::atomic<int> num_errors{0};
+  // Write AC groups.
   const auto process_group = [&](const uint32_t group_index,
                                  const size_t thread) {
-    BitWriter* writer = get_output(2 + frame_dim.num_dc_groups + group_index);
-    if (!EncodeGroupTokenizedCoefficients(group_index, 0,
-                                          enc_state.histogram_idx[group_index],
-                                          enc_state, writer)) {
-      num_errors.fetch_add(1, std::memory_order_relaxed);
-      return;
-    }
+    BitWriter* writer = get_output(2 + num_dc_groups + group_index);
+    WriteTokens(ac_tokens[group_index], codes, context_map, writer);
   };
   JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_groups, ThreadPool::NoInit,
                                 process_group, "EncodeGroupCoefficients"));
 
-  JXL_RETURN_IF_ERROR(num_errors.load(std::memory_order_relaxed) == 0);
-
+  // Zero pad all sections.
   for (BitWriter& bw : group_codes) {
     BitWriter::Allotment allotment(&bw, 8);
     bw.ZeroPadToByte();  // end of group.
     allotment.Reclaim(&bw);
   }
 
+  // Write TOC and assemble bit stream.
   JXL_RETURN_IF_ERROR(WriteGroupOffsets(group_codes, nullptr, writer));
   writer->AppendByteAligned(group_codes);
 

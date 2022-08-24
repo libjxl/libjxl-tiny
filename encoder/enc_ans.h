@@ -154,6 +154,36 @@ struct ANSCode {
 // RebalanceHistogram requires a signed type.
 using ANSHistBin = int32_t;
 
+struct Histogram {
+  Histogram() { total_count_ = 0; }
+  void Clear() {
+    data_.clear();
+    total_count_ = 0;
+  }
+  void Add(size_t symbol) {
+    if (data_.size() <= symbol) {
+      data_.resize(DivCeil(symbol + 1, kRounding) * kRounding);
+    }
+    ++data_[symbol];
+    ++total_count_;
+  }
+  void AddHistogram(const Histogram& other) {
+    if (other.data_.size() > data_.size()) {
+      data_.resize(other.data_.size());
+    }
+    for (size_t i = 0; i < other.data_.size(); ++i) {
+      data_[i] += other.data_[i];
+    }
+    total_count_ += other.total_count_;
+  }
+  float ShannonEntropy() const;
+
+  std::vector<ANSHistBin> data_;
+  size_t total_count_;
+  mutable float entropy_;  // WARNING: not kept up-to-date.
+  static constexpr size_t kRounding = 8;
+};
+
 struct EntropyEncodingData {
   std::vector<std::vector<ANSEncSymbolInfo>> encoding_info;
   std::vector<HybridUintConfig> uint_config;
@@ -165,6 +195,22 @@ struct Token {
   Token(uint32_t c, uint32_t value) : context(c), value(value) {}
   uint32_t context;
   uint32_t value;
+};
+
+class HistogramBuilder {
+ public:
+  explicit HistogramBuilder(const size_t num_contexts)
+      : histograms_(num_contexts) {}
+
+  void AddTokens(const std::vector<Token>& tokens);
+
+  void BuildAndStoreEntropyCodes(EntropyEncodingData* codes,
+                                 std::vector<uint8_t>* context_map,
+                                 BitWriter* writer);
+
+ private:
+  void VisitSymbol(int symbol, size_t histo_idx);
+  std::vector<Histogram> histograms_;
 };
 
 // Apply context clustering, compute histograms and encode them. Returns an

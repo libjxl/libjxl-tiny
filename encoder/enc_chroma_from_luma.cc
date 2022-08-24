@@ -20,6 +20,7 @@
 #include <hwy/highway.h>
 
 #include "encoder/base/bits.h"
+#include "encoder/base/data_parallel.h"
 #include "encoder/base/padded_bytes.h"
 #include "encoder/base/span.h"
 #include "encoder/base/status.h"
@@ -41,75 +42,6 @@ using hwy::HWY_NAMESPACE::IfThenElse;
 using hwy::HWY_NAMESPACE::Lt;
 
 static HWY_FULL(float) df;
-
-struct CFLFunction {
-  static constexpr float kCoeff = 1.f / 3;
-  static constexpr float kThres = 100.0f;
-  CFLFunction(const float* values_m, const float* values_s, size_t num,
-              float base, float distance_mul)
-      : values_m(values_m),
-        values_s(values_s),
-        num(num),
-        base(base),
-        distance_mul(distance_mul) {}
-
-  // Returns f'(x), where f is 1/3 * sum ((|color residual| + 1)^2-1) +
-  // distance_mul * x^2 * num.
-  float Compute(float x, float eps, float* fpeps, float* fmeps) const {
-    float first_derivative = 2 * distance_mul * num * x;
-    float first_derivative_peps = 2 * distance_mul * num * (x + eps);
-    float first_derivative_meps = 2 * distance_mul * num * (x - eps);
-
-    const auto inv_color_factor = Set(df, kInvColorFactor);
-    const auto thres = Set(df, kThres);
-    const auto coeffx2 = Set(df, kCoeff * 2.0f);
-    const auto one = Set(df, 1.0f);
-    const auto zero = Set(df, 0.0f);
-    const auto base_v = Set(df, base);
-    const auto x_v = Set(df, x);
-    const auto xpe_v = Set(df, x + eps);
-    const auto xme_v = Set(df, x - eps);
-    auto fd_v = Zero(df);
-    auto fdpe_v = Zero(df);
-    auto fdme_v = Zero(df);
-    JXL_ASSERT(num % Lanes(df) == 0);
-
-    for (size_t i = 0; i < num; i += Lanes(df)) {
-      // color residual = ax + b
-      const auto a = Mul(inv_color_factor, Load(df, values_m + i));
-      const auto b =
-          Sub(Mul(base_v, Load(df, values_m + i)), Load(df, values_s + i));
-      const auto v = MulAdd(a, x_v, b);
-      const auto vpe = MulAdd(a, xpe_v, b);
-      const auto vme = MulAdd(a, xme_v, b);
-      const auto av = Abs(v);
-      const auto avpe = Abs(vpe);
-      const auto avme = Abs(vme);
-      const auto acoeffx2 = Mul(coeffx2, a);
-      auto d = Mul(acoeffx2, Add(av, one));
-      auto dpe = Mul(acoeffx2, Add(avpe, one));
-      auto dme = Mul(acoeffx2, Add(avme, one));
-      d = IfThenElse(Lt(v, zero), Sub(zero, d), d);
-      dpe = IfThenElse(Lt(vpe, zero), Sub(zero, dpe), dpe);
-      dme = IfThenElse(Lt(vme, zero), Sub(zero, dme), dme);
-      const auto above = Ge(av, thres);
-      // TODO(eustas): use IfThenElseZero
-      fd_v = Add(fd_v, IfThenElse(above, zero, d));
-      fdpe_v = Add(fdpe_v, IfThenElse(above, zero, dpe));
-      fdme_v = Add(fdme_v, IfThenElse(above, zero, dme));
-    }
-
-    *fpeps = first_derivative_peps + GetLane(SumOfLanes(df, fdpe_v));
-    *fmeps = first_derivative_meps + GetLane(SumOfLanes(df, fdme_v));
-    return first_derivative + GetLane(SumOfLanes(df, fd_v));
-  }
-
-  const float* JXL_RESTRICT values_m;
-  const float* JXL_RESTRICT values_s;
-  size_t num;
-  float base;
-  float distance_mul;
-};
 
 int32_t FindBestMultiplier(const float* values_m, const float* values_s,
                            size_t num, float base, float distance_mul) {
@@ -166,8 +98,7 @@ void ComputeDC(const ImageF& dc_values, int32_t* dc_x, int32_t* dc_b) {
 }
 
 void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
-                 const AcStrategyImage* ac_strategy, const Quantizer* quantizer,
-                 const Rect& r, bool use_dct8, ImageSB* map_x, ImageSB* map_b,
+                 const Rect& r, ImageSB* map_x, ImageSB* map_b,
                  ImageF* dc_values, float* mem) {
   size_t xsize_blocks = opsin.xsize() / kBlockDim;
   constexpr float kDistanceMultiplierAC = 1e-3f;
@@ -214,10 +145,7 @@ void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
     size_t stride = opsin.PixelsPerRow();
 
     for (size_t x = x0; x < x1; x++) {
-      AcStrategy acs = use_dct8
-                           ? AcStrategy::FromRawStrategy(AcStrategy::Type::DCT)
-                           : ac_strategy->ConstRow(y)[x];
-      if (!acs.IsFirstBlock()) continue;
+      AcStrategy acs = AcStrategy::FromRawStrategy(AcStrategy::Type::DCT);
       size_t xs = acs.covered_blocks_x();
       TransformFromPixels(acs.Strategy(), row_y + x * kBlockDim, stride,
                           block_y, scratch_space);
@@ -232,11 +160,9 @@ void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
           dequant.InvMatrix(acs.Strategy(), 0);
       const float* const JXL_RESTRICT qm_b =
           dequant.InvMatrix(acs.Strategy(), 2);
-      // Why does a constant seem to work better than
-      // raw_quant_field->Row(y)[x] ?
-      float q = use_dct8 ? 1 : quantizer->Scale() * 400.0f;
-      float q_dc_x = use_dct8 ? 1 : 1.0f / quantizer->GetInvDcStep(0);
-      float q_dc_b = use_dct8 ? 1 : 1.0f / quantizer->GetInvDcStep(2);
+      float q = 1;
+      float q_dc_x = 1;
+      float q_dc_b = 1;
 
       // Copy DCs in dc_values.
       for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
@@ -307,6 +233,29 @@ HWY_EXPORT(InitDCStorage);
 HWY_EXPORT(ComputeDC);
 HWY_EXPORT(ComputeTile);
 
+struct CfLHeuristics {
+  void Init(const Image3F& opsin);
+
+  void PrepareForThreads(size_t num_threads) {
+    mem = hwy::AllocateAligned<float>(num_threads * kItemsPerThread);
+  }
+
+  void ComputeTile(const Rect& r, const Image3F& opsin,
+                   const DequantMatrices& dequant, size_t thread,
+                   ColorCorrelationMap* cmap);
+
+  void ComputeDC(ColorCorrelationMap* cmap);
+
+  ImageF dc_values;
+  hwy::AlignedFreeUniquePtr<float[]> mem;
+
+  // Working set is too large for stack; allocate dynamically.
+  constexpr static size_t kItemsPerThread =
+      AcStrategy::kMaxCoeffArea * 3        // Blocks
+      + kColorTileDim * kColorTileDim * 4  // AC coeff storage
+      + AcStrategy::kMaxCoeffArea * 2;     // Scratch space
+};
+
 void CfLHeuristics::Init(const Image3F& opsin) {
   size_t xsize_blocks = opsin.xsize() / kBlockDim;
   size_t ysize_blocks = opsin.ysize() / kBlockDim;
@@ -315,14 +264,11 @@ void CfLHeuristics::Init(const Image3F& opsin) {
 }
 
 void CfLHeuristics::ComputeTile(const Rect& r, const Image3F& opsin,
-                                const DequantMatrices& dequant,
-                                const AcStrategyImage* ac_strategy,
-                                const Quantizer* quantizer, size_t thread,
+                                const DequantMatrices& dequant, size_t thread,
                                 ColorCorrelationMap* cmap) {
-  bool use_dct8 = ac_strategy == nullptr;
   HWY_DYNAMIC_DISPATCH(ComputeTile)
-  (opsin, dequant, ac_strategy, quantizer, r, use_dct8, &cmap->ytox_map,
-   &cmap->ytob_map, &dc_values, mem.get() + thread * kItemsPerThread);
+  (opsin, dequant, r, &cmap->ytox_map, &cmap->ytob_map, &dc_values,
+   mem.get() + thread * kItemsPerThread);
 }
 
 void CfLHeuristics::ComputeDC(ColorCorrelationMap* cmap) {
@@ -333,17 +279,44 @@ void CfLHeuristics::ComputeDC(ColorCorrelationMap* cmap) {
   cmap->SetYToXDC(ytox_dc);
 }
 
+Status ComputeColorCorrelationMap(const Image3F& opsin,
+                                  const DequantMatrices& dequant,
+                                  ThreadPool* pool, ColorCorrelationMap* cmap) {
+  size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
+  size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
+  size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
+  size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
+  CfLHeuristics cfl_heuristics;
+  cfl_heuristics.Init(opsin);
+  auto process_tile_cfl = [&](const uint32_t tid, const size_t thread) {
+    size_t tx = tid % xsize_tiles;
+    size_t ty = tid / xsize_tiles;
+    size_t by0 = ty * kColorTileDimInBlocks;
+    size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks, ysize_blocks);
+    size_t bx0 = tx * kColorTileDimInBlocks;
+    size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
+    Rect r(bx0, by0, bx1 - bx0, by1 - by0);
+    cfl_heuristics.ComputeTile(r, opsin, dequant, thread, cmap);
+  };
+  JXL_RETURN_IF_ERROR(RunOnPool(
+      pool, 0, xsize_tiles * ysize_tiles,
+      [&](const size_t num_threads) {
+        cfl_heuristics.PrepareForThreads(num_threads);
+        return true;
+      },
+      process_tile_cfl, "Cfl Heuristics"));
+  cfl_heuristics.ComputeDC(cmap);
+  return true;
+}
+
 void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer) {
   float base_correlation_x = map->GetBaseCorrelationX();
   float base_correlation_b = map->GetBaseCorrelationB();
   int32_t ytox_dc = map->GetYToXDC();
   int32_t ytob_dc = map->GetYToBDC();
-
-  BitWriter::Allotment allotment(writer, 1 + 2 * kBitsPerByte + 12 + 32);
   if (ytox_dc == 0 && ytob_dc == 0 && base_correlation_x == 0.0f &&
       base_correlation_b == kYToBRatio) {
     writer->Write(1, 1);
-    allotment.Reclaim(writer);
     return;
   }
   writer->Write(1, 0);
@@ -352,7 +325,6 @@ void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer) {
   JXL_CHECK(WriteFloat16(base_correlation_b, writer));
   writer->Write(kBitsPerByte, ytox_dc - std::numeric_limits<int8_t>::min());
   writer->Write(kBitsPerByte, ytob_dc - std::numeric_limits<int8_t>::min());
-  allotment.Reclaim(writer);
 }
 
 }  // namespace jxl
