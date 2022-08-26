@@ -20,8 +20,10 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
                               const ColorCorrelationMap& cmap,
                               const ImageF& quant_field,
                               const ImageF& masking_field, ThreadPool* pool,
-                              DequantMatrices* matrices,
+                              const DequantMatrices& matrices,
                               AcStrategyImage* ac_strategy);
+
+void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field);
 
 }  // namespace jxl
 

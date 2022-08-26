@@ -76,6 +76,15 @@ uint32_t ComputeNumEpfIters(float distance) {
   return epf_iters;
 }
 
+float QuantDC(float distance) {
+  const float kDcQuantPow = 0.57f;
+  const float kDcQuant = 1.12f;
+  const float kDcMul = 2.9;  // Butteraugli target where non-linearity kicks in.
+  float effective_dist = kDcMul * std::pow(distance / kDcMul, kDcQuantPow);
+  effective_dist = Clamp1(effective_dist, 0.5f * distance, distance);
+  return std::min(kDcQuant / effective_dist, 50.f);
+}
+
 void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
                       BitWriter* writer) {
   BitWriter::Allotment allotment(writer, 1024);
@@ -279,14 +288,14 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   PadImageToBlockMultipleInPlace(&opsin);
 
   // Compute adaptive quantization field (relies on pre-gaborish values).
-  const float quant_dc = InitialQuantDC(distance);
-  ImageF masking_field;
-  ImageF quant_field =
-      InitialQuantField(distance, opsin, frame_dim, pool, 1.0f, &masking_field);
+  const float quant_dc = QuantDC(distance);
+  ImageF masking;
+  ImageF quant_field = AdaptiveQuantField(opsin, distance, pool, &masking);
 
-  // Initialize DCT8 quant weights and compute X quant matrix scale.
+  // Initialize quant weights and compute X quant matrix scale.
   DequantMatrices matrices;
-  JXL_CHECK(matrices.EnsureComputed(1 << AcStrategy::DCT));
+  uint32_t acs_mask = 0x30df;  // up to 16x16 DCT
+  JXL_CHECK(matrices.EnsureComputed(acs_mask));
   float x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
 
   // Compute quant scales and raw quant field field.
@@ -308,7 +317,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   // Compute block sizes.
   AcStrategyImage ac_strategy(xsize_blocks, ysize_blocks);
   JXL_RETURN_IF_ERROR(ComputeAcStrategyImage(opsin, distance, cmap, quant_field,
-                                             masking_field, pool, &matrices,
+                                             masking, pool, matrices,
                                              &ac_strategy));
   AdjustQuantField(ac_strategy, &raw_quant_field);
 
@@ -433,7 +442,18 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     group_writer->Write(1, 1);  // default quant dc
     quantizer.Encode(group_writer);
     group_writer->Write(1, 1);  // default BlockCtxMap
-    ColorCorrelationMapEncodeDC(&cmap, group_writer);
+    int32_t ytox_dc = cmap.GetYToXDC();
+    int32_t ytob_dc = cmap.GetYToBDC();
+    if (ytox_dc == 0 && ytob_dc == 0) {
+      group_writer->Write(1, 1);  // default DC camp
+    } else {
+      group_writer->Write(1, 0);        // non-default DC cmap
+      group_writer->Write(2, 0);        // default color factor
+      group_writer->Write(16, 0);       // base ytox 0.0
+      group_writer->Write(16, 0x3c00);  // base ytob 1.0
+      group_writer->Write(8, ytox_dc + 128);
+      group_writer->Write(8, ytob_dc + 128);
+    }
     group_writer->Write(1, 1);  // not an empty tree
     allotment.Reclaim(group_writer);
     std::vector<Token> tree_tokens(kContextTreeTokens,

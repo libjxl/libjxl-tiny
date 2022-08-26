@@ -7,8 +7,6 @@
 #ifndef ENCODER_ENC_XYB_H_
 #define ENCODER_ENC_XYB_H_
 
-// Converts to XYB color space.
-
 #include "encoder/base/data_parallel.h"
 #include "encoder/image.h"
 

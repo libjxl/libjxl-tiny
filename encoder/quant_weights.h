@@ -69,9 +69,7 @@ struct QuantEncodingInternal {
     kQuantModeDCT2,
     kQuantModeDCT4,
     kQuantModeDCT4X8,
-    kQuantModeAFV,
     kQuantModeDCT,
-    kQuantModeRAW,
   };
 
   template <Mode mode>
@@ -138,21 +136,6 @@ struct QuantEncodingInternal {
                                   const DctQuantWeightParams& params)
       : mode(kQuantModeDCT), dct_params(params) {}
 
-  // AFV
-  static constexpr QuantEncodingInternal AFV(
-      const DctQuantWeightParams& params4x8,
-      const DctQuantWeightParams& params4x4, const AFVWeights& weights) {
-    return QuantEncodingInternal(Tag<kQuantModeAFV>(), params4x8, params4x4,
-                                 weights);
-  }
-  constexpr QuantEncodingInternal(Tag<kQuantModeAFV> /* tag */,
-                                  const DctQuantWeightParams& params4x8,
-                                  const DctQuantWeightParams& params4x4,
-                                  const AFVWeights& weights)
-      : mode(kQuantModeAFV),
-        dct_params(params4x8),
-        afv_weights(weights),
-        dct_params_afv_4x4(params4x4) {}
 
   // This constructor is not constexpr so it can't be used in any of the
   // constexpr cases above.
@@ -181,13 +164,6 @@ struct QuantEncodingInternal {
 
     // Extra multipliers for coefficients 01 or 10 for DCT4X8 and DCT8X4.
     DCT4x8Multipliers dct4x8multipliers;
-
-    // Only used in kQuantModeRAW mode.
-    struct {
-      // explicit quantization table (like in JPEG)
-      std::vector<int>* qtable = nullptr;
-      float qtable_den = 1.f / (8 * 255);
-    } qraw;
   };
 
   // Weights for 4x4 sub-block in AFV.
@@ -208,36 +184,15 @@ class QuantEncoding final : public QuantEncodingInternal {
   QuantEncoding(const QuantEncoding& other)
       : QuantEncodingInternal(
             static_cast<const QuantEncodingInternal&>(other)) {
-    if (mode == kQuantModeRAW && qraw.qtable) {
-      // Need to make a copy of the passed *qtable.
-      qraw.qtable = new std::vector<int>(*other.qraw.qtable);
-    }
   }
   QuantEncoding(QuantEncoding&& other) noexcept
       : QuantEncodingInternal(
             static_cast<const QuantEncodingInternal&>(other)) {
-    // Steal the qtable from the other object if any.
-    if (mode == kQuantModeRAW) {
-      other.qraw.qtable = nullptr;
-    }
   }
   QuantEncoding& operator=(const QuantEncoding& other) {
-    if (mode == kQuantModeRAW && qraw.qtable) {
-      delete qraw.qtable;
-    }
     *static_cast<QuantEncodingInternal*>(this) =
         QuantEncodingInternal(static_cast<const QuantEncodingInternal&>(other));
-    if (mode == kQuantModeRAW && qraw.qtable) {
-      // Need to make a copy of the passed *qtable.
-      qraw.qtable = new std::vector<int>(*other.qraw.qtable);
-    }
     return *this;
-  }
-
-  ~QuantEncoding() {
-    if (mode == kQuantModeRAW && qraw.qtable) {
-      delete qraw.qtable;
-    }
   }
 
   // Wrappers of the QuantEncodingInternal:: static functions that return a
@@ -245,8 +200,7 @@ class QuantEncoding final : public QuantEncodingInternal {
   // QuantEncodingInternal to QuantEncoding, which would be inlined anyway.
   // In general, you should use this wrappers. The only reason to directly
   // create a QuantEncodingInternal instance is if you need a constexpr version
-  // of this class. Note that RAW() is not supported in that case since it uses
-  // a std::vector.
+  // of this class.
   static QuantEncoding Library(uint8_t predefined) {
     return QuantEncoding(QuantEncodingInternal::Library(predefined));
   }
@@ -266,21 +220,6 @@ class QuantEncoding final : public QuantEncodingInternal {
   }
   static QuantEncoding DCT(const DctQuantWeightParams& params) {
     return QuantEncoding(QuantEncodingInternal::DCT(params));
-  }
-  static QuantEncoding AFV(const DctQuantWeightParams& params4x8,
-                           const DctQuantWeightParams& params4x4,
-                           const AFVWeights& weights) {
-    return QuantEncoding(
-        QuantEncodingInternal::AFV(params4x8, params4x4, weights));
-  }
-
-  // RAW, note that this one is not a constexpr one.
-  static QuantEncoding RAW(const std::vector<int>& qtable, int shift = 0) {
-    QuantEncoding encoding(kQuantModeRAW);
-    encoding.qraw.qtable = new std::vector<int>();
-    *encoding.qraw.qtable = qtable;
-    encoding.qraw.qtable_den = (1 << shift) * (1.f / (8 * 255));
-    return encoding;
   }
 
  private:
@@ -324,38 +263,20 @@ class DequantMatrices {
     DCT32X32,
     // DCT16X8
     DCT8X16,
-    // DCT32X8
-    DCT8X32,
-    // DCT32X16
-    DCT16X32,
     DCT4X8,
-    // DCT8X4
-    AFV0,
-    // AFV1
-    // AFV2
-    // AFV3
-    DCT64X64,
-    // DCT64X32,
-    DCT32X64,
-    DCT128X128,
-    // DCT128X64,
-    DCT64X128,
-    DCT256X256,
-    // DCT256X128,
-    DCT128X256,
     kNum
   };
 
   static constexpr QuantTable kQuantTable[] = {
-      QuantTable::DCT,        QuantTable::IDENTITY,   QuantTable::DCT2X2,
-      QuantTable::DCT4X4,     QuantTable::DCT16X16,   QuantTable::DCT32X32,
-      QuantTable::DCT8X16,    QuantTable::DCT8X16,    QuantTable::DCT8X32,
-      QuantTable::DCT8X32,    QuantTable::DCT16X32,   QuantTable::DCT16X32,
-      QuantTable::DCT4X8,     QuantTable::DCT4X8,     QuantTable::AFV0,
-      QuantTable::AFV0,       QuantTable::AFV0,       QuantTable::AFV0,
-      QuantTable::DCT64X64,   QuantTable::DCT32X64,   QuantTable::DCT32X64,
-      QuantTable::DCT128X128, QuantTable::DCT64X128,  QuantTable::DCT64X128,
-      QuantTable::DCT256X256, QuantTable::DCT128X256, QuantTable::DCT128X256,
+      QuantTable::DCT,     QuantTable::IDENTITY, QuantTable::DCT2X2,
+      QuantTable::DCT4X4,  QuantTable::DCT16X16, QuantTable::DCT32X32,
+      QuantTable::DCT8X16, QuantTable::DCT8X16,  QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
+      QuantTable::DCT4X8,  QuantTable::DCT4X8,   QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
   };
   static_assert(AcStrategy::kNumValidStrategies ==
                     sizeof(kQuantTable) / sizeof *kQuantTable,
@@ -391,37 +312,18 @@ class DequantMatrices {
 
   JXL_INLINE float InvDCQuant(size_t c) const { return inv_dc_quant_[c]; }
 
-  // For encoder.
-  void SetEncodings(const std::vector<QuantEncoding>& encodings) {
-    encodings_ = encodings;
-    computed_mask_ = 0;
-  }
-
-  // For encoder.
-  void SetDCQuant(const float dc[3]) {
-    for (size_t c = 0; c < 3; c++) {
-      dc_quant_[c] = 1.0f / dc[c];
-      inv_dc_quant_[c] = dc[c];
-    }
-  }
-
-  const std::vector<QuantEncoding>& encodings() const { return encodings_; }
-
-  static constexpr size_t required_size_x[] = {1, 1, 1, 1, 2,  4, 1,  1, 2,
-                                               1, 1, 8, 4, 16, 8, 32, 16};
+  static constexpr size_t required_size_x[] = {1, 1, 1, 1, 2, 4, 1, 1};
   static_assert(kNum == sizeof(required_size_x) / sizeof(*required_size_x),
                 "Update this array when adding or removing quant tables.");
 
-  static constexpr size_t required_size_y[] = {1, 1, 1, 1, 2,  4,  2,  4, 4,
-                                               1, 1, 8, 8, 16, 16, 32, 32};
+  static constexpr size_t required_size_y[] = {1, 1, 1, 1, 2, 4, 2, 1};
   static_assert(kNum == sizeof(required_size_y) / sizeof(*required_size_y),
                 "Update this array when adding or removing quant tables.");
 
   Status EnsureComputed(uint32_t acs_mask);
 
  private:
-  static constexpr size_t required_size_[] = {
-      1, 1, 1, 1, 4, 16, 2, 4, 8, 1, 1, 64, 32, 256, 128, 1024, 512};
+  static constexpr size_t required_size_[] = {1, 1, 1, 1, 4, 16, 2, 1};
   static_assert(kNum == sizeof(required_size_) / sizeof(*required_size_),
                 "Update this array when adding or removing quant tables.");
   static constexpr size_t kTotalTableSize =
@@ -435,7 +337,6 @@ class DequantMatrices {
   float dc_quant_[3] = {kDCQuant[0], kDCQuant[1], kDCQuant[2]};
   float inv_dc_quant_[3] = {kInvDCQuant[0], kInvDCQuant[1], kInvDCQuant[2]};
   size_t table_offsets_[AcStrategy::kNumValidStrategies * 3];
-  std::vector<QuantEncoding> encodings_;
 };
 
 }  // namespace jxl

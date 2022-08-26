@@ -178,44 +178,4 @@ void BitWriter::Write(size_t n_bits, uint64_t bits) {
   bits_written_ += n_bits;
 }
 
-bool WriteFloat16(float value, BitWriter* JXL_RESTRICT writer) {
-  uint32_t bits32;
-  memcpy(&bits32, &value, sizeof(bits32));
-  const uint32_t sign = bits32 >> 31;
-  const uint32_t biased_exp32 = (bits32 >> 23) & 0xFF;
-  const uint32_t mantissa32 = bits32 & 0x7FFFFF;
-
-  const int32_t exp = static_cast<int32_t>(biased_exp32) - 127;
-  if (JXL_UNLIKELY(exp > 15)) {
-    return false;
-  }
-
-  //  or zero => zero.
-  if (exp < -24) {
-    writer->Write(16, 0);
-    return true;
-  }
-
-  uint32_t biased_exp16, mantissa16;
-
-  // exp = [-24, -15] => subnormal
-  if (JXL_UNLIKELY(exp < -14)) {
-    biased_exp16 = 0;
-    const uint32_t sub_exp = static_cast<uint32_t>(-14 - exp);
-    JXL_ASSERT(1 <= sub_exp && sub_exp < 11);
-    mantissa16 = (1 << (10 - sub_exp)) + (mantissa32 >> (13 + sub_exp));
-  } else {
-    // exp = [-14, 15]
-    biased_exp16 = static_cast<uint32_t>(exp + 15);
-    JXL_ASSERT(1 <= biased_exp16 && biased_exp16 < 31);
-    mantissa16 = mantissa32 >> 13;
-  }
-
-  JXL_ASSERT(mantissa16 < 1024);
-  const uint32_t bits16 = (sign << 15) | (biased_exp16 << 10) | mantissa16;
-  JXL_ASSERT(bits16 < 0x10000);
-  writer->Write(16, bits16);
-  return true;
-}
-
 }  // namespace jxl
