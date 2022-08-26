@@ -26,7 +26,6 @@
 #include "encoder/coeff_order.h"
 #include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
-#include "encoder/entropy_coder.h"
 #include "encoder/image.h"
 #include "encoder/image_ops.h"
 
@@ -144,6 +143,18 @@ int32_t NumNonZero8x8ExceptDC(const int32_t* JXL_RESTRICT block,
   return nzeros;
 }
 
+JXL_INLINE int32_t PredictFromTopAndLeft(
+    const int32_t* const JXL_RESTRICT row_top,
+    const int32_t* const JXL_RESTRICT row, size_t x, int32_t default_val) {
+  if (x == 0) {
+    return row_top == nullptr ? default_val : row_top[x];
+  }
+  if (row_top == nullptr) {
+    return row[x - 1];
+  }
+  return (row_top[x] + row[x - 1] + 1) / 2;
+}
+
 // The number of nonzeros of each block is predicted from the top and the left
 // blocks, with opportune scaling to take into account the number of blocks of
 // each strategy.  The predicted number of nonzeros divided by two is used as a
@@ -207,14 +218,11 @@ void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
 
         int32_t predicted_nzeros =
             PredictFromTopAndLeft(row_nzeros_top[c], row_nzeros[c], sbx[c], 32);
-        size_t block_ctx =
-            BlockCtxMap::kDefaultCtxMap[(c < 2 ? c ^ 1 : 2) * kNumOrders + ord];
-        const int32_t nzero_ctx =
-            BlockCtxMap::DefaultNonZeroContext(predicted_nzeros, block_ctx);
+        const size_t block_ctx = BlockContext(c, acs.RawStrategy());
+        const size_t nzero_ctx = NonZeroContext(predicted_nzeros, block_ctx);
+        const size_t histo_offset = ZeroDensityContextsOffset(block_ctx);
 
         output->emplace_back(nzero_ctx, nzeros);
-        const size_t histo_offset =
-            BlockCtxMap::DefaultZeroDensityContextsOffset(block_ctx);
         // Skip LLF.
         size_t prev = (nzeros > static_cast<ssize_t>(size / 16) ? 0 : 1);
         for (size_t k = covered_blocks; k < size && nzeros != 0; ++k) {

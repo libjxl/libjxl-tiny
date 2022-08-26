@@ -21,13 +21,11 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_file.cc
   enc_frame.cc
   enc_group.cc
-  enc_toc.cc
   enc_xyb.cc
   read_pfm.cc
   quant_weights.cc
   base/data_parallel.cc
   ans_common.cc
-  entropy_coder.cc
   quantizer.cc
   gaborish.cc
   convolve_symmetric5.cc

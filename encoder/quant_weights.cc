@@ -420,42 +420,6 @@ struct DequantMatricesLibraryDef {
                              7));
   }
 
-  // DCT32
-  static constexpr const QuantEncodingInternal DCT32X32() {
-    return QuantEncodingInternal::DCT(
-        DctQuantWeightParams({{{{
-                                   V(15718.40830982518931456),
-                                   V(-1.025),
-                                   V(-0.98),
-                                   V(-0.9012),
-                                   V(-0.4),
-                                   V(-0.48819395464),
-                                   V(-0.421064),
-                                   V(-0.27),
-                               }},
-                               {{
-                                   V(7305.7636810695983104),
-                                   V(-0.8041958212306401),
-                                   V(-0.7633036457487539),
-                                   V(-0.55660379990111464),
-                                   V(-0.49785304658857626),
-                                   V(-0.43699592683512467),
-                                   V(-0.40180866526242109),
-                                   V(-0.27321683125358037),
-                               }},
-                               {{
-                                   V(3803.53173721215041536),
-                                   V(-3.060733579805728),
-                                   V(-2.0413270132490346),
-                                   V(-2.0235650159727417),
-                                   V(-0.5495389509954993),
-                                   V(-0.4),
-                                   V(-0.4),
-                                   V(-0.3),
-                               }}}},
-                             8));
-  }
-
   // DCT16X8
   static constexpr const QuantEncodingInternal DCT8X16() {
     return QuantEncodingInternal::DCT(
@@ -525,7 +489,7 @@ struct DequantMatricesLibraryDef {
 }  // namespace
 
 const DequantMatrices::DequantLibraryInternal DequantMatrices::LibraryInit() {
-  static_assert(kNum == 8,
+  static_assert(kNum == 7,
                 "Update this function when adding new quantization kinds.");
   static_assert(kNumPredefinedTables == 1,
                 "Update this function when adding new quantization matrices to "
@@ -537,16 +501,14 @@ const DequantMatrices::DequantLibraryInternal DequantMatrices::LibraryInit() {
   static_assert(2 == DCT2X2, "Update the DequantLibrary array below.");
   static_assert(3 == DCT4X4, "Update the DequantLibrary array below.");
   static_assert(4 == DCT16X16, "Update the DequantLibrary array below.");
-  static_assert(5 == DCT32X32, "Update the DequantLibrary array below.");
-  static_assert(6 == DCT8X16, "Update the DequantLibrary array below.");
-  static_assert(7 == DCT4X8, "Update the DequantLibrary array below.");
+  static_assert(5 == DCT8X16, "Update the DequantLibrary array below.");
+  static_assert(6 == DCT4X8, "Update the DequantLibrary array below.");
   return DequantMatrices::DequantLibraryInternal{{
       DequantMatricesLibraryDef::DCT(),
       DequantMatricesLibraryDef::IDENTITY(),
       DequantMatricesLibraryDef::DCT2X2(),
       DequantMatricesLibraryDef::DCT4X4(),
       DequantMatricesLibraryDef::DCT16X16(),
-      DequantMatricesLibraryDef::DCT32X32(),
       DequantMatricesLibraryDef::DCT8X16(),
       DequantMatricesLibraryDef::DCT4X8(),
   }};

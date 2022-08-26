@@ -18,7 +18,6 @@
 #include <queue>
 #include <vector>
 
-#include "encoder/ac_context.h"
 #include "encoder/ac_strategy.h"
 #include "encoder/ans_params.h"
 #include "encoder/base/bits.h"
@@ -39,7 +38,6 @@
 #include "encoder/enc_coeff_order.h"
 #include "encoder/enc_entropy_coder.h"
 #include "encoder/enc_group.h"
-#include "encoder/enc_toc.h"
 #include "encoder/enc_xyb.h"
 #include "encoder/gaborish.h"
 #include "encoder/image.h"
@@ -294,8 +292,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
 
   // Initialize quant weights and compute X quant matrix scale.
   DequantMatrices matrices;
-  uint32_t acs_mask = 0x30df;  // up to 16x16 DCT
-  JXL_CHECK(matrices.EnsureComputed(acs_mask));
+  constexpr uint32_t kAcStrategyMask = 0x30df;  // up to 16x16 DCT
+  JXL_CHECK(matrices.EnsureComputed(kAcStrategyMask));
   float x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
 
   // Compute quant scales and raw quant field field.
@@ -491,10 +489,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                                 process_dc_group, "EncodeDCGroup"));
 
   // Compute AC coefficient orders.
-  auto used_orders_info = ComputeUsedOrders(ac_strategy, Rect(raw_quant_field));
   std::vector<coeff_order_t> coeff_orders(kCoeffOrderMaxSize);
-  ComputeCoeffOrder(ac_coeffs, ac_strategy, frame_dim, used_orders_info.second,
-                    used_orders_info.first, &coeff_orders[0]);
+  ComputeCoeffOrder(kAcStrategyMask, &coeff_orders[0]);
 
   // Compute AC tokens.
   std::vector<std::vector<Token>> ac_tokens(num_groups);
@@ -531,9 +527,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     size_t num_histo_bits = CeilLog2Nonzero(num_groups);
     if (num_histo_bits != 0) group_writer->Write(num_histo_bits, 0);
     group_writer->Write(2, 3);
-    group_writer->Write(kNumOrders, used_orders_info.second);
+    group_writer->Write(13, 0);  // all default coeff order
     allotment.Reclaim(group_writer);
-    EncodeCoeffOrders(used_orders_info.second, &coeff_orders[0], group_writer);
     BuildAndEncodeHistograms(kNumACContexts, ac_tokens, &codes, &context_map,
                              group_writer);
   }
@@ -555,7 +550,31 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   }
 
   // Write TOC and assemble bit stream.
-  JXL_RETURN_IF_ERROR(WriteGroupOffsets(group_codes, nullptr, writer));
+  {
+    size_t num_sizes = group_codes.size();
+    BitWriter::Allotment allotment(writer, 1024 + 30 * num_sizes);
+    writer->Write(1, 0);      // no permutation
+    writer->ZeroPadToByte();  // before TOC entries
+    for (size_t i = 0; i < group_codes.size(); i++) {
+      JXL_ASSERT(group_codes[i].BitsWritten() % kBitsPerByte == 0);
+      const size_t group_size = group_codes[i].BitsWritten() / kBitsPerByte;
+      size_t offset = 0;
+      bool success = false;
+      static const size_t kBits[4] = {10, 14, 22, 30};
+      for (size_t i = 0; i < 4; ++i) {
+        if (group_size < offset + (1u << kBits[i])) {
+          writer->Write(2, i);
+          writer->Write(kBits[i], group_size - offset);
+          success = true;
+          break;
+        }
+        offset += (1u << kBits[i]);
+      }
+      JXL_RETURN_IF_ERROR(success);
+    }
+    writer->ZeroPadToByte();
+    allotment.Reclaim(writer);
+  }
   writer->AppendByteAligned(group_codes);
 
   return true;
