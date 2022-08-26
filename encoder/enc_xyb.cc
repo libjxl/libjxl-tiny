@@ -40,20 +40,11 @@ static const float kM20 = 0.24342268924547819f;
 static const float kM21 = 0.20476744424496821f;
 static const float kM22 = 1.0f - kM20 - kM21;
 
-static const float kB0 = 0.0037930732552754493f;
-static const float kB1 = kB0;
-static const float kB2 = kB0;
-
 // Opsin absorbance matrix is now frozen.
 static const float kOpsinAbsorbanceMatrix[9] = {
     kM00, kM01, kM02, kM10, kM11, kM12, kM20, kM21, kM22,
 };
-
-static const float kOpsinAbsorbanceBias[3] = {
-    kB0,
-    kB1,
-    kB2,
-};
+static const float kOpsinAbsorbanceBias = 0.0037930732552754493f;
 
 // 4x3 matrix * 3x1 SIMD vectors
 template <class V>
@@ -61,9 +52,9 @@ JXL_INLINE void OpsinAbsorbance(const V r, const V g, const V b,
                                 const float* JXL_RESTRICT premul_absorb,
                                 V* JXL_RESTRICT mixed0, V* JXL_RESTRICT mixed1,
                                 V* JXL_RESTRICT mixed2) {
-  const float* bias = &kOpsinAbsorbanceBias[0];
   const HWY_FULL(float) d;
   const size_t N = Lanes(d);
+  const auto bias = Set(d, kOpsinAbsorbanceBias);
   const auto m0 = Load(d, premul_absorb + 0 * N);
   const auto m1 = Load(d, premul_absorb + 1 * N);
   const auto m2 = Load(d, premul_absorb + 2 * N);
@@ -73,9 +64,9 @@ JXL_INLINE void OpsinAbsorbance(const V r, const V g, const V b,
   const auto m6 = Load(d, premul_absorb + 6 * N);
   const auto m7 = Load(d, premul_absorb + 7 * N);
   const auto m8 = Load(d, premul_absorb + 8 * N);
-  *mixed0 = MulAdd(m0, r, MulAdd(m1, g, MulAdd(m2, b, Set(d, bias[0]))));
-  *mixed1 = MulAdd(m3, r, MulAdd(m4, g, MulAdd(m5, b, Set(d, bias[1]))));
-  *mixed2 = MulAdd(m6, r, MulAdd(m7, g, MulAdd(m8, b, Set(d, bias[2]))));
+  *mixed0 = MulAdd(m0, r, MulAdd(m1, g, MulAdd(m2, b, bias)));
+  *mixed1 = MulAdd(m3, r, MulAdd(m4, g, MulAdd(m5, b, bias)));
+  *mixed2 = MulAdd(m6, r, MulAdd(m7, g, MulAdd(m8, b, bias)));
 }
 
 // Converts one RGB vector to XYB.
@@ -117,7 +108,7 @@ void ToXYB(const Image3F& linear, ThreadPool* pool, Image3F* JXL_RESTRICT xyb) {
     Store(absorb, d, premul_absorb + i * N);
   }
   for (size_t i = 0; i < 3; ++i) {
-    const auto neg_bias_cbrt = Set(d, -cbrtf(kOpsinAbsorbanceBias[i]));
+    const auto neg_bias_cbrt = Set(d, -cbrtf(kOpsinAbsorbanceBias));
     Store(neg_bias_cbrt, d, premul_absorb + (9 + i) * N);
   }
 

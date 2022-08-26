@@ -10,7 +10,6 @@
 #include <stdlib.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 #undef HWY_TARGET_INCLUDE
@@ -19,16 +18,11 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "encoder/base/bits.h"
 #include "encoder/base/data_parallel.h"
-#include "encoder/base/padded_bytes.h"
-#include "encoder/base/span.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/enc_transforms-inl.h"
-#include "encoder/entropy_coder.h"
 #include "encoder/image_ops.h"
-#include "encoder/quantizer.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -49,7 +43,6 @@ int32_t FindBestMultiplier(const float* values_m, const float* values_s,
     return 0;
   }
   float x;
-  static constexpr float kInvColorFactor = 1.0f / kDefaultColorFactor;
   auto ca = Zero(df);
   auto cb = Zero(df);
   const auto inv_color_factor = Set(df, kInvColorFactor);
@@ -93,8 +86,8 @@ void ComputeDC(const ImageF& dc_values, int32_t* dc_x, int32_t* dc_b) {
   const float* JXL_RESTRICT dc_values_b = dc_values.Row(3);
   *dc_x = FindBestMultiplier(dc_values_yx, dc_values_x, dc_values.xsize(), 0.0f,
                              kDistanceMultiplierDC);
-  *dc_b = FindBestMultiplier(dc_values_yb, dc_values_b, dc_values.xsize(),
-                             kYToBRatio, kDistanceMultiplierDC);
+  *dc_b = FindBestMultiplier(dc_values_yb, dc_values_b, dc_values.xsize(), 1.0f,
+                             kDistanceMultiplierDC);
 }
 
 void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
@@ -146,66 +139,38 @@ void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
 
     for (size_t x = x0; x < x1; x++) {
       AcStrategy acs = AcStrategy::FromRawStrategy(AcStrategy::Type::DCT);
-      size_t xs = acs.covered_blocks_x();
       TransformFromPixels(acs.Strategy(), row_y + x * kBlockDim, stride,
                           block_y, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), block_y, dc_y, xs);
+      DCFromLowestFrequencies(acs.Strategy(), block_y, dc_y, 1);
       TransformFromPixels(acs.Strategy(), row_x + x * kBlockDim, stride,
                           block_x, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), block_x, dc_x, xs);
+      DCFromLowestFrequencies(acs.Strategy(), block_x, dc_x, 1);
       TransformFromPixels(acs.Strategy(), row_b + x * kBlockDim, stride,
                           block_b, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), block_b, dc_b, xs);
+      DCFromLowestFrequencies(acs.Strategy(), block_b, dc_b, 1);
       const float* const JXL_RESTRICT qm_x =
           dequant.InvMatrix(acs.Strategy(), 0);
       const float* const JXL_RESTRICT qm_b =
           dequant.InvMatrix(acs.Strategy(), 2);
-      float q = 1;
-      float q_dc_x = 1;
-      float q_dc_b = 1;
 
       // Copy DCs in dc_values.
-      for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
-        for (size_t ix = 0; ix < xs; ix++) {
-          dc_values_yx[(iy + y) * xsize_blocks + ix + x] =
-              dc_y[iy * xs + ix] * q_dc_x;
-          dc_values_x[(iy + y) * xsize_blocks + ix + x] =
-              dc_x[iy * xs + ix] * q_dc_x;
-          dc_values_yb[(iy + y) * xsize_blocks + ix + x] =
-              dc_y[iy * xs + ix] * q_dc_b;
-          dc_values_b[(iy + y) * xsize_blocks + ix + x] =
-              dc_b[iy * xs + ix] * q_dc_b;
-        }
-      }
+      dc_values_yx[y * xsize_blocks + x] = dc_y[0];
+      dc_values_x[y * xsize_blocks + x] = dc_x[0];
+      dc_values_yb[y * xsize_blocks + x] = dc_y[0];
+      dc_values_b[y * xsize_blocks + x] = dc_b[0];
 
-      // Do not use this block for computing AC CfL.
-      if (acs.covered_blocks_x() + x0 > x1 ||
-          acs.covered_blocks_y() + y0 > y1) {
-        continue;
-      }
-
-      // Copy AC coefficients in the local block. The order in which
-      // coefficients get stored does not matter.
-      size_t cx = acs.covered_blocks_x();
-      size_t cy = acs.covered_blocks_y();
-      CoefficientLayout(&cy, &cx);
-      // Zero out LFs. This introduces terms in the optimization loop that
+      // Zero out DCs. This introduces terms in the optimization loop that
       // don't affect the result, as they are all 0, but allow for simpler
       // SIMDfication.
-      for (size_t iy = 0; iy < cy; iy++) {
-        for (size_t ix = 0; ix < cx; ix++) {
-          block_y[cx * kBlockDim * iy + ix] = 0;
-          block_x[cx * kBlockDim * iy + ix] = 0;
-          block_b[cx * kBlockDim * iy + ix] = 0;
-        }
-      }
-      const auto qv = Set(df, q);
-      for (size_t i = 0; i < cx * cy * 64; i += Lanes(df)) {
+      block_y[0] = 0;
+      block_x[0] = 0;
+      block_b[0] = 0;
+      for (size_t i = 0; i < 64; i += Lanes(df)) {
         const auto b_y = Load(df, block_y + i);
         const auto b_x = Load(df, block_x + i);
         const auto b_b = Load(df, block_b + i);
-        const auto qqm_x = Mul(qv, Load(df, qm_x + i));
-        const auto qqm_b = Mul(qv, Load(df, qm_b + i));
+        const auto qqm_x = Load(df, qm_x + i);
+        const auto qqm_b = Load(df, qm_b + i);
         Store(Mul(b_y, qqm_x), df, coeffs_yx + num_ac);
         Store(Mul(b_x, qqm_x), df, coeffs_x + num_ac);
         Store(Mul(b_y, qqm_b), df, coeffs_yb + num_ac);
@@ -217,7 +182,7 @@ void ComputeTile(const Image3F& opsin, const DequantMatrices& dequant,
   JXL_CHECK(num_ac % Lanes(df) == 0);
   row_out_x[tx] = FindBestMultiplier(coeffs_yx, coeffs_x, num_ac, 0.0f,
                                      kDistanceMultiplierAC);
-  row_out_b[tx] = FindBestMultiplier(coeffs_yb, coeffs_b, num_ac, kYToBRatio,
+  row_out_b[tx] = FindBestMultiplier(coeffs_yb, coeffs_b, num_ac, 1.0f,
                                      kDistanceMultiplierAC);
 }
 
@@ -307,24 +272,6 @@ Status ComputeColorCorrelationMap(const Image3F& opsin,
       process_tile_cfl, "Cfl Heuristics"));
   cfl_heuristics.ComputeDC(cmap);
   return true;
-}
-
-void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer) {
-  float base_correlation_x = map->GetBaseCorrelationX();
-  float base_correlation_b = map->GetBaseCorrelationB();
-  int32_t ytox_dc = map->GetYToXDC();
-  int32_t ytob_dc = map->GetYToBDC();
-  if (ytox_dc == 0 && ytob_dc == 0 && base_correlation_x == 0.0f &&
-      base_correlation_b == kYToBRatio) {
-    writer->Write(1, 1);
-    return;
-  }
-  writer->Write(1, 0);
-  writer->Write(2, 0);  // default color factor
-  JXL_CHECK(WriteFloat16(base_correlation_x, writer));
-  JXL_CHECK(WriteFloat16(base_correlation_b, writer));
-  writer->Write(kBitsPerByte, ytox_dc - std::numeric_limits<int8_t>::min());
-  writer->Write(kBitsPerByte, ytob_dc - std::numeric_limits<int8_t>::min());
 }
 
 }  // namespace jxl

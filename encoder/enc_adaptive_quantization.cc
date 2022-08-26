@@ -7,12 +7,10 @@
 #include "encoder/enc_adaptive_quantization.h"
 
 #include <stddef.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #include <algorithm>
 #include <cmath>
-#include <string>
 #include <vector>
 
 #undef HWY_TARGET_INCLUDE
@@ -20,18 +18,13 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "encoder/ac_strategy.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/data_parallel.h"
 #include "encoder/base/status.h"
-#include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
-#include "encoder/enc_group.h"
 #include "encoder/fast_math-inl.h"
 #include "encoder/image.h"
-#include "encoder/image_ops.h"
-#include "encoder/opsin_params.h"
-#include "encoder/quant_weights.h"
+
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -119,36 +112,10 @@ static float RatioOfDerivativesOfCubicRootToSimpleGamma(float v) {
       RatioOfDerivativesOfCubicRootToSimpleGamma<invert>(DScalar(), vscalar));
 }
 
-// TODO(veluca): this function computes an approximation of the derivative of
-// SimpleGamma with (f(x+eps)-f(x))/eps. Consider two-sided approximation or
-// exact derivatives. For reference, SimpleGamma was:
-/*
-template <typename D, typename V>
-V SimpleGamma(const D d, V v) {
-  // A simple HDR compatible gamma function.
-  const auto mul = Set(d, kSGmul);
-  const auto kRetMul = Set(d, kSGRetMul);
-  const auto kRetAdd = Set(d, kSGmul2 * -20.2789020414f);
-  const auto kVOffset = Set(d, kSGVOffset);
-
-  v *= mul;
-
-  // This should happen rarely, but may lead to a NaN, which is rather
-  // undesirable. Since negative photons don't exist we solve the NaNs by
-  // clamping here.
-  // TODO(veluca): with FastLog2f, this no longer leads to NaNs.
-  v = ZeroIfNegative(v);
-  return kRetMul * FastLog2f(d, v + kVOffset) + kRetAdd;
-}
-*/
-
 template <class D, class V>
 V GammaModulation(const D d, const size_t x, const size_t y,
                   const ImageF& xyb_x, const ImageF& xyb_y, const V out_val) {
   const float kBias = 0.16f;
-  JXL_DASSERT(kBias > kOpsinAbsorbanceBias[0]);
-  JXL_DASSERT(kBias > kOpsinAbsorbanceBias[1]);
-  JXL_DASSERT(kBias > kOpsinAbsorbanceBias[2]);
   auto overall_ratio = Zero(d);
   auto bias = Set(d, kBias);
   auto half = Set(d, 0.5f);
@@ -411,186 +378,170 @@ void FuzzyErosion(const Rect& from_rect, const ImageF& from,
   }
 }
 
-struct AdaptiveQuantizationImpl {
-  void Init(const Image3F& xyb) {
-    JXL_DASSERT(xyb.xsize() % kBlockDim == 0);
-    JXL_DASSERT(xyb.ysize() % kBlockDim == 0);
-    const size_t xsize = xyb.xsize();
-    const size_t ysize = xyb.ysize();
-    aq_map = ImageF(xsize / kBlockDim, ysize / kBlockDim);
-  }
-  void PrepareBuffers(size_t num_threads) {
-    diff_buffer = ImageF(kColorTileDim + 8, num_threads);
-    for (size_t i = pre_erosion.size(); i < num_threads; i++) {
-      pre_erosion.emplace_back(kColorTileDimInBlocks * 2 + 2,
-                               kColorTileDimInBlocks * 2 + 2);
+void ComputeTile(const Image3F& xyb, const Rect& rect, float distance,
+                 float scale, ImageF* pre_erosion, float* diff_buffer,
+                 ImageF* aq_map, ImageF* mask) {
+  const size_t xsize = xyb.xsize();
+  const size_t ysize = xyb.ysize();
+
+  // The XYB gamma is 3.0 to be able to decode faster with two muls.
+  // Butteraugli's gamma is matching the gamma of human eye, around 2.6.
+  // We approximate the gamma difference by adding one cubic root into
+  // the adaptive quantization. This gives us a total gamma of 2.6666
+  // for quantization uses.
+  const float match_gamma_offset = 0.019;
+
+  const HWY_FULL(float) df;
+  const float kXMul = 23.426802998210313f;
+  const auto kXMulv = Set(df, kXMul);
+
+  size_t y_start = rect.y0() * 8;
+  size_t y_end = y_start + rect.ysize() * 8;
+
+  size_t x0 = rect.x0() * 8;
+  size_t x1 = x0 + rect.xsize() * 8;
+  if (x0 != 0) x0 -= 4;
+  if (x1 != xyb.xsize()) x1 += 4;
+  if (y_start != 0) y_start -= 4;
+  if (y_end != xyb.ysize()) y_end += 4;
+  pre_erosion->ShrinkTo((x1 - x0) / 4, (y_end - y_start) / 4);
+
+  // Computes image (padded to multiple of 8x8) of local pixel differences.
+  // Subsample both directions by 4.
+  for (size_t y = y_start; y < y_end; ++y) {
+    size_t y2 = y + 1 < ysize ? y + 1 : y;
+    size_t y1 = y > 0 ? y - 1 : y;
+
+    const float* row_in = xyb.PlaneRow(1, y);
+    const float* row_in1 = xyb.PlaneRow(1, y1);
+    const float* row_in2 = xyb.PlaneRow(1, y2);
+    const float* row_x_in = xyb.PlaneRow(0, y);
+    const float* row_x_in1 = xyb.PlaneRow(0, y1);
+    const float* row_x_in2 = xyb.PlaneRow(0, y2);
+    float* JXL_RESTRICT row_out = diff_buffer;
+
+    auto scalar_pixel = [&](size_t x) {
+      const size_t x2 = x + 1 < xsize ? x + 1 : x;
+      const size_t x1 = x > 0 ? x - 1 : x;
+      const float base =
+          0.25f * (row_in2[x] + row_in1[x] + row_in[x1] + row_in[x2]);
+      const float gammac = RatioOfDerivativesOfCubicRootToSimpleGamma(
+          row_in[x] + match_gamma_offset);
+      float diff = gammac * (row_in[x] - base);
+      diff *= diff;
+      const float base_x =
+          0.25f * (row_x_in2[x] + row_x_in1[x] + row_x_in[x1] + row_x_in[x2]);
+      float diff_x = gammac * (row_x_in[x] - base_x);
+      diff_x *= diff_x;
+      diff += kXMul * diff_x;
+      diff = MaskingSqrt(diff);
+      if ((y % 4) != 0) {
+        row_out[x - x0] += diff;
+      } else {
+        row_out[x - x0] = diff;
+      }
+    };
+
+    size_t x = x0;
+    // First pixel of the row.
+    if (x0 == 0) {
+      scalar_pixel(x0);
+      ++x;
+    }
+    // SIMD
+    const auto match_gamma_offset_v = Set(df, match_gamma_offset);
+    const auto quarter = Set(df, 0.25f);
+    for (; x + 1 + Lanes(df) < x1; x += Lanes(df)) {
+      const auto in = LoadU(df, row_in + x);
+      const auto in_r = LoadU(df, row_in + x + 1);
+      const auto in_l = LoadU(df, row_in + x - 1);
+      const auto in_t = LoadU(df, row_in2 + x);
+      const auto in_b = LoadU(df, row_in1 + x);
+      auto base = Mul(quarter, Add(Add(in_r, in_l), Add(in_t, in_b)));
+      auto gammacv =
+          RatioOfDerivativesOfCubicRootToSimpleGamma</*invert=*/false>(
+              df, Add(in, match_gamma_offset_v));
+      auto diff = Mul(gammacv, Sub(in, base));
+      diff = Mul(diff, diff);
+
+      const auto in_x = LoadU(df, row_x_in + x);
+      const auto in_x_r = LoadU(df, row_x_in + x + 1);
+      const auto in_x_l = LoadU(df, row_x_in + x - 1);
+      const auto in_x_t = LoadU(df, row_x_in2 + x);
+      const auto in_x_b = LoadU(df, row_x_in1 + x);
+      auto base_x = Mul(quarter, Add(Add(in_x_r, in_x_l), Add(in_x_t, in_x_b)));
+      auto diff_x = Mul(gammacv, Sub(in_x, base_x));
+      diff_x = Mul(diff_x, diff_x);
+      diff = MulAdd(kXMulv, diff_x, diff);
+      diff = MaskingSqrt(df, diff);
+      if ((y & 3) != 0) {
+        diff = Add(diff, LoadU(df, row_out + x - x0));
+      }
+      StoreU(diff, df, row_out + x - x0);
+    }
+    // Scalar
+    for (; x < x1; ++x) {
+      scalar_pixel(x);
+    }
+    if (y % 4 == 3) {
+      float* row_dout = pre_erosion->Row((y - y_start) / 4);
+      for (size_t x = 0; x < (x1 - x0) / 4; x++) {
+        row_dout[x] = (row_out[x * 4] + row_out[x * 4 + 1] +
+                       row_out[x * 4 + 2] + row_out[x * 4 + 3]) *
+                      0.25f;
+      }
     }
   }
-
-  void ComputeTile(float butteraugli_target, float scale, const Image3F& xyb,
-                   const Rect& rect, const int thread, ImageF* mask) {
-    const size_t xsize = xyb.xsize();
-    const size_t ysize = xyb.ysize();
-
-    // The XYB gamma is 3.0 to be able to decode faster with two muls.
-    // Butteraugli's gamma is matching the gamma of human eye, around 2.6.
-    // We approximate the gamma difference by adding one cubic root into
-    // the adaptive quantization. This gives us a total gamma of 2.6666
-    // for quantization uses.
-    const float match_gamma_offset = 0.019;
-
-    const HWY_FULL(float) df;
-    const float kXMul = 23.426802998210313f;
-    const auto kXMulv = Set(df, kXMul);
-
-    size_t y_start = rect.y0() * 8;
-    size_t y_end = y_start + rect.ysize() * 8;
-
-    size_t x0 = rect.x0() * 8;
-    size_t x1 = x0 + rect.xsize() * 8;
-    if (x0 != 0) x0 -= 4;
-    if (x1 != xyb.xsize()) x1 += 4;
-    if (y_start != 0) y_start -= 4;
-    if (y_end != xyb.ysize()) y_end += 4;
-    pre_erosion[thread].ShrinkTo((x1 - x0) / 4, (y_end - y_start) / 4);
-
-    // Computes image (padded to multiple of 8x8) of local pixel differences.
-    // Subsample both directions by 4.
-    for (size_t y = y_start; y < y_end; ++y) {
-      size_t y2 = y + 1 < ysize ? y + 1 : y;
-      size_t y1 = y > 0 ? y - 1 : y;
-
-      const float* row_in = xyb.PlaneRow(1, y);
-      const float* row_in1 = xyb.PlaneRow(1, y1);
-      const float* row_in2 = xyb.PlaneRow(1, y2);
-      const float* row_x_in = xyb.PlaneRow(0, y);
-      const float* row_x_in1 = xyb.PlaneRow(0, y1);
-      const float* row_x_in2 = xyb.PlaneRow(0, y2);
-      float* JXL_RESTRICT row_out = diff_buffer.Row(thread);
-
-      auto scalar_pixel = [&](size_t x) {
-        const size_t x2 = x + 1 < xsize ? x + 1 : x;
-        const size_t x1 = x > 0 ? x - 1 : x;
-        const float base =
-            0.25f * (row_in2[x] + row_in1[x] + row_in[x1] + row_in[x2]);
-        const float gammac = RatioOfDerivativesOfCubicRootToSimpleGamma(
-            row_in[x] + match_gamma_offset);
-        float diff = gammac * (row_in[x] - base);
-        diff *= diff;
-        const float base_x =
-            0.25f * (row_x_in2[x] + row_x_in1[x] + row_x_in[x1] + row_x_in[x2]);
-        float diff_x = gammac * (row_x_in[x] - base_x);
-        diff_x *= diff_x;
-        diff += kXMul * diff_x;
-        diff = MaskingSqrt(diff);
-        if ((y % 4) != 0) {
-          row_out[x - x0] += diff;
-        } else {
-          row_out[x - x0] = diff;
-        }
-      };
-
-      size_t x = x0;
-      // First pixel of the row.
-      if (x0 == 0) {
-        scalar_pixel(x0);
-        ++x;
-      }
-      // SIMD
-      const auto match_gamma_offset_v = Set(df, match_gamma_offset);
-      const auto quarter = Set(df, 0.25f);
-      for (; x + 1 + Lanes(df) < x1; x += Lanes(df)) {
-        const auto in = LoadU(df, row_in + x);
-        const auto in_r = LoadU(df, row_in + x + 1);
-        const auto in_l = LoadU(df, row_in + x - 1);
-        const auto in_t = LoadU(df, row_in2 + x);
-        const auto in_b = LoadU(df, row_in1 + x);
-        auto base = Mul(quarter, Add(Add(in_r, in_l), Add(in_t, in_b)));
-        auto gammacv =
-            RatioOfDerivativesOfCubicRootToSimpleGamma</*invert=*/false>(
-                df, Add(in, match_gamma_offset_v));
-        auto diff = Mul(gammacv, Sub(in, base));
-        diff = Mul(diff, diff);
-
-        const auto in_x = LoadU(df, row_x_in + x);
-        const auto in_x_r = LoadU(df, row_x_in + x + 1);
-        const auto in_x_l = LoadU(df, row_x_in + x - 1);
-        const auto in_x_t = LoadU(df, row_x_in2 + x);
-        const auto in_x_b = LoadU(df, row_x_in1 + x);
-        auto base_x =
-            Mul(quarter, Add(Add(in_x_r, in_x_l), Add(in_x_t, in_x_b)));
-        auto diff_x = Mul(gammacv, Sub(in_x, base_x));
-        diff_x = Mul(diff_x, diff_x);
-        diff = MulAdd(kXMulv, diff_x, diff);
-        diff = MaskingSqrt(df, diff);
-        if ((y & 3) != 0) {
-          diff = Add(diff, LoadU(df, row_out + x - x0));
-        }
-        StoreU(diff, df, row_out + x - x0);
-      }
-      // Scalar
-      for (; x < x1; ++x) {
-        scalar_pixel(x);
-      }
-      if (y % 4 == 3) {
-        float* row_dout = pre_erosion[thread].Row((y - y_start) / 4);
-        for (size_t x = 0; x < (x1 - x0) / 4; x++) {
-          row_dout[x] = (row_out[x * 4] + row_out[x * 4 + 1] +
-                         row_out[x * 4 + 2] + row_out[x * 4 + 3]) *
-                        0.25f;
-        }
-      }
+  Rect from_rect(x0 % 8 == 0 ? 0 : 1, y_start % 8 == 0 ? 0 : 1,
+                 rect.xsize() * 2, rect.ysize() * 2);
+  FuzzyErosion(from_rect, *pre_erosion, rect, aq_map);
+  for (size_t y = 0; y < rect.ysize(); ++y) {
+    const float* aq_map_row = rect.ConstRow(*aq_map, y);
+    float* mask_row = rect.Row(mask, y);
+    for (size_t x = 0; x < rect.xsize(); ++x) {
+      mask_row[x] = ComputeMaskForAcStrategyUse(aq_map_row[x]);
     }
-    Rect from_rect(x0 % 8 == 0 ? 0 : 1, y_start % 8 == 0 ? 0 : 1,
-                   rect.xsize() * 2, rect.ysize() * 2);
-    FuzzyErosion(from_rect, pre_erosion[thread], rect, &aq_map);
-    for (size_t y = 0; y < rect.ysize(); ++y) {
-      const float* aq_map_row = rect.ConstRow(aq_map, y);
-      float* mask_row = rect.Row(mask, y);
-      for (size_t x = 0; x < rect.xsize(); ++x) {
-        mask_row[x] = ComputeMaskForAcStrategyUse(aq_map_row[x]);
-      }
-    }
-    PerBlockModulations(butteraugli_target, xyb.Plane(0), xyb.Plane(1),
-                        xyb.Plane(2), scale, rect, &aq_map);
   }
+  PerBlockModulations(distance, xyb.Plane(0), xyb.Plane(1), xyb.Plane(2), scale,
+                      rect, aq_map);
+}
+
+ImageF AdaptiveQuantField(const Image3F& opsin, const float distance,
+                          ThreadPool* pool, ImageF* mask) {
+  const size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
+  const size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
+  const size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
+  const size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
+  static const float kAcQuant = 0.8294f;
+  const float scale = kAcQuant / distance;
+  ImageF aq_map(xsize_blocks, ysize_blocks);
   std::vector<ImageF> pre_erosion;
-  ImageF aq_map;
   ImageF diff_buffer;
-};
-
-ImageF AdaptiveQuantizationMap(const float butteraugli_target,
-                               const Image3F& xyb,
-                               const FrameDimensions& frame_dim, float scale,
-                               ThreadPool* pool, ImageF* mask) {
-  AdaptiveQuantizationImpl impl;
-  impl.Init(xyb);
-  *mask = ImageF(frame_dim.xsize_blocks, frame_dim.ysize_blocks);
+  *mask = ImageF(xsize_blocks, ysize_blocks);
   JXL_CHECK(RunOnPool(
-      pool, 0,
-      DivCeil(frame_dim.xsize_blocks, kColorTileDimInBlocks) *
-          DivCeil(frame_dim.ysize_blocks, kColorTileDimInBlocks),
+      pool, 0, xsize_tiles * ysize_tiles,
       [&](const size_t num_threads) {
-        impl.PrepareBuffers(num_threads);
+        diff_buffer = ImageF(kColorTileDim + 8, num_threads);
+        for (size_t i = pre_erosion.size(); i < num_threads; i++) {
+          pre_erosion.emplace_back(kColorTileDimInBlocks * 2 + 2,
+                                   kColorTileDimInBlocks * 2 + 2);
+        }
         return true;
       },
       [&](const uint32_t tid, const size_t thread) {
-        size_t n_enc_tiles =
-            DivCeil(frame_dim.xsize_blocks, kColorTileDimInBlocks);
-        size_t tx = tid % n_enc_tiles;
-        size_t ty = tid / n_enc_tiles;
+        size_t tx = tid % xsize_tiles;
+        size_t ty = tid / xsize_tiles;
         size_t by0 = ty * kColorTileDimInBlocks;
-        size_t by1 =
-            std::min((ty + 1) * kColorTileDimInBlocks, frame_dim.ysize_blocks);
+        size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks, ysize_blocks);
         size_t bx0 = tx * kColorTileDimInBlocks;
-        size_t bx1 =
-            std::min((tx + 1) * kColorTileDimInBlocks, frame_dim.xsize_blocks);
-        Rect r(bx0, by0, bx1 - bx0, by1 - by0);
-        impl.ComputeTile(butteraugli_target, scale, xyb, r, thread, mask);
+        size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
+        Rect rect(bx0, by0, bx1 - bx0, by1 - by0);
+        ComputeTile(opsin, rect, distance, scale, &pre_erosion[thread],
+                    diff_buffer.Row(thread), &aq_map, mask);
       },
       "AQ DiffPrecompute"));
 
-  return std::move(impl).aq_map;
+  return aq_map;
 }
 
 }  // namespace
@@ -602,63 +553,12 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace jxl {
-HWY_EXPORT(AdaptiveQuantizationMap);
+HWY_EXPORT(AdaptiveQuantField);
 
-namespace {
-
-constexpr float kDcQuantPow = 0.57f;
-static const float kDcQuant = 1.12f;
-static const float kAcQuant = 0.8294f;
-
-}  // namespace
-
-void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field) {
-  // Replace the whole quant_field in non-8x8 blocks with the maximum of each
-  // 8x8 block.
-  size_t stride = quant_field->PixelsPerRow();
-  for (size_t y = 0; y < quant_field->ysize(); ++y) {
-    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(y);
-    int* JXL_RESTRICT quant_row = quant_field->Row(y);
-    for (size_t x = 0; x < quant_field->xsize(); ++x) {
-      AcStrategy acs = ac_strategy_row[x];
-      if (!acs.IsFirstBlock()) continue;
-      JXL_ASSERT(x + acs.covered_blocks_x() <= quant_field->xsize());
-      JXL_ASSERT(y + acs.covered_blocks_y() <= quant_field->ysize());
-      int max = quant_row[x];
-      for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
-        for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
-          max = std::max(quant_row[x + ix + iy * stride], max);
-        }
-      }
-      for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
-        for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
-          quant_row[x + ix + iy * stride] = max;
-        }
-      }
-    }
-  }
-}
-
-float InitialQuantDC(float butteraugli_target) {
-  const float kDcMul = 2.9;  // Butteraugli target where non-linearity kicks in.
-  const float butteraugli_target_dc = std::max<float>(
-      0.5f * butteraugli_target,
-      std::min<float>(butteraugli_target,
-                      kDcMul * std::pow((1.0f / kDcMul) * butteraugli_target,
-                                        kDcQuantPow)));
-  // We want the maximum DC value to be at most 2**15 * kInvDCQuant / quant_dc.
-  // The maximum DC value might not be in the kXybRange because of inverse
-  // gaborish, so we add some slack to the maximum theoretical quant obtained
-  // this way (64).
-  return std::min(kDcQuant / butteraugli_target_dc, 50.f);
-}
-
-ImageF InitialQuantField(const float butteraugli_target, const Image3F& opsin,
-                         const FrameDimensions& frame_dim, ThreadPool* pool,
-                         float rescale, ImageF* mask) {
-  const float quant_ac = kAcQuant / butteraugli_target;
-  return HWY_DYNAMIC_DISPATCH(AdaptiveQuantizationMap)(
-      butteraugli_target, opsin, frame_dim, quant_ac * rescale, pool, mask);
+ImageF AdaptiveQuantField(const Image3F& opsin, const float distance,
+                          ThreadPool* pool, ImageF* masking) {
+  return HWY_DYNAMIC_DISPATCH(AdaptiveQuantField)(opsin, distance, pool,
+                                                  masking);
 }
 
 }  // namespace jxl

@@ -260,14 +260,12 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
                               const ColorCorrelationMap& cmap,
                               const ImageF& quant_field,
                               const ImageF& masking_field, ThreadPool* pool,
-                              DequantMatrices* matrices,
+                              const DequantMatrices& matrices,
                               AcStrategyImage* ac_strategy) {
   size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
   size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
   size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
   size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
-  uint32_t acs_mask = 0x30df;  // up to 16x16 DCT
-  JXL_CHECK(matrices->EnsureComputed(acs_mask));
   auto process_tile_acs = [&](const uint32_t tid, const size_t thread) {
     size_t tx = tid % xsize_tiles;
     size_t ty = tid / xsize_tiles;
@@ -304,7 +302,7 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
       for (size_t ix = 0; ix < rect.xsize(); ix++) {
         float entropy = 0.0;
         const uint8_t best_of_8x8s =
-            FindBest8x8Transform(opsin, bx0 + ix, by0 + iy, distance, *matrices,
+            FindBest8x8Transform(opsin, bx0 + ix, by0 + iy, distance, matrices,
                                  quant_field, masking_field, cmap_factors,
                                  ac_strategy, block, scratch_space, &entropy);
         ac_strategy->Set(bx0 + ix, by0 + iy,
@@ -326,7 +324,7 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
 
     for (size_t cy = 0; cy + 1 < rect.ysize(); cy += 2) {
       for (size_t cx = 0; cx + 1 < rect.xsize(); cx += 2) {
-        FindBest16x16Transform(opsin, bx0, by0, cx, cy, distance, *matrices,
+        FindBest16x16Transform(opsin, bx0, by0, cx, cy, distance, matrices,
                                quant_field, masking_field, cmap_factors,
                                ac_strategy, entropy_mul16X8, entropy_mul16X16,
                                entropy_estimate, block, scratch_space);
@@ -335,6 +333,33 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
   };
   return RunOnPool(pool, 0, xsize_tiles * ysize_tiles, ThreadPool::NoInit,
                    process_tile_acs, "Acs Heuristics");
+}
+
+void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field) {
+  // Replace the whole quant_field in non-8x8 blocks with the maximum of each
+  // 8x8 block.
+  size_t stride = quant_field->PixelsPerRow();
+  for (size_t y = 0; y < quant_field->ysize(); ++y) {
+    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(y);
+    int* JXL_RESTRICT quant_row = quant_field->Row(y);
+    for (size_t x = 0; x < quant_field->xsize(); ++x) {
+      AcStrategy acs = ac_strategy_row[x];
+      if (!acs.IsFirstBlock()) continue;
+      JXL_ASSERT(x + acs.covered_blocks_x() <= quant_field->xsize());
+      JXL_ASSERT(y + acs.covered_blocks_y() <= quant_field->ysize());
+      int max = quant_row[x];
+      for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
+        for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
+          max = std::max(quant_row[x + ix + iy * stride], max);
+        }
+      }
+      for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
+        for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
+          quant_row[x + ix + iy * stride] = max;
+        }
+      }
+    }
+  }
 }
 
 }  // namespace jxl

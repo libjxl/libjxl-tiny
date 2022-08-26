@@ -81,6 +81,17 @@ static_assert(kGroupDim % kBlockDim == 0,
               "Group dim should be divisible by block dim");
 constexpr size_t kGroupDimInBlocks = kGroupDim / kBlockDim;
 
+// Tile is the rectangular grid of blocks that share color correlation
+// parameters ("factor_x/b" such that residual_b = blue - Y * factor_b).
+static constexpr size_t kColorTileDim = 64;
+
+static_assert(kColorTileDim % kBlockDim == 0,
+              "Color tile dim should be divisible by block dim");
+static constexpr size_t kColorTileDimInBlocks = kColorTileDim / kBlockDim;
+
+static_assert(kGroupDimInBlocks % kColorTileDimInBlocks == 0,
+              "Group dim should be divisible by color tile dim");
+
 // Maximum number of passes in an image.
 constexpr size_t kMaxNumPasses = 11;
 

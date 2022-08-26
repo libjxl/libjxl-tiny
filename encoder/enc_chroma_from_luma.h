@@ -10,27 +10,13 @@
 // Chroma-from-luma, computed using heuristics to determine the best linear
 // model for the X and B channels from the Y channel.
 
-#include <stddef.h>
-#include <stdint.h>
-
-#include <vector>
-
-#include "encoder/base/compiler_specific.h"
 #include "encoder/base/data_parallel.h"
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
-#include "encoder/common.h"
-#include "encoder/enc_ans.h"
-#include "encoder/enc_bit_writer.h"
-#include "encoder/entropy_coder.h"
 #include "encoder/image.h"
-#include "encoder/opsin_params.h"
 #include "encoder/quant_weights.h"
-#include "encoder/quantizer.h"
 
 namespace jxl {
-
-void ColorCorrelationMapEncodeDC(ColorCorrelationMap* map, BitWriter* writer);
 
 Status ComputeColorCorrelationMap(const Image3F& opsin,
                                   const DequantMatrices& dequant,

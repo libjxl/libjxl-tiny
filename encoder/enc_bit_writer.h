@@ -125,8 +125,6 @@ struct BitWriter {
   Allotment* current_allotment_ = nullptr;
 };
 
-bool WriteFloat16(float value, BitWriter* JXL_RESTRICT writer);
-
 }  // namespace jxl
 
 #endif  // LIB_JXL_ENC_BIT_WRITER_H_

@@ -31,7 +31,6 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   quantizer.cc
   gaborish.cc
   convolve_symmetric5.cc
-  chroma_from_luma.cc
   cmdline.cc
   file_io.cc
   dct_scales.cc
