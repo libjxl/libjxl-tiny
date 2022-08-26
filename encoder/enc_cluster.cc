@@ -143,12 +143,6 @@ HWY_AFTER_NAMESPACE();
 #if HWY_ONCE
 namespace jxl {
 HWY_EXPORT(FastClusterHistograms);  // Local function
-HWY_EXPORT(HistogramEntropy);       // Local function
-
-float Histogram::ShannonEntropy() const {
-  HWY_DYNAMIC_DISPATCH(HistogramEntropy)(*this);
-  return entropy_;
-}
 
 namespace {
 // -----------------------------------------------------------------------------
@@ -156,12 +150,13 @@ namespace {
 
 // Reorder histograms in *out so that the new symbols in *symbols come in
 // increasing order.
-void HistogramReindex(std::vector<Histogram>* out,
-                      std::vector<uint32_t>* symbols) {
+void HistogramReindex(const std::vector<uint32_t>& symbols,
+                      std::vector<Histogram>* out,
+                      std::vector<uint8_t>* context_map) {
   std::vector<Histogram> tmp(*out);
   std::map<int, int> new_index;
   int next_index = 0;
-  for (uint32_t symbol : *symbols) {
+  for (uint32_t symbol : symbols) {
     if (new_index.find(symbol) == new_index.end()) {
       new_index[symbol] = next_index;
       (*out)[next_index] = tmp[symbol];
@@ -169,26 +164,27 @@ void HistogramReindex(std::vector<Histogram>* out,
     }
   }
   out->resize(next_index);
-  for (uint32_t& symbol : *symbols) {
-    symbol = new_index[symbol];
+  context_map->resize(symbols.size());
+  for (size_t i = 0; i < symbols.size(); ++i) {
+    (*context_map)[i] = static_cast<uint8_t>(new_index[symbols[i]]);
   }
 }
 
 }  // namespace
 
-// Clusters similar histograms in 'in' together, the selected histograms are
-// placed in 'out', and for each index in 'in', *histogram_symbols will
-// indicate which of the 'out' histograms is the best approximation.
-void ClusterHistograms(const std::vector<Histogram>& in, size_t max_histograms,
-                       std::vector<Histogram>* out,
-                       std::vector<uint32_t>* histogram_symbols) {
-  max_histograms = std::min(max_histograms, in.size());
+void ClusterHistograms(std::vector<Histogram>* histograms,
+                       std::vector<uint8_t>* context_map) {
+  if (histograms->size() <= 1) return;
+  static const size_t kClustersLimit = 128;
+  size_t max_histograms = std::min(kClustersLimit, histograms->size());
 
+  std::vector<Histogram> in(*histograms);
+  std::vector<uint32_t> histogram_symbols;
   HWY_DYNAMIC_DISPATCH(FastClusterHistograms)
-  (in, max_histograms, out, histogram_symbols);
+  (in, max_histograms, histograms, &histogram_symbols);
 
   // Convert the context map to a canonical form.
-  HistogramReindex(out, histogram_symbols);
+  HistogramReindex(histogram_symbols, histograms, context_map);
 }
 
 }  // namespace jxl

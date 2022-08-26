@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "encoder/ac_strategy.h"
-#include "encoder/ans_params.h"
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/data_parallel.h"
@@ -35,6 +34,7 @@
 #include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_chroma_from_luma.h"
+#include "encoder/enc_cluster.h"
 #include "encoder/enc_coeff_order.h"
 #include "encoder/enc_entropy_coder.h"
 #include "encoder/enc_group.h"
@@ -81,40 +81,6 @@ float QuantDC(float distance) {
   float effective_dist = kDcMul * std::pow(distance / kDcMul, kDcQuantPow);
   effective_dist = Clamp1(effective_dist, 0.5f * distance, distance);
   return std::min(kDcQuant / effective_dist, 50.f);
-}
-
-void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
-                      BitWriter* writer) {
-  BitWriter::Allotment allotment(writer, 1024);
-  writer->Write(1, 0);    // not all default
-  writer->Write(2, 0);    // regular frame
-  writer->Write(1, 0);    // vardct
-  writer->Write(2, 2);    // flags selector bits (17 .. 272)
-  writer->Write(8, 111);  // skip adaptive dc flag (128)
-  writer->Write(2, 0);    // no upsampling
-  writer->Write(3, x_qm_scale);
-  writer->Write(3, 2);  // b_qm_scale
-  writer->Write(2, 0);  // one pass
-  writer->Write(1, 0);  // no custom frame size or origin
-  writer->Write(2, 0);  // replace blend mode
-  writer->Write(1, 1);  // last frame
-  writer->Write(2, 0);  // no name
-  if (epf_iters == 2) {
-    writer->Write(1, 1);  // default loop filter
-  } else {
-    writer->Write(1, 0);  // not default loop filter
-    writer->Write(1, 1);  // gaborish on
-    writer->Write(1, 0);  // default gaborish
-    writer->Write(2, epf_iters);
-    if (epf_iters > 0) {
-      writer->Write(1, 0);  // default epf sharpness
-      writer->Write(1, 0);  // default epf weights
-      writer->Write(1, 0);  // default epf sigma
-    }
-    writer->Write(2, 0);  // no loop filter extensions
-  }
-  writer->Write(2, 0);  // no frame header extensions
-  allotment.Reclaim(writer);
 }
 
 // Clamps gradient to the min/max of n, w (and l, implicitly).
@@ -245,6 +211,75 @@ static constexpr int64_t kGradRangeMin = 0;
 static constexpr int64_t kGradRangeMid = 512;
 static constexpr int64_t kGradRangeMax = 1023;
 static constexpr size_t kNumDCContexts = 45;
+
+void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
+                      BitWriter* writer) {
+  BitWriter::Allotment allotment(writer, 1024);
+  writer->Write(1, 0);    // not all default
+  writer->Write(2, 0);    // regular frame
+  writer->Write(1, 0);    // vardct
+  writer->Write(2, 2);    // flags selector bits (17 .. 272)
+  writer->Write(8, 111);  // skip adaptive dc flag (128)
+  writer->Write(2, 0);    // no upsampling
+  writer->Write(3, x_qm_scale);
+  writer->Write(3, 2);  // b_qm_scale
+  writer->Write(2, 0);  // one pass
+  writer->Write(1, 0);  // no custom frame size or origin
+  writer->Write(2, 0);  // replace blend mode
+  writer->Write(1, 1);  // last frame
+  writer->Write(2, 0);  // no name
+  if (epf_iters == 2) {
+    writer->Write(1, 1);  // default loop filter
+  } else {
+    writer->Write(1, 0);  // not default loop filter
+    writer->Write(1, 1);  // gaborish on
+    writer->Write(1, 0);  // default gaborish
+    writer->Write(2, epf_iters);
+    if (epf_iters > 0) {
+      writer->Write(1, 0);  // default epf sharpness
+      writer->Write(1, 0);  // default epf weights
+      writer->Write(1, 0);  // default epf sigma
+    }
+    writer->Write(2, 0);  // no loop filter extensions
+  }
+  writer->Write(2, 0);  // no frame header extensions
+  allotment.Reclaim(writer);
+}
+
+void WriteContextMap(const std::vector<uint8_t>& context_map,
+                     BitWriter* writer) {
+  if (context_map.empty()) {
+    return;
+  }
+  if (*std::max_element(context_map.begin(), context_map.end()) == 0) {
+    writer->AllocateAndWrite(3, 1);  // simple code, 0 bits per entry
+    return;
+  }
+  writer->AllocateAndWrite(3, 0);  // no simple code, no MTF, no LZ77
+  std::vector<Token> tokens;
+  for (size_t i = 0; i < context_map.size(); i++) {
+    tokens.emplace_back(0, context_map[i]);
+  }
+  EntropyEncodingData codes;
+  std::vector<uint8_t> dummy_context_map(1);
+  WriteHistograms(BuildHistograms(1, tokens), &codes, writer);
+  WriteTokens(tokens, codes, dummy_context_map, writer);
+}
+
+void WriteContextTree(size_t num_dc_groups, BitWriter* writer) {
+  std::vector<Token> tokens(kContextTreeTokens,
+                            kContextTreeTokens + kNumContextTreeTokens);
+  tokens[1].value = PackSigned(1 + num_dc_groups);
+  EntropyEncodingData codes;
+  std::vector<uint8_t> context_map;
+  auto histograms = BuildHistograms(kNumTreeContexts, tokens);
+  ClusterHistograms(&histograms, &context_map);
+  writer->AllocateAndWrite(1, 1);  // not an empty tree
+  writer->AllocateAndWrite(1, 0);  // no lz77
+  WriteContextMap(context_map, writer);
+  WriteHistograms(histograms, &codes, writer);
+  WriteTokens(tokens, codes, context_map, writer);
+}
 
 }  // namespace
 
@@ -431,7 +466,6 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                                 "Compute AC Metadata tokens"));
 
   // Write DC global and compute DC and control fields histograms.
-  HistogramBuilder dc_builder(kNumDCContexts);
   EntropyEncodingData dc_code;
   std::vector<uint8_t> dc_context_map;
   {
@@ -452,16 +486,15 @@ Status EncodeFrame(const float distance, const Image3F& linear,
       group_writer->Write(8, ytox_dc + 128);
       group_writer->Write(8, ytob_dc + 128);
     }
-    group_writer->Write(1, 1);  // not an empty tree
     allotment.Reclaim(group_writer);
-    std::vector<Token> tree_tokens(kContextTreeTokens,
-                                   kContextTreeTokens + kNumContextTreeTokens);
-    tree_tokens[1].value = PackSigned(1 + num_dc_groups);
-    WriteHistogramsAndTokens(kNumTreeContexts, tree_tokens, group_writer);
-    for (const auto& t : dc_tokens) dc_builder.AddTokens(t);
-    for (const auto& t : ac_meta_tokens) dc_builder.AddTokens(t);
-    dc_builder.BuildAndStoreEntropyCodes(&dc_code, &dc_context_map,
-                                         group_writer);
+    WriteContextTree(num_dc_groups, group_writer);
+    HistogramBuilder builder(kNumDCContexts);
+    builder.Add(dc_tokens);
+    builder.Add(ac_meta_tokens);
+    group_writer->AllocateAndWrite(1, 0);  // no lz77
+    ClusterHistograms(&builder.histograms, &dc_context_map);
+    WriteContextMap(dc_context_map, group_writer);
+    WriteHistograms(builder.histograms, &dc_code, group_writer);
   }
 
   // Write DC groups and control fields.
@@ -529,8 +562,11 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     group_writer->Write(2, 3);
     group_writer->Write(13, 0);  // all default coeff order
     allotment.Reclaim(group_writer);
-    BuildAndEncodeHistograms(kNumACContexts, ac_tokens, &codes, &context_map,
-                             group_writer);
+    auto histograms = BuildHistograms(kNumACContexts, ac_tokens);
+    group_writer->AllocateAndWrite(1, 0);  // no lz77
+    ClusterHistograms(&histograms, &context_map);
+    WriteContextMap(context_map, group_writer);
+    WriteHistograms(histograms, &codes, group_writer);
   }
 
   // Write AC groups.

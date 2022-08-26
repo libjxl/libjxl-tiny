@@ -11,18 +11,15 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include <vector>
 
-#include "encoder/ans_params.h"
-#include "encoder/enc_ans.h"
+#include "encoder/histogram.h"
 
 namespace jxl {
 
-void ClusterHistograms(const std::vector<Histogram>& in, size_t max_histograms,
-                       std::vector<Histogram>* out,
-                       std::vector<uint32_t>* histogram_symbols);
+void ClusterHistograms(std::vector<Histogram>* histograms,
+                       std::vector<uint8_t>* context_map);
 }  // namespace jxl
 
 #endif  // ENCODER_ENC_CLUSTER_H_

@@ -25,7 +25,6 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   read_pfm.cc
   quant_weights.cc
   base/data_parallel.cc
-  ans_common.cc
   quantizer.cc
   gaborish.cc
   convolve_symmetric5.cc

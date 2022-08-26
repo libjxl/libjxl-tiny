@@ -108,6 +108,12 @@ struct BitWriter {
   // The function can write up to 56 bits in one go.
   void Write(size_t n_bits, uint64_t bits);
 
+  void AllocateAndWrite(size_t n_bits, uint64_t bits) {
+    Allotment allotment(this, n_bits);
+    Write(n_bits, bits);
+    allotment.Reclaim(this);
+  }
+
   // This should only rarely be used - e.g. when the current location will be
   // referenced via byte offset (TOCs point to groups), or byte-aligned reading
   // is required for speed.

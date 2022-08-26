@@ -19,8 +19,8 @@
 
 #include "encoder/ac_context.h"
 #include "encoder/ac_strategy.h"
-#include "encoder/enc_ans.h"
 #include "encoder/image.h"
+#include "encoder/token.h"
 
 // Entropy coding and context modeling of DC and AC coefficients, as well as AC
 // strategy and quantization field.
