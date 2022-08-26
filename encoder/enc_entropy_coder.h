@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "encoder/ac_context.h"  // BlockCtxMap
+#include "encoder/ac_context.h"
 #include "encoder/ac_strategy.h"
 #include "encoder/enc_ans.h"
 #include "encoder/image.h"

@@ -20,7 +20,6 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "encoder/ac_context.h"
 #include "encoder/fast_math-inl.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {

@@ -260,8 +260,6 @@ class DequantMatrices {
     DCT2X2,
     DCT4X4,
     DCT16X16,
-    DCT32X32,
-    // DCT16X8
     DCT8X16,
     DCT4X8,
     kNum
@@ -269,7 +267,7 @@ class DequantMatrices {
 
   static constexpr QuantTable kQuantTable[] = {
       QuantTable::DCT,     QuantTable::IDENTITY, QuantTable::DCT2X2,
-      QuantTable::DCT4X4,  QuantTable::DCT16X16, QuantTable::DCT32X32,
+      QuantTable::DCT4X4,  QuantTable::DCT16X16, QuantTable::DCT,
       QuantTable::DCT8X16, QuantTable::DCT8X16,  QuantTable::DCT,
       QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
       QuantTable::DCT4X8,  QuantTable::DCT4X8,   QuantTable::DCT,
@@ -312,18 +310,18 @@ class DequantMatrices {
 
   JXL_INLINE float InvDCQuant(size_t c) const { return inv_dc_quant_[c]; }
 
-  static constexpr size_t required_size_x[] = {1, 1, 1, 1, 2, 4, 1, 1};
+  static constexpr size_t required_size_x[] = {1, 1, 1, 1, 2, 1, 1};
   static_assert(kNum == sizeof(required_size_x) / sizeof(*required_size_x),
                 "Update this array when adding or removing quant tables.");
 
-  static constexpr size_t required_size_y[] = {1, 1, 1, 1, 2, 4, 2, 1};
+  static constexpr size_t required_size_y[] = {1, 1, 1, 1, 2, 2, 1};
   static_assert(kNum == sizeof(required_size_y) / sizeof(*required_size_y),
                 "Update this array when adding or removing quant tables.");
 
   Status EnsureComputed(uint32_t acs_mask);
 
  private:
-  static constexpr size_t required_size_[] = {1, 1, 1, 1, 4, 16, 2, 1};
+  static constexpr size_t required_size_[] = {1, 1, 1, 1, 4, 2, 1};
   static_assert(kNum == sizeof(required_size_) / sizeof(*required_size_),
                 "Update this array when adding or removing quant tables.");
   static constexpr size_t kTotalTableSize =

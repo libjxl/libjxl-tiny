@@ -8,13 +8,10 @@
 #define ENCODER_ENC_GROUP_H_
 
 #include <stddef.h>
-#include <stdint.h>
 
 #include "encoder/ac_strategy.h"
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
-#include "encoder/dct_util.h"
-#include "encoder/enc_bit_writer.h"
 #include "encoder/image.h"
 #include "encoder/quantizer.h"
 
