@@ -25,8 +25,6 @@
 #include "encoder/base/padded_bytes.h"
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
-#include "encoder/coeff_order.h"
-#include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
 #include "encoder/dct_util.h"
 #include "encoder/enc_ac_strategy.h"
@@ -35,7 +33,6 @@
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_chroma_from_luma.h"
 #include "encoder/enc_cluster.h"
-#include "encoder/enc_coeff_order.h"
 #include "encoder/enc_entropy_coder.h"
 #include "encoder/enc_group.h"
 #include "encoder/enc_xyb.h"
@@ -482,7 +479,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
       AcStrategyRow row_acs = ac_strategy.ConstRow(r, y);
       for (size_t x = 0; x < r.xsize(); x++) {
         if (!row_acs[x].IsFirstBlock()) continue;
-        int32_t cur = row_acs[x].RawStrategy();
+        int32_t cur = row_acs[x].StrategyCode();
         uint32_t ctx_id = (left > 11 ? 7 : left > 5 ? 8 : left > 3 ? 9 : 10);
         Token token(ctx_id, PackSigned(cur));
         ac_meta_tokens[group_index].push_back(token);
@@ -492,7 +489,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     }
     num_ac_blocks[group_index] = num;
     // Quant field tokens.
-    left = ac_strategy.ConstRow(r, 0)[0].RawStrategy();
+    left = ac_strategy.ConstRow(r, 0)[0].StrategyCode();
     for (size_t y = 0; y < r.ysize(); y++) {
       AcStrategyRow row_acs = ac_strategy.ConstRow(r, y);
       const int32_t* row_qf = r.ConstRow(raw_quant_field, y);
@@ -571,10 +568,6 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_dc_groups, ThreadPool::NoInit,
                                 process_dc_group, "EncodeDCGroup"));
 
-  // Compute AC coefficient orders.
-  std::vector<coeff_order_t> coeff_orders(kCoeffOrderMaxSize);
-  ComputeCoeffOrder(kAcStrategyMask, &coeff_orders[0]);
-
   // Compute AC tokens.
   std::vector<std::vector<Token>> ac_tokens(num_groups);
   std::vector<Image3I> num_nzeroes;
@@ -594,8 +587,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
         ac_coeffs.PlaneRow(1, group_index, 0).ptr32,
         ac_coeffs.PlaneRow(2, group_index, 0).ptr32,
     };
-    TokenizeCoefficients(&coeff_orders[0], r, ac_rows, ac_strategy,
-                         &num_nzeroes[thread], &ac_tokens[group_index]);
+    TokenizeCoefficients(r, ac_rows, ac_strategy, &num_nzeroes[thread],
+                         &ac_tokens[group_index]);
   };
   JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, num_groups, tokenize_group_init,
                                 tokenize_group, "TokenizeGroup"));

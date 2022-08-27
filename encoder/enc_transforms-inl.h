@@ -16,7 +16,6 @@
 #include <hwy/highway.h>
 
 #include "encoder/ac_strategy.h"
-#include "encoder/coeff_order_fwd.h"
 #include "encoder/dct_scales.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -600,39 +599,6 @@ HWY_INLINE void ReinterpretingIDCT(const float* input,
                                   scratch_space);
 }
 
-template <size_t S>
-void DCT2TopBlock(const float* block, size_t stride, float* out) {
-  static_assert(kBlockDim % S == 0, "S should be a divisor of kBlockDim");
-  static_assert(S % 2 == 0, "S should be even");
-  float temp[kDCTBlockSize];
-  constexpr size_t num_2x2 = S / 2;
-  for (size_t y = 0; y < num_2x2; y++) {
-    for (size_t x = 0; x < num_2x2; x++) {
-      float c00 = block[y * 2 * stride + x * 2];
-      float c01 = block[y * 2 * stride + x * 2 + 1];
-      float c10 = block[(y * 2 + 1) * stride + x * 2];
-      float c11 = block[(y * 2 + 1) * stride + x * 2 + 1];
-      float r00 = c00 + c01 + c10 + c11;
-      float r01 = c00 + c01 - c10 - c11;
-      float r10 = c00 - c01 + c10 - c11;
-      float r11 = c00 - c01 - c10 + c11;
-      r00 *= 0.25f;
-      r01 *= 0.25f;
-      r10 *= 0.25f;
-      r11 *= 0.25f;
-      temp[y * kBlockDim + x] = r00;
-      temp[y * kBlockDim + num_2x2 + x] = r01;
-      temp[(y + num_2x2) * kBlockDim + x] = r10;
-      temp[(y + num_2x2) * kBlockDim + num_2x2 + x] = r11;
-    }
-  }
-  for (size_t y = 0; y < S; y++) {
-    for (size_t x = 0; x < S; x++) {
-      out[y * kBlockDim + x] = temp[y * kBlockDim + x];
-    }
-  }
-}
-
 HWY_MAYBE_UNUSED void TransformFromPixels(const AcStrategy::Type strategy,
                                           const float* JXL_RESTRICT pixels,
                                           size_t pixels_stride,
@@ -640,109 +606,6 @@ HWY_MAYBE_UNUSED void TransformFromPixels(const AcStrategy::Type strategy,
                                           float* JXL_RESTRICT scratch_space) {
   using Type = AcStrategy::Type;
   switch (strategy) {
-    case Type::IDENTITY: {
-      for (size_t y = 0; y < 2; y++) {
-        for (size_t x = 0; x < 2; x++) {
-          float block_dc = 0;
-          for (size_t iy = 0; iy < 4; iy++) {
-            for (size_t ix = 0; ix < 4; ix++) {
-              block_dc += pixels[(y * 4 + iy) * pixels_stride + x * 4 + ix];
-            }
-          }
-          block_dc *= 1.0f / 16;
-          for (size_t iy = 0; iy < 4; iy++) {
-            for (size_t ix = 0; ix < 4; ix++) {
-              if (ix == 1 && iy == 1) continue;
-              coefficients[(y + iy * 2) * 8 + x + ix * 2] =
-                  pixels[(y * 4 + iy) * pixels_stride + x * 4 + ix] -
-                  pixels[(y * 4 + 1) * pixels_stride + x * 4 + 1];
-            }
-          }
-          coefficients[(y + 2) * 8 + x + 2] = coefficients[y * 8 + x];
-          coefficients[y * 8 + x] = block_dc;
-        }
-      }
-      float block00 = coefficients[0];
-      float block01 = coefficients[1];
-      float block10 = coefficients[8];
-      float block11 = coefficients[9];
-      coefficients[0] = (block00 + block01 + block10 + block11) * 0.25f;
-      coefficients[1] = (block00 + block01 - block10 - block11) * 0.25f;
-      coefficients[8] = (block00 - block01 + block10 - block11) * 0.25f;
-      coefficients[9] = (block00 - block01 - block10 + block11) * 0.25f;
-      break;
-    }
-    case Type::DCT8X4: {
-      for (size_t x = 0; x < 2; x++) {
-        HWY_ALIGN float block[4 * 8];
-        ComputeScaledDCT<8, 4>()(DCTFrom(pixels + x * 4, pixels_stride), block,
-                                 scratch_space);
-        for (size_t iy = 0; iy < 4; iy++) {
-          for (size_t ix = 0; ix < 8; ix++) {
-            // Store transposed.
-            coefficients[(x + iy * 2) * 8 + ix] = block[iy * 8 + ix];
-          }
-        }
-      }
-      float block0 = coefficients[0];
-      float block1 = coefficients[8];
-      coefficients[0] = (block0 + block1) * 0.5f;
-      coefficients[8] = (block0 - block1) * 0.5f;
-      break;
-    }
-    case Type::DCT4X8: {
-      for (size_t y = 0; y < 2; y++) {
-        HWY_ALIGN float block[4 * 8];
-        ComputeScaledDCT<4, 8>()(
-            DCTFrom(pixels + y * 4 * pixels_stride, pixels_stride), block,
-            scratch_space);
-        for (size_t iy = 0; iy < 4; iy++) {
-          for (size_t ix = 0; ix < 8; ix++) {
-            coefficients[(y + iy * 2) * 8 + ix] = block[iy * 8 + ix];
-          }
-        }
-      }
-      float block0 = coefficients[0];
-      float block1 = coefficients[8];
-      coefficients[0] = (block0 + block1) * 0.5f;
-      coefficients[8] = (block0 - block1) * 0.5f;
-      break;
-    }
-    case Type::DCT4X4: {
-      for (size_t y = 0; y < 2; y++) {
-        for (size_t x = 0; x < 2; x++) {
-          HWY_ALIGN float block[4 * 4];
-          ComputeScaledDCT<4, 4>()(
-              DCTFrom(pixels + y * 4 * pixels_stride + x * 4, pixels_stride),
-              block, scratch_space);
-          for (size_t iy = 0; iy < 4; iy++) {
-            for (size_t ix = 0; ix < 4; ix++) {
-              coefficients[(y + iy * 2) * 8 + x + ix * 2] = block[iy * 4 + ix];
-            }
-          }
-        }
-      }
-      float block00 = coefficients[0];
-      float block01 = coefficients[1];
-      float block10 = coefficients[8];
-      float block11 = coefficients[9];
-      coefficients[0] = (block00 + block01 + block10 + block11) * 0.25f;
-      coefficients[1] = (block00 + block01 - block10 - block11) * 0.25f;
-      coefficients[8] = (block00 - block01 + block10 - block11) * 0.25f;
-      coefficients[9] = (block00 - block01 - block10 + block11) * 0.25f;
-      break;
-    }
-    case Type::DCT2X2: {
-      DCT2TopBlock<8>(pixels, pixels_stride, coefficients);
-      DCT2TopBlock<4>(coefficients, kBlockDim, coefficients);
-      DCT2TopBlock<2>(coefficients, kBlockDim, coefficients);
-      break;
-    }
-    case Type::DCT16X16: {
-      ComputeScaledDCT<16, 16>()(DCTFrom(pixels, pixels_stride), coefficients,
-                                 scratch_space);
-      break;
-    }
     case Type::DCT16X8: {
       ComputeScaledDCT<16, 8>()(DCTFrom(pixels, pixels_stride), coefficients,
                                 scratch_space);
@@ -758,24 +621,6 @@ HWY_MAYBE_UNUSED void TransformFromPixels(const AcStrategy::Type strategy,
                                scratch_space);
       break;
     }
-    case Type::AFV0:
-    case Type::AFV1:
-    case Type::AFV2:
-    case Type::AFV3:
-    case Type::DCT32X8:
-    case Type::DCT8X32:
-    case Type::DCT32X16:
-    case Type::DCT16X32:
-    case Type::DCT32X32:
-    case Type::DCT64X32:
-    case Type::DCT32X64:
-    case Type::DCT64X64:
-    case Type::DCT64X128:
-    case Type::DCT128X64:
-    case Type::DCT128X128:
-    case Type::DCT256X128:
-    case Type::DCT128X256:
-    case Type::DCT256X256:
     case Type::kNumValidStrategies:
       JXL_ABORT("Invalid strategy");
   }
@@ -798,38 +643,7 @@ HWY_MAYBE_UNUSED void DCFromLowestFrequencies(const AcStrategy::Type strategy,
                          /*COLS=*/2>(block, 2 * kBlockDim, dc, dc_stride);
       break;
     }
-    case Type::DCT16X16: {
-      ReinterpretingIDCT<
-          /*DCT_ROWS=*/2 * kBlockDim, /*DCT_COLS=*/2 * kBlockDim,
-          /*LF_ROWS=*/2, /*LF_COLS=*/2, /*ROWS=*/2, /*COLS=*/2>(
-          block, 2 * kBlockDim, dc, dc_stride);
-      break;
-    }
-    case Type::DCT32X8:
-    case Type::DCT8X32:
-    case Type::DCT32X16:
-    case Type::DCT16X32:
-    case Type::DCT32X32:
-    case Type::DCT64X32:
-    case Type::DCT32X64:
-    case Type::DCT64X64:
-    case Type::DCT64X128:
-    case Type::DCT128X64:
-    case Type::DCT128X128:
-    case Type::DCT256X128:
-    case Type::DCT128X256:
-    case Type::DCT256X256:
-      break;
     case Type::DCT:
-    case Type::DCT2X2:
-    case Type::DCT4X4:
-    case Type::DCT4X8:
-    case Type::DCT8X4:
-    case Type::AFV0:
-    case Type::AFV1:
-    case Type::AFV2:
-    case Type::AFV3:
-    case Type::IDENTITY:
       dc[0] = block[0];
       break;
     case Type::kNumValidStrategies:

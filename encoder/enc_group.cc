@@ -242,7 +242,7 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
           size_t xblocks = acs.covered_blocks_x();
           size_t yblocks = acs.covered_blocks_y();
 
-          CoefficientLayout(&yblocks, &xblocks);
+          if (yblocks > xblocks) std::swap(xblocks, yblocks);
 
           size_t size = kDCTBlockSize * xblocks * yblocks;
 

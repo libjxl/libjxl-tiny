@@ -13,7 +13,6 @@
 #include <hwy/base.h>  // kMaxVectorSize
 
 #include "encoder/base/status.h"
-#include "encoder/coeff_order_fwd.h"
 #include "encoder/common.h"
 #include "encoder/image_ops.h"
 
@@ -43,47 +42,8 @@ class AcStrategy {
   enum Type : uint32_t {
     // Regular block size DCT
     DCT = 0,
-    // Encode pixels without transforming
-    IDENTITY = 1,
-    // Use 2-by-2 DCT
-    DCT2X2 = 2,
-    // Use 4-by-4 DCT
-    DCT4X4 = 3,
-    // Use 16-by-16 DCT
-    DCT16X16 = 4,
-    // Use 32-by-32 DCT
-    DCT32X32 = 5,
-    // Use 16-by-8 DCT
-    DCT16X8 = 6,
-    // Use 8-by-16 DCT
-    DCT8X16 = 7,
-    // Use 32-by-8 DCT
-    DCT32X8 = 8,
-    // Use 8-by-32 DCT
-    DCT8X32 = 9,
-    // Use 32-by-16 DCT
-    DCT32X16 = 10,
-    // Use 16-by-32 DCT
-    DCT16X32 = 11,
-    // 4x8 and 8x4 DCT
-    DCT4X8 = 12,
-    DCT8X4 = 13,
-    // Corner-DCT.
-    AFV0 = 14,
-    AFV1 = 15,
-    AFV2 = 16,
-    AFV3 = 17,
-    // Larger DCTs
-    DCT64X64 = 18,
-    DCT64X32 = 19,
-    DCT32X64 = 20,
-    DCT128X128 = 21,
-    DCT128X64 = 22,
-    DCT64X128 = 23,
-    DCT256X256 = 24,
-    DCT256X128 = 25,
-    DCT128X256 = 26,
-    // Marker for num of valid strategies.
+    DCT16X8 = 1,
+    DCT8X16 = 2,
     kNumValidStrategies
   };
 
@@ -95,23 +55,14 @@ class AcStrategy {
   // possibly multi-block strategy.
   JXL_INLINE bool IsFirstBlock() const { return is_first_; }
 
-  JXL_INLINE bool IsMultiblock() const {
-    constexpr uint32_t bits =
-        TypeBit(Type::DCT16X16) | TypeBit(Type::DCT32X32) |
-        TypeBit(Type::DCT16X8) | TypeBit(Type::DCT8X16) |
-        TypeBit(Type::DCT32X8) | TypeBit(Type::DCT8X32) |
-        TypeBit(Type::DCT16X32) | TypeBit(Type::DCT32X16) |
-        TypeBit(Type::DCT32X64) | TypeBit(Type::DCT64X32) |
-        TypeBit(Type::DCT64X64) | TypeBit(DCT64X128) | TypeBit(DCT128X64) |
-        TypeBit(DCT128X128) | TypeBit(DCT128X256) | TypeBit(DCT256X128) |
-        TypeBit(DCT256X256);
-    JXL_DASSERT(Strategy() < kNumValidStrategies);
-    return ((1u << static_cast<uint32_t>(Strategy())) & bits) != 0;
-  }
-
   // Returns the raw strategy value. Should only be used for tokenization.
   JXL_INLINE uint8_t RawStrategy() const {
     return static_cast<uint8_t>(strategy_);
+  }
+
+  JXL_INLINE uint8_t StrategyCode() const {
+    constexpr uint8_t kLut[] = {0, 6, 7};
+    return kLut[RawStrategy()];
   }
 
   JXL_INLINE Type Strategy() const { return strategy_; }
@@ -129,38 +80,24 @@ class AcStrategy {
     return AcStrategy(raw_strategy, /*is_first=*/true);
   }
 
-  // "Natural order" means the order of increasing of "anisotropic" frequency of
-  // continuous version of DCT basis.
-  // Round-trip, for any given strategy s:
-  //  X = NaturalCoeffOrder(s)[NaturalCoeffOrderLutN(s)[X]]
-  //  X = NaturalCoeffOrderLut(s)[NaturalCoeffOrderN(s)[X]]
-  void ComputeNaturalCoeffOrder(coeff_order_t* order) const;
-  void ComputeNaturalCoeffOrderLut(coeff_order_t* lut) const;
-
   // Number of 8x8 blocks that this strategy will cover. 0 for non-top-left
   // blocks inside a multi-block transform.
   JXL_INLINE size_t covered_blocks_x() const {
-    static constexpr uint8_t kLut[] = {1, 1, 1, 1,  2, 4,  1,  2,  1,
-                                       4, 2, 4, 1,  1, 1,  1,  1,  1,
-                                       8, 4, 8, 16, 8, 16, 32, 16, 32};
+    static constexpr uint8_t kLut[] = {1, 1, 2};
     static_assert(sizeof(kLut) / sizeof(*kLut) == kNumValidStrategies,
                   "Update LUT");
     return kLut[size_t(strategy_)];
   }
 
   JXL_INLINE size_t covered_blocks_y() const {
-    static constexpr uint8_t kLut[] = {1, 1, 1, 1,  2,  4, 2,  1,  4,
-                                       1, 4, 2, 1,  1,  1, 1,  1,  1,
-                                       8, 8, 4, 16, 16, 8, 32, 32, 16};
+    static constexpr uint8_t kLut[] = {1, 2, 1};
     static_assert(sizeof(kLut) / sizeof(*kLut) == kNumValidStrategies,
                   "Update LUT");
     return kLut[size_t(strategy_)];
   }
 
   JXL_INLINE size_t log2_covered_blocks() const {
-    static constexpr uint8_t kLut[] = {0, 0, 0, 0, 2, 4, 1,  1, 2,
-                                       2, 3, 3, 0, 0, 0, 0,  0, 0,
-                                       6, 5, 5, 8, 7, 7, 10, 9, 9};
+    static constexpr uint8_t kLut[] = {0, 1, 1};
     static_assert(sizeof(kLut) / sizeof(*kLut) == kNumValidStrategies,
                   "Update LUT");
     return kLut[size_t(strategy_)];
@@ -170,7 +107,6 @@ class AcStrategy {
   friend class AcStrategyRow;
   JXL_INLINE AcStrategy(Type strategy, bool is_first)
       : strategy_(strategy), is_first_(is_first) {
-    JXL_DASSERT(IsMultiblock() || is_first == true);
   }
 
   Type strategy_;
@@ -192,7 +128,10 @@ class AcStrategyRow {
 class AcStrategyImage {
  public:
   AcStrategyImage() = default;
-  AcStrategyImage(size_t xsize, size_t ysize);
+  AcStrategyImage(size_t xsize, size_t ysize) : layers_(xsize, ysize) {
+    row_ = layers_.Row(0);
+    stride_ = layers_.PixelsPerRow();
+  }
   AcStrategyImage(AcStrategyImage&&) = default;
   AcStrategyImage& operator=(AcStrategyImage&&) = default;
 
@@ -243,9 +182,6 @@ class AcStrategyImage {
 
   size_t xsize() const { return layers_.xsize(); }
   size_t ysize() const { return layers_.ysize(); }
-
-  // Count the number of blocks of a given type.
-  size_t CountBlocks(AcStrategy::Type type) const;
 
  private:
   ImageB layers_;
