@@ -32,9 +32,6 @@ constexpr T ArraySum(T (&a)[N], size_t i = N - 1) {
 }
 
 static constexpr size_t kMaxQuantTableSize = AcStrategy::kMaxCoeffArea;
-static constexpr size_t kNumPredefinedTables = 1;
-static constexpr size_t kCeilLog2NumPredefinedTables = 0;
-static constexpr size_t kLog2NumQuantModes = 3;
 
 struct DctQuantWeightParams {
   static constexpr size_t kLog2MaxDistanceBands = 4;
@@ -65,67 +62,17 @@ struct DctQuantWeightParams {
 struct QuantEncodingInternal {
   enum Mode {
     kQuantModeLibrary,
-    kQuantModeID,
-    kQuantModeDCT2,
-    kQuantModeDCT4,
-    kQuantModeDCT4X8,
     kQuantModeDCT,
   };
 
   template <Mode mode>
   struct Tag {};
 
-  typedef std::array<std::array<float, 3>, 3> IdWeights;
-  typedef std::array<std::array<float, 6>, 3> DCT2Weights;
-  typedef std::array<std::array<float, 2>, 3> DCT4Multipliers;
-  typedef std::array<std::array<float, 9>, 3> AFVWeights;
-  typedef std::array<float, 3> DCT4x8Multipliers;
-
-  static constexpr QuantEncodingInternal Library(uint8_t predefined) {
-    return ((predefined < kNumPredefinedTables) ||
-            JXL_ABORT("Assert predefined < kNumPredefinedTables")),
-           QuantEncodingInternal(Tag<kQuantModeLibrary>(), predefined);
+  static constexpr QuantEncodingInternal Library() {
+    return (QuantEncodingInternal(Tag<kQuantModeLibrary>()));
   }
-  constexpr QuantEncodingInternal(Tag<kQuantModeLibrary> /* tag */,
-                                  uint8_t predefined)
-      : mode(kQuantModeLibrary), predefined(predefined) {}
-
-  // Identity
-  // xybweights is an array of {xweights, yweights, bweights}.
-  static constexpr QuantEncodingInternal Identity(const IdWeights& xybweights) {
-    return QuantEncodingInternal(Tag<kQuantModeID>(), xybweights);
-  }
-  constexpr QuantEncodingInternal(Tag<kQuantModeID> /* tag */,
-                                  const IdWeights& xybweights)
-      : mode(kQuantModeID), idweights(xybweights) {}
-
-  // DCT2
-  static constexpr QuantEncodingInternal DCT2(const DCT2Weights& xybweights) {
-    return QuantEncodingInternal(Tag<kQuantModeDCT2>(), xybweights);
-  }
-  constexpr QuantEncodingInternal(Tag<kQuantModeDCT2> /* tag */,
-                                  const DCT2Weights& xybweights)
-      : mode(kQuantModeDCT2), dct2weights(xybweights) {}
-
-  // DCT4
-  static constexpr QuantEncodingInternal DCT4(
-      const DctQuantWeightParams& params, const DCT4Multipliers& xybmul) {
-    return QuantEncodingInternal(Tag<kQuantModeDCT4>(), params, xybmul);
-  }
-  constexpr QuantEncodingInternal(Tag<kQuantModeDCT4> /* tag */,
-                                  const DctQuantWeightParams& params,
-                                  const DCT4Multipliers& xybmul)
-      : mode(kQuantModeDCT4), dct_params(params), dct4multipliers(xybmul) {}
-
-  // DCT4x8
-  static constexpr QuantEncodingInternal DCT4X8(
-      const DctQuantWeightParams& params, const DCT4x8Multipliers& xybmul) {
-    return QuantEncodingInternal(Tag<kQuantModeDCT4X8>(), params, xybmul);
-  }
-  constexpr QuantEncodingInternal(Tag<kQuantModeDCT4X8> /* tag */,
-                                  const DctQuantWeightParams& params,
-                                  const DCT4x8Multipliers& xybmul)
-      : mode(kQuantModeDCT4X8), dct_params(params), dct4x8multipliers(xybmul) {}
+  constexpr QuantEncodingInternal(Tag<kQuantModeLibrary> /* tag */)
+      : mode(kQuantModeLibrary) {}
 
   // DCT
   static constexpr QuantEncodingInternal DCT(
@@ -136,47 +83,12 @@ struct QuantEncodingInternal {
                                   const DctQuantWeightParams& params)
       : mode(kQuantModeDCT), dct_params(params) {}
 
-
   // This constructor is not constexpr so it can't be used in any of the
   // constexpr cases above.
   explicit QuantEncodingInternal(Mode mode) : mode(mode) {}
 
   Mode mode;
-
-  // Weights for DCT4+ tables.
   DctQuantWeightParams dct_params;
-
-  union {
-    // Weights for identity.
-    IdWeights idweights;
-
-    // Weights for DCT2.
-    DCT2Weights dct2weights;
-
-    // Extra multipliers for coefficients 01/10 and 11 for DCT4 and AFV.
-    DCT4Multipliers dct4multipliers;
-
-    // Weights for AFV. {0, 1} are used directly for coefficients (0, 1) and (1,
-    // 0);  {2, 3, 4} are used directly corner DC, (1,0) - (0,1) and (0, 1) +
-    // (1, 0) - (0, 0) inside the AFV block. Values from 5 to 8 are interpolated
-    // as in GetQuantWeights for DC and are used for other coefficients.
-    AFVWeights afv_weights = {};
-
-    // Extra multipliers for coefficients 01 or 10 for DCT4X8 and DCT8X4.
-    DCT4x8Multipliers dct4x8multipliers;
-  };
-
-  // Weights for 4x4 sub-block in AFV.
-  DctQuantWeightParams dct_params_afv_4x4;
-
-  union {
-    // Which predefined table to use. Only used if mode is kQuantModeLibrary.
-    uint8_t predefined = 0;
-
-    // Which other quant table to copy; must copy from a table that comes before
-    // the current one. Only used if mode is kQuantModeCopy.
-    uint8_t source;
-  };
 };
 
 class QuantEncoding final : public QuantEncodingInternal {
@@ -201,22 +113,8 @@ class QuantEncoding final : public QuantEncodingInternal {
   // In general, you should use this wrappers. The only reason to directly
   // create a QuantEncodingInternal instance is if you need a constexpr version
   // of this class.
-  static QuantEncoding Library(uint8_t predefined) {
-    return QuantEncoding(QuantEncodingInternal::Library(predefined));
-  }
-  static QuantEncoding Identity(const IdWeights& xybweights) {
-    return QuantEncoding(QuantEncodingInternal::Identity(xybweights));
-  }
-  static QuantEncoding DCT2(const DCT2Weights& xybweights) {
-    return QuantEncoding(QuantEncodingInternal::DCT2(xybweights));
-  }
-  static QuantEncoding DCT4(const DctQuantWeightParams& params,
-                            const DCT4Multipliers& xybmul) {
-    return QuantEncoding(QuantEncodingInternal::DCT4(params, xybmul));
-  }
-  static QuantEncoding DCT4X8(const DctQuantWeightParams& params,
-                              const DCT4x8Multipliers& xybmul) {
-    return QuantEncoding(QuantEncodingInternal::DCT4X8(params, xybmul));
+  static QuantEncoding Library() {
+    return QuantEncoding(QuantEncodingInternal::Library());
   }
   static QuantEncoding DCT(const DctQuantWeightParams& params) {
     return QuantEncoding(QuantEncodingInternal::DCT(params));
@@ -256,25 +154,20 @@ class DequantMatrices {
  public:
   enum QuantTable : size_t {
     DCT = 0,
-    IDENTITY,
-    DCT2X2,
-    DCT4X4,
-    DCT16X16,
     DCT8X16,
-    DCT4X8,
     kNum
   };
 
   static constexpr QuantTable kQuantTable[] = {
-      QuantTable::DCT,     QuantTable::IDENTITY, QuantTable::DCT2X2,
-      QuantTable::DCT4X4,  QuantTable::DCT16X16, QuantTable::DCT,
-      QuantTable::DCT8X16, QuantTable::DCT8X16,  QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
-      QuantTable::DCT4X8,  QuantTable::DCT4X8,   QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,      QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT8X16, QuantTable::DCT8X16, QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
   };
   static_assert(AcStrategy::kNumValidStrategies ==
                     sizeof(kQuantTable) / sizeof *kQuantTable,
@@ -284,9 +177,8 @@ class DequantMatrices {
 
   static const QuantEncoding* Library();
 
-  typedef std::array<QuantEncodingInternal, kNumPredefinedTables * kNum>
-      DequantLibraryInternal;
-  // Return the array of library kNumPredefinedTables QuantEncoding entries as
+  typedef std::array<QuantEncodingInternal, kNum> DequantLibraryInternal;
+  // Return the array of library QuantEncoding entries as
   // a constexpr array. Use Library() to obtain a pointer to the copy in the
   // .cc file.
   static const DequantLibraryInternal LibraryInit();
@@ -310,18 +202,27 @@ class DequantMatrices {
 
   JXL_INLINE float InvDCQuant(size_t c) const { return inv_dc_quant_[c]; }
 
-  static constexpr size_t required_size_x[] = {1, 1, 1, 1, 2, 1, 1};
+  static constexpr size_t required_size_x[] = {
+      1,
+      1,
+  };
   static_assert(kNum == sizeof(required_size_x) / sizeof(*required_size_x),
                 "Update this array when adding or removing quant tables.");
 
-  static constexpr size_t required_size_y[] = {1, 1, 1, 1, 2, 2, 1};
+  static constexpr size_t required_size_y[] = {
+      1,
+      2,
+  };
   static_assert(kNum == sizeof(required_size_y) / sizeof(*required_size_y),
                 "Update this array when adding or removing quant tables.");
 
   Status EnsureComputed(uint32_t acs_mask);
 
  private:
-  static constexpr size_t required_size_[] = {1, 1, 1, 1, 4, 2, 1};
+  static constexpr size_t required_size_[] = {
+      1,
+      2,
+  };
   static_assert(kNum == sizeof(required_size_) / sizeof(*required_size_),
                 "Update this array when adding or removing quant tables.");
   static constexpr size_t kTotalTableSize =

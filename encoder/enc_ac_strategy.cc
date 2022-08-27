@@ -159,87 +159,59 @@ float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx,
       scratch_space);
 }
 
-uint8_t FindBest8x8Transform(const Image3F& opsin, size_t bx, size_t by,
-                             float distance, const DequantMatrices& matrices,
-                             const ImageF& qf, const ImageF& maskf,
-                             const float* JXL_RESTRICT cmap_factors,
-                             AcStrategyImage* JXL_RESTRICT ac_strategy,
-                             float* block, float* scratch_space,
-                             float* entropy_out) {
-  struct TransformTry8x8 {
-    AcStrategy::Type type;
-    float entropy_add;
-    float entropy_mul;
-  };
-  static const TransformTry8x8 kTransforms8x8[] = {
-      {AcStrategy::Type::DCT, 3.0f, 0.745f},
-      {AcStrategy::Type::DCT4X4, 4.0f, 1.0179946967008329f},
-      {AcStrategy::Type::DCT2X2, 4.0f, 0.76721119707580943f},
-      {AcStrategy::Type::DCT4X8, 0.0f, 0.700754622182473063f},
-      {AcStrategy::Type::DCT8X4, 0.0f, 0.700754622182473063f},
-      {AcStrategy::Type::IDENTITY, 8.0f, 0.81217614513585534f},
-  };
-  double best = 1e30;
-  uint8_t best_tx = kTransforms8x8[0].type;
-  for (auto tx : kTransforms8x8) {
-    AcStrategy acs = AcStrategy::FromRawStrategy(tx.type);
-    float entropy = EstimateEntropy(acs, opsin, bx, by, distance, matrices, qf,
-                                    maskf, cmap_factors, block, scratch_space);
-    entropy = tx.entropy_add + tx.entropy_mul * entropy;
-    if (entropy < best) {
-      best_tx = tx.type;
-      best = entropy;
-    }
-  }
-  *entropy_out = best;
-  return best_tx;
-}
-
-void FindBest16x16Transform(
-    const Image3F& opsin, size_t bx, size_t by, size_t cx, size_t cy,
-    float distance, const DequantMatrices& matrices, const ImageF& qf,
-    const ImageF& maskf, const float* JXL_RESTRICT cmap_factors,
-    AcStrategyImage* JXL_RESTRICT ac_strategy, const float entropy_mul_16X8,
-    const float entropy_mul_16X16, float* JXL_RESTRICT entropy_estimate,
-    float* block, float* scratch_space) {
+void FindBest16x16Transform(const Image3F& opsin, size_t bx, size_t by,
+                            size_t cx, size_t cy, float distance,
+                            const DequantMatrices& matrices, const ImageF& qf,
+                            const ImageF& maskf,
+                            const float* JXL_RESTRICT cmap_factors,
+                            AcStrategyImage* JXL_RESTRICT ac_strategy,
+                            float* block, float* scratch_space) {
+  const AcStrategy acs8X8 = AcStrategy::FromRawStrategy(AcStrategy::DCT);
   const AcStrategy acs16X8 = AcStrategy::FromRawStrategy(AcStrategy::DCT16X8);
   const AcStrategy acs8X16 = AcStrategy::FromRawStrategy(AcStrategy::DCT8X16);
-  const AcStrategy acs16X16 = AcStrategy::FromRawStrategy(AcStrategy::DCT16X16);
+  // Favor all 8x8 transforms 16x8 at low butteraugli_target distances.
+  static const float k8x8mul1 = -0.55 * 0.75f;
+  static const float k8x8mul2 = 1.0735757687292623f * 0.75f;
+  static const float k8x8base = 1.4;
+  static const float mul8x8 = k8x8mul2 + k8x8mul1 / (distance + k8x8base);
+  static const float k8X16mul1 = -0.55;
+  static const float k8X16mul2 = 0.9019587899705066;
+  static const float k8X16base = 1.6;
+  static const float mul16x8 = k8X16mul2 + k8X16mul1 / (distance + k8X16base);
   float entropy[2][2] = {};
   for (size_t dy = 0; dy < 2; ++dy) {
     for (size_t dx = 0; dx < 2; ++dx) {
-      entropy[dy][dx] += entropy_estimate[(cy + dy) * 8 + (cx + dx)];
+      float entropy8x8 = 3.0f * mul8x8;
+      entropy8x8 +=
+          mul8x8 * EstimateEntropy(acs8X8, opsin, bx + cx + dx, by + cy + dy,
+                                   distance, matrices, qf, maskf, cmap_factors,
+                                   block, scratch_space);
+      entropy[dy][dx] = entropy8x8;
     }
   }
   float entropy_16X8_left =
-      entropy_mul_16X8 * EstimateEntropy(acs16X8, opsin, bx + cx, by + cy,
-                                         distance, matrices, qf, maskf,
-                                         cmap_factors, block, scratch_space);
+      mul16x8 * EstimateEntropy(acs16X8, opsin, bx + cx, by + cy, distance,
+                                matrices, qf, maskf, cmap_factors, block,
+                                scratch_space);
   float entropy_16X8_right =
-      entropy_mul_16X8 * EstimateEntropy(acs16X8, opsin, bx + cx + 1, by + cy,
-                                         distance, matrices, qf, maskf,
-                                         cmap_factors, block, scratch_space);
+      mul16x8 * EstimateEntropy(acs16X8, opsin, bx + cx + 1, by + cy, distance,
+                                matrices, qf, maskf, cmap_factors, block,
+                                scratch_space);
   float entropy_8X16_top =
-      entropy_mul_16X8 * EstimateEntropy(acs8X16, opsin, bx + cx, by + cy,
-                                         distance, matrices, qf, maskf,
-                                         cmap_factors, block, scratch_space);
+      mul16x8 * EstimateEntropy(acs8X16, opsin, bx + cx, by + cy, distance,
+                                matrices, qf, maskf, cmap_factors, block,
+                                scratch_space);
   float entropy_8X16_bottom =
-      entropy_mul_16X8 * EstimateEntropy(acs8X16, opsin, bx + cx, by + cy + 1,
-                                         distance, matrices, qf, maskf,
-                                         cmap_factors, block, scratch_space);
-  float entropy_16X16 =
-      entropy_mul_16X16 * EstimateEntropy(acs16X16, opsin, bx + cx, by + cy,
-                                          distance, matrices, qf, maskf,
-                                          cmap_factors, block, scratch_space);
+      mul16x8 * EstimateEntropy(acs8X16, opsin, bx + cx, by + cy + 1, distance,
+                                matrices, qf, maskf, cmap_factors, block,
+                                scratch_space);
   // Test if this 16x16 block should have 16x8 or 8x16 transforms,
   // because it can have only one or the other.
   float cost16x8 = std::min(entropy_16X8_left, entropy[0][0] + entropy[1][0]) +
                    std::min(entropy_16X8_right, entropy[0][1] + entropy[1][1]);
   float cost8x16 = std::min(entropy_8X16_top, entropy[0][0] + entropy[0][1]) +
                    std::min(entropy_8X16_bottom, entropy[1][0] + entropy[1][1]);
-  if (entropy_16X16 < cost16x8 && entropy_16X16 < cost8x16) {
-    ac_strategy->Set(bx + cx, by + cy, AcStrategy::DCT16X16);
-  } else if (cost16x8 < cost8x16) {
+  if (cost16x8 < cost8x16) {
     if (entropy_16X8_left < entropy[0][0] + entropy[1][0]) {
       ac_strategy->Set(bx + cx, by + cy, AcStrategy::DCT16X8);
     }
@@ -262,6 +234,7 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
                               const ImageF& masking_field, ThreadPool* pool,
                               const DequantMatrices& matrices,
                               AcStrategyImage* ac_strategy) {
+  ac_strategy->FillDCT8();
   size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
   size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
   size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
@@ -274,10 +247,6 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
     size_t bx0 = tx * kColorTileDimInBlocks;
     size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
     Rect rect(bx0, by0, bx1 - bx0, by1 - by0);
-    // Main philosophy here:
-    // 1. First find best 8x8 transform for each area.
-    // 2. Go over all aligned 16x16 blocks and determine the best tiling by
-    //    8x8, 8x16 or 16x16 blocks.
     auto mem = hwy::AllocateAligned<float>(5 * AcStrategy::kMaxCoeffArea);
     float* block = mem.get();
     float* scratch_space = mem.get() + 3 * AcStrategy::kMaxCoeffArea;
@@ -286,48 +255,11 @@ Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
         0.0f,
         cmap.YtoBRatio(cmap.ytob_map.ConstRow(ty)[tx]),
     };
-    // First compute the best 8x8 transform for each square. Later, we do not
-    // experiment with different combinations, but only use the best of the 8x8s
-    // when DCT8X8 is specified in the tree search.
-    // 8x8 transforms have 10 variants, but every larger transform is just a
-    // DCT.
-    float entropy_estimate[64] = {};
-    // Favor all 8x8 transforms (against 16x8 and larger transforms) at
-    // low butteraugli_target distances.
-    static const float k8x8mul1 = -0.55;
-    static const float k8x8mul2 = 1.0735757687292623f;
-    static const float k8x8base = 1.4;
-    const float mul8x8 = k8x8mul2 + k8x8mul1 / (distance + k8x8base);
-    for (size_t iy = 0; iy < rect.ysize(); iy++) {
-      for (size_t ix = 0; ix < rect.xsize(); ix++) {
-        float entropy = 0.0;
-        const uint8_t best_of_8x8s =
-            FindBest8x8Transform(opsin, bx0 + ix, by0 + iy, distance, matrices,
-                                 quant_field, masking_field, cmap_factors,
-                                 ac_strategy, block, scratch_space, &entropy);
-        ac_strategy->Set(bx0 + ix, by0 + iy,
-                         static_cast<AcStrategy::Type>(best_of_8x8s));
-        entropy_estimate[iy * 8 + ix] = entropy * mul8x8;
-      }
-    }
-    static const float k8X16mul1 = -0.55;
-    static const float k8X16mul2 = 0.9019587899705066;
-    static const float k8X16base = 1.6;
-    const float entropy_mul16X8 =
-        k8X16mul2 + k8X16mul1 / (distance + k8X16base);
-
-    static const float k16X16mul1 = -0.35;
-    static const float k16X16mul2 = 0.82;
-    static const float k16X16base = 2.0;
-    const float entropy_mul16X16 =
-        k16X16mul2 + k16X16mul1 / (distance + k16X16base);
-
     for (size_t cy = 0; cy + 1 < rect.ysize(); cy += 2) {
       for (size_t cx = 0; cx + 1 < rect.xsize(); cx += 2) {
         FindBest16x16Transform(opsin, bx0, by0, cx, cy, distance, matrices,
                                quant_field, masking_field, cmap_factors,
-                               ac_strategy, entropy_mul16X8, entropy_mul16X16,
-                               entropy_estimate, block, scratch_space);
+                               ac_strategy, block, scratch_space);
       }
     }
   };
