@@ -12,14 +12,15 @@
 #include "encoder/ac_strategy.h"
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
+#include "encoder/dct_util.h"
 #include "encoder/image.h"
-#include "encoder/quantizer.h"
+#include "encoder/quant_weights.h"
 
 namespace jxl {
 
 void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
                          const ImageI& raw_quant_field,
-                         const Quantizer& quantizer,
+                         const DequantMatrices& matrices, const float scale,
                          const ColorCorrelationMap& cmap,
                          const AcStrategyImage& ac_strategy,
                          const float x_qm_mul, ACImage* coeffs, Image3F* dc);

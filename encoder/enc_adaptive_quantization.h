@@ -18,8 +18,10 @@ namespace jxl {
 // of the input image, while a value less than 1.0 indicates that less
 // fine-grained quantization should be enough. Returns a mask, too, which
 // can later be used to make better decisions about ac strategy.
-ImageF AdaptiveQuantField(const Image3F& opsin, const float distance,
-                          ThreadPool* pool, ImageF* masking);
+void ComputeAdaptiveQuantField(const Image3F& opsin, const float distance,
+                               const float scale, ThreadPool* pool,
+                               ImageF* masking, ImageF* quant_field,
+                               ImageI* raw_quant_field);
 
 }  // namespace jxl
 

@@ -42,4 +42,19 @@
 #else
 #define JXL_THREAD_SANITIZER 0
 #endif
+
+#if JXL_MEMORY_SANITIZER
+#include <stddef.h>
+#include <stdint.h>
+
+#include "sanitizer/msan_interface.h"
+namespace jxl {
+namespace msan {
+// Chosen so that kSanitizerSentinel is four copies of kSanitizerSentinelByte.
+constexpr uint8_t kSanitizerSentinelByte = 0x48;
+constexpr float kSanitizerSentinel = 205089.125f;
+}  // namespace msan
+}  // namespace jxl
+#endif  // JXL_MEMORY_SANITIZER
+
 #endif  // ENCODER_BASE_SANITIZER_DEFINITIONS_H

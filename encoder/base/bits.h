@@ -117,18 +117,6 @@ static JXL_INLINE JXL_MAYBE_UNUSED size_t Num0BitsBelowLS1Bit_Nonzero(T x) {
   return Num0BitsBelowLS1Bit_Nonzero(SizeTag<sizeof(T)>(), x);
 }
 
-// Returns bit width for x == 0.
-template <typename T>
-static JXL_INLINE JXL_MAYBE_UNUSED size_t Num0BitsAboveMS1Bit(const T x) {
-  return (x == 0) ? sizeof(T) * 8 : Num0BitsAboveMS1Bit_Nonzero(x);
-}
-
-// Returns bit width for x == 0.
-template <typename T>
-static JXL_INLINE JXL_MAYBE_UNUSED size_t Num0BitsBelowLS1Bit(const T x) {
-  return (x == 0) ? sizeof(T) * 8 : Num0BitsBelowLS1Bit_Nonzero(x);
-}
-
 // Returns base-2 logarithm, rounded down.
 template <typename T>
 static JXL_INLINE JXL_MAYBE_UNUSED size_t FloorLog2Nonzero(const T x) {

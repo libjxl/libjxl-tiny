@@ -22,7 +22,6 @@
 #include "encoder/dct_util.h"
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/image.h"
-#include "encoder/quantizer.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -79,12 +78,11 @@ HWY_INLINE HWY_MAYBE_UNUSED Vec<Rebind<float, DI>> AdjustQuantBias(
 }
 
 // NOTE: caller takes care of extracting quant from rect of RawQuantField.
-void QuantizeBlockAC(const Quantizer& quantizer, size_t c, int32_t quant,
-                     float qm_multiplier, size_t quant_kind, size_t xsize,
-                     size_t ysize, const float* JXL_RESTRICT block_in,
+void QuantizeBlockAC(const float* JXL_RESTRICT block_in, size_t c,
+                     const float* JXL_RESTRICT qm, int32_t quant, float scale,
+                     float qm_multiplier, size_t xsize, size_t ysize,
                      int32_t* JXL_RESTRICT block_out) {
-  const float* JXL_RESTRICT qm = quantizer.InvDequantMatrix(quant_kind, c);
-  const float qac = quantizer.Scale() * quant;
+  const float qac = scale * quant;
   // Not SIMD-fied for now.
   float thres[4] = {0.58f, 0.635f, 0.66f, 0.7f};
   if (c == 0) {
@@ -140,31 +138,32 @@ void QuantizeBlockAC(const Quantizer& quantizer, size_t c, int32_t quant,
 }
 
 // NOTE: caller takes care of extracting quant from rect of RawQuantField.
-void QuantizeRoundtripYBlockAC(const Quantizer& quantizer, int32_t quant,
-                               size_t quant_kind, size_t xsize, size_t ysize,
-                               const float* JXL_RESTRICT biases,
+void QuantizeRoundtripYBlockAC(const float* JXL_RESTRICT qm,
+                               const float* JXL_RESTRICT dqm, float scale,
+                               int32_t quant, size_t xsize, size_t ysize,
                                float* JXL_RESTRICT inout,
                                int32_t* JXL_RESTRICT quantized) {
-  QuantizeBlockAC(quantizer, 1, quant, 1.0f, quant_kind, xsize, ysize, inout,
-                  quantized);
-
-  const float* JXL_RESTRICT dequant_matrix =
-      quantizer.DequantMatrix(quant_kind, 1);
-
+  QuantizeBlockAC(inout, 1, qm, quant, scale, 1.0f, xsize, ysize, quantized);
   HWY_CAPPED(float, kDCTBlockSize) df;
   HWY_CAPPED(int32_t, kDCTBlockSize) di;
-  const auto inv_qac = Set(df, quantizer.inv_quant_ac(quant));
+  const auto inv_qac = Set(df, 1.0 / (scale * quant));
+  constexpr float kDefaultQuantBias[4] = {
+      1.0f - 0.05465007330715401f,
+      1.0f - 0.07005449891748593f,
+      1.0f - 0.049935103337343655f,
+      0.145f,
+  };
   for (size_t k = 0; k < kDCTBlockSize * xsize * ysize; k += Lanes(df)) {
     const auto quant = Load(di, quantized + k);
-    const auto adj_quant = AdjustQuantBias(di, 1, quant, biases);
-    const auto dequantm = Load(df, dequant_matrix + k);
+    const auto adj_quant = AdjustQuantBias(di, 1, quant, kDefaultQuantBias);
+    const auto dequantm = Load(df, dqm + k);
     Store(Mul(Mul(adj_quant, dequantm), inv_qac), df, inout + k);
   }
 }
 
 void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
                          const ImageI& raw_quant_field,
-                         const Quantizer& quantizer,
+                         const DequantMatrices& matrices, const float scale,
                          const ColorCorrelationMap& cmap,
                          const AcStrategyImage& ac_strategy,
                          const float x_qm_mul, ACImage* coeffs_out,
@@ -253,9 +252,12 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
                               opsin_stride, coeffs_in + size, scratch_space);
           DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size,
                                   dc_rows[1] + bx, dc_stride);
-          QuantizeRoundtripYBlockAC(quantizer, quant_ac, acs.RawStrategy(),
-                                    xblocks, yblocks, kDefaultQuantBias,
-                                    coeffs_in + size, quantized + size);
+          int kind = acs.RawStrategy();
+          const float* JXL_RESTRICT yqm = matrices.InvMatrix(kind, 1);
+          const float* JXL_RESTRICT ydqm = matrices.Matrix(kind, 1);
+          QuantizeRoundtripYBlockAC(yqm, ydqm, scale, quant_ac, xblocks,
+                                    yblocks, coeffs_in + size,
+                                    quantized + size);
 
           // DCT X and B channels
           for (size_t c : {0, 2}) {
@@ -277,9 +279,10 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
 
           // Quantize X and B channels and set DC.
           for (size_t c : {0, 2}) {
-            QuantizeBlockAC(quantizer, c, quant_ac, c == 0 ? x_qm_mul : 1.0,
-                            acs.RawStrategy(), xblocks, yblocks,
-                            coeffs_in + c * size, quantized + c * size);
+            const float* JXL_RESTRICT qm = matrices.InvMatrix(kind, c);
+            QuantizeBlockAC(coeffs_in + c * size, c, qm, quant_ac, scale,
+                            c == 0 ? x_qm_mul : 1.0, xblocks, yblocks,
+                            quantized + c * size);
             DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size,
                                     dc_rows[c] + bx, dc_stride);
           }
@@ -304,13 +307,13 @@ namespace jxl {
 HWY_EXPORT(ComputeCoefficients);
 void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
                          const ImageI& raw_quant_field,
-                         const Quantizer& quantizer,
+                         const DequantMatrices& matrices, const float scale,
                          const ColorCorrelationMap& cmap,
                          const AcStrategyImage& ac_strategy,
                          const float x_qm_mul, ACImage* coeffs, Image3F* dc) {
   return HWY_DYNAMIC_DISPATCH(ComputeCoefficients)(
-      group_idx, opsin, raw_quant_field, quantizer, cmap, ac_strategy, x_qm_mul,
-      coeffs, dc);
+      group_idx, opsin, raw_quant_field, matrices, scale, cmap, ac_strategy,
+      x_qm_mul, coeffs, dc);
 }
 
 }  // namespace jxl

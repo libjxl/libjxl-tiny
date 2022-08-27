@@ -23,6 +23,10 @@
 
 namespace jxl {
 
+constexpr inline size_t RoundUpBitsToByteMultiple(size_t bits) {
+  return (bits + 7) & ~size_t(7);
+}
+
 struct BitWriter {
   // Upper bound on `n_bits` in each call to Write. We shift a 64-bit word by
   // 7 bits (max already valid bits in the last byte) and at least 1 bit is
@@ -57,14 +61,7 @@ struct BitWriter {
     return std::move(storage_);
   }
 
- private:
-  // Must be byte-aligned before calling.
-  void AppendByteAligned(const Span<const uint8_t>& span);
-
  public:
-  // NOTE: no allotment needed, the other BitWriters have already been charged.
-  void AppendByteAligned(const BitWriter& other);
-  void AppendByteAligned(const std::vector<std::unique_ptr<BitWriter>>& others);
   void AppendByteAligned(const std::vector<BitWriter>& others);
 
   class Allotment {
@@ -74,16 +71,6 @@ struct BitWriter {
     // unused storage so that BitWriter memory use remains tightly bounded.
     Allotment(BitWriter* JXL_RESTRICT writer, size_t max_bits);
     ~Allotment();
-
-    size_t MaxBits() const { return max_bits_; }
-
-    // Call after writing a histogram, but before ReclaimUnused.
-    void FinishedHistogram(BitWriter* JXL_RESTRICT writer);
-
-    size_t HistogramBits() const {
-      JXL_ASSERT(called_);
-      return histogram_bits_;
-    }
 
     void PrivateReclaim(BitWriter* JXL_RESTRICT writer,
                         size_t* JXL_RESTRICT used_bits,
@@ -97,7 +84,6 @@ struct BitWriter {
    private:
     size_t prev_bits_written_;
     const size_t max_bits_;
-    size_t histogram_bits_ = 0;
     bool called_ = false;
     Allotment* parent_;
   };
