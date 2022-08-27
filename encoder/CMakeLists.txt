@@ -7,11 +7,13 @@
 add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   ac_strategy.cc
   base/cache_aligned.cc
+  base/data_parallel.cc
   base/padded_bytes.cc
-  enc_ans.cc
-  image.cc
-  enc_adaptive_quantization.cc
+  cmdline.cc
+  convolve_symmetric5.cc
+  dct_scales.cc
   enc_ac_strategy.cc
+  enc_adaptive_quantization.cc
   enc_ans.cc
   enc_bit_writer.cc
   enc_chroma_from_luma.cc
@@ -22,15 +24,11 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_frame.cc
   enc_group.cc
   enc_xyb.cc
-  read_pfm.cc
-  quant_weights.cc
-  base/data_parallel.cc
-  quantizer.cc
-  gaborish.cc
-  convolve_symmetric5.cc
-  cmdline.cc
   file_io.cc
-  dct_scales.cc
+  gaborish.cc
+  image.cc
+  quant_weights.cc
+  read_pfm.cc
 )
 target_compile_options(jxl_tiny PUBLIC "${JPEGXL_INTERNAL_FLAGS}")
 target_include_directories(jxl_tiny PUBLIC "${PROJECT_SOURCE_DIR}")

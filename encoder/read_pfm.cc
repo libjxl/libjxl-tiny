@@ -6,6 +6,7 @@
 
 #include "encoder/read_pfm.h"
 
+#include "encoder/base/byte_order.h"
 #include "encoder/file_io.h"
 
 namespace jxl {
@@ -140,21 +141,6 @@ class Parser {
   const uint8_t* pos_;
   const uint8_t* const end_;
 };
-
-#if JXL_COMPILER_MSVC
-#define JXL_BSWAP32(x) _byteswap_ulong(x)
-#else
-#define JXL_BSWAP32(x) __builtin_bswap32(x)
-#endif
-
-inline float BSwapFloat(float x) {
-  uint32_t u;
-  memcpy(&u, &x, 4);
-  uint32_t uswap = JXL_BSWAP32(u);
-  float xswap;
-  memcpy(&xswap, &uswap, 4);
-  return xswap;
-}
 
 }  // namespace
 

@@ -30,14 +30,6 @@ BitWriter::Allotment::~Allotment() {
   }
 }
 
-void BitWriter::Allotment::FinishedHistogram(BitWriter* JXL_RESTRICT writer) {
-  if (writer == nullptr) return;
-  JXL_ASSERT(!called_);              // Call before ReclaimUnused
-  JXL_ASSERT(histogram_bits_ == 0);  // Do not call twice
-  JXL_ASSERT(writer->BitsWritten() >= prev_bits_written_);
-  histogram_bits_ = writer->BitsWritten() - prev_bits_written_;
-}
-
 void BitWriter::Allotment::PrivateReclaim(BitWriter* JXL_RESTRICT writer,
                                           size_t* JXL_RESTRICT used_bits,
                                           size_t* JXL_RESTRICT unused_bits) {
@@ -61,27 +53,6 @@ void BitWriter::Allotment::PrivateReclaim(BitWriter* JXL_RESTRICT writer,
     parent->prev_bits_written_ += *used_bits;
     parent = parent->parent_;
   }
-}
-
-void BitWriter::AppendByteAligned(const Span<const uint8_t>& span) {
-  if (!span.size()) return;
-  storage_.resize(storage_.size() + span.size() + 1);  // extra zero padding
-
-  // Concatenate by copying bytes because both source and destination are bytes.
-  JXL_ASSERT(BitsWritten() % kBitsPerByte == 0);
-  size_t pos = BitsWritten() / kBitsPerByte;
-  memcpy(storage_.data() + pos, span.data(), span.size());
-  pos += span.size();
-  storage_[pos++] = 0;  // for next Write
-  JXL_ASSERT(pos <= storage_.size());
-  bits_written_ += span.size() * kBitsPerByte;
-}
-
-void BitWriter::AppendByteAligned(const BitWriter& other) {
-  JXL_ASSERT(other.BitsWritten() % kBitsPerByte == 0);
-  JXL_ASSERT(other.BitsWritten() / kBitsPerByte != 0);
-
-  AppendByteAligned(other.GetSpan());
 }
 
 void BitWriter::AppendByteAligned(const std::vector<BitWriter>& others) {
@@ -108,36 +79,6 @@ void BitWriter::AppendByteAligned(const std::vector<BitWriter>& others) {
       memcpy(storage_.data() + pos, span.data(), span.size());
       pos += span.size();
     }
-  }
-  storage_[pos++] = 0;  // for next Write
-  JXL_ASSERT(pos <= storage_.size());
-  bits_written_ += other_bytes * kBitsPerByte;
-}
-
-// TODO(lode): avoid code duplication
-void BitWriter::AppendByteAligned(
-    const std::vector<std::unique_ptr<BitWriter>>& others) {
-  // Total size to add so we can preallocate
-  size_t other_bytes = 0;
-  for (const auto& writer : others) {
-    JXL_ASSERT(writer->BitsWritten() % kBitsPerByte == 0);
-    other_bytes += writer->BitsWritten() / kBitsPerByte;
-  }
-  if (other_bytes == 0) {
-    // No bytes to append: this happens for example when creating per-group
-    // storage for groups, but not writing anything in them for e.g. lossless
-    // images with no alpha. Do nothing.
-    return;
-  }
-  storage_.resize(storage_.size() + other_bytes + 1);  // extra zero padding
-
-  // Concatenate by copying bytes because both source and destination are bytes.
-  JXL_ASSERT(BitsWritten() % kBitsPerByte == 0);
-  size_t pos = BitsWritten() / kBitsPerByte;
-  for (const auto& writer : others) {
-    const Span<const uint8_t> span = writer->GetSpan();
-    memcpy(storage_.data() + pos, span.data(), span.size());
-    pos += span.size();
   }
   storage_[pos++] = 0;  // for next Write
   JXL_ASSERT(pos <= storage_.size());

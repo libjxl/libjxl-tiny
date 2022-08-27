@@ -13,9 +13,9 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
+#include "encoder/base/sanitizer_definitions.h"
 #include "encoder/common.h"
 #include "encoder/image_ops.h"
-#include "encoder/sanitizers.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -128,6 +128,10 @@ void PlaneBase::Swap(PlaneBase& other) {
   std::swap(orig_ysize_, other.orig_ysize_);
   std::swap(bytes_per_row_, other.bytes_per_row_);
   std::swap(bytes_, other.bytes_);
+}
+
+constexpr inline size_t RoundUpToBlockDim(size_t dim) {
+  return (dim + 7) & ~size_t(7);
 }
 
 void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in) {

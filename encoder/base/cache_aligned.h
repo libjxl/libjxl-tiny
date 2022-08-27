@@ -21,8 +21,6 @@ namespace jxl {
 // Functions that depend on the cache line size.
 class CacheAligned {
  public:
-  static void PrintStats();
-
   static constexpr size_t kPointerSize = sizeof(void*);
   static constexpr size_t kCacheLineSize = 64;
   // To avoid RFOs, match L2 fill size (pairs of lines).

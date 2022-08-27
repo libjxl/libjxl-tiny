@@ -42,7 +42,6 @@
 #include "encoder/gaborish.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
-#include "encoder/quantizer.h"
 
 namespace jxl {
 namespace {
@@ -81,6 +80,31 @@ float QuantDC(float distance) {
   float effective_dist = kDcMul * std::pow(distance / kDcMul, kDcQuantPow);
   effective_dist = Clamp1(effective_dist, 0.5f * distance, distance);
   return std::min(kDcQuant / effective_dist, 50.f);
+}
+
+struct QuantScales {
+  int global_scale;
+  int quant_dc;
+  float scale;
+  float scale_dc;
+};
+
+QuantScales ComputeQuantScales(float distance) {
+  constexpr int kGlobalScaleDenom = 1 << 16;
+  constexpr int kGlobalScaleNumerator = 4096;
+  constexpr float kAcQuant = 0.8f;
+  constexpr float kQuantFieldTarget = 5;
+  float quant_dc = QuantDC(distance);
+  float scale = kGlobalScaleDenom * kAcQuant / (distance * kQuantFieldTarget);
+  int scaled_quant_dc =
+      static_cast<int>(quant_dc * kGlobalScaleNumerator * 1.6);
+  QuantScales quant;
+  quant.global_scale = Clamp1(static_cast<int>(scale), 1, scaled_quant_dc);
+  quant.scale = quant.global_scale * (1.0f / kGlobalScaleDenom);
+  quant.quant_dc = static_cast<int>(quant_dc / quant.scale + 0.5f);
+  quant.quant_dc = Clamp1(quant.quant_dc, 1, 1 << 16);
+  quant.scale_dc = quant.quant_dc * quant.scale;
+  return quant;
 }
 
 // Clamps gradient to the min/max of n, w (and l, implicitly).
@@ -246,6 +270,34 @@ void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
   allotment.Reclaim(writer);
 }
 
+void WriteQuantScales(int global_scale, int quant_dc, BitWriter* writer) {
+  if (global_scale < 2049) {
+    writer->Write(2, 0);
+    writer->Write(11, global_scale - 1);
+  } else if (global_scale < 4097) {
+    writer->Write(2, 1);
+    writer->Write(11, global_scale - 2049);
+  } else if (global_scale < 8193) {
+    writer->Write(2, 2);
+    writer->Write(12, global_scale - 4097);
+  } else {
+    writer->Write(2, 3);
+    writer->Write(16, global_scale - 8193);
+  }
+  if (quant_dc == 16) {
+    writer->Write(2, 0);
+  } else if (quant_dc < 33) {
+    writer->Write(2, 1);
+    writer->Write(5, quant_dc - 1);
+  } else if (quant_dc < 257) {
+    writer->Write(2, 2);
+    writer->Write(8, quant_dc - 1);
+  } else {
+    writer->Write(2, 3);
+    writer->Write(16, quant_dc - 1);
+  }
+}
+
 void WriteContextMap(const std::vector<uint8_t>& context_map,
                      BitWriter* writer) {
   if (context_map.empty()) {
@@ -288,14 +340,14 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   // Pre-compute image dimension-derived values.
   const size_t xsize = linear.xsize();
   const size_t ysize = linear.ysize();
-  FrameDimensions frame_dim;
-  frame_dim.Set(linear.xsize(), linear.ysize());
   const size_t xsize_blocks = DivCeil(xsize, kBlockDim);
   const size_t ysize_blocks = DivCeil(ysize, kBlockDim);
   const size_t xsize_groups = DivCeil(xsize, kGroupDim);
+  const size_t ysize_groups = DivCeil(ysize, kGroupDim);
   const size_t xsize_dc_groups = DivCeil(xsize_blocks, kGroupDim);
-  const size_t num_groups = frame_dim.num_groups;
-  const size_t num_dc_groups = frame_dim.num_dc_groups;
+  const size_t ysize_dc_groups = DivCeil(ysize_blocks, kGroupDim);
+  const size_t num_groups = xsize_groups * ysize_groups;
+  const size_t num_dc_groups = xsize_dc_groups * ysize_dc_groups;
   auto block_rect = [&](size_t idx, size_t n, size_t m) {
     return Rect((idx % n) * m, (idx / n) * m, m, m, xsize_blocks, ysize_blocks);
   };
@@ -315,26 +367,23 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   };
 
   // Transform image to XYB colorspace.
-  Image3F opsin(frame_dim.xsize_padded, frame_dim.ysize_padded);
+  Image3F opsin(xsize_blocks * kBlockDim, ysize_blocks * kBlockDim);
   opsin.ShrinkTo(linear.xsize(), linear.ysize());
   ToXYB(linear, pool, &opsin);
   PadImageToBlockMultipleInPlace(&opsin);
 
   // Compute adaptive quantization field (relies on pre-gaborish values).
-  const float quant_dc = QuantDC(distance);
-  ImageF masking;
-  ImageF quant_field = AdaptiveQuantField(opsin, distance, pool, &masking);
+  QuantScales qscales = ComputeQuantScales(distance);
+  ImageF quant_field, masking;
+  ImageI raw_quant_field;
+  ComputeAdaptiveQuantField(opsin, distance, qscales.scale, pool, &masking,
+                            &quant_field, &raw_quant_field);
 
   // Initialize quant weights and compute X quant matrix scale.
   DequantMatrices matrices;
   constexpr uint32_t kAcStrategyMask = 0x30df;  // up to 16x16 DCT
   JXL_CHECK(matrices.EnsureComputed(kAcStrategyMask));
   float x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
-
-  // Compute quant scales and raw quant field field.
-  Quantizer quantizer(&matrices);
-  ImageI raw_quant_field(xsize_blocks, ysize_blocks);
-  quantizer.SetQuantField(quant_dc, quant_field, &raw_quant_field);
 
   // Apply inverse-gaborish.
   GaborishInverse(&opsin, 0.9908511000000001f, pool);
@@ -360,8 +409,9 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   JXL_RETURN_IF_ERROR(RunOnPool(
       pool, 0, num_groups, ThreadPool::NoInit,
       [&](size_t group_idx, size_t _) {
-        ComputeCoefficients(group_idx, opsin, raw_quant_field, quantizer, cmap,
-                            ac_strategy, x_qm_multiplier, &ac_coeffs, &dc);
+        ComputeCoefficients(group_idx, opsin, raw_quant_field, matrices,
+                            qscales.scale, cmap, ac_strategy, x_qm_multiplier,
+                            &ac_coeffs, &dc);
       },
       "Compute coeffs"));
 
@@ -371,10 +421,10 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     const Rect r = block_rect(group_index, xsize_dc_groups, kGroupDim);
     dc_tokens[group_index].reserve(3 * r.xsize() * r.ysize());
     Image3I quant_dc(r.xsize(), r.ysize());
-    const float y_dc_step = quantizer.GetDcStep(1);
+    const float y_dc_step = matrices.DCQuant(1) / qscales.scale_dc;
     for (size_t c : {1, 0, 2}) {
       const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
-      float inv_factor = quantizer.GetInvDcStep(c);
+      float inv_factor = matrices.InvDCQuant(c) * qscales.scale_dc;
       float cfl_factor = c == 1 ? 0.0f : cmap.DCFactors()[c] * y_dc_step;
       for (size_t y = 0; y < r.ysize(); y++) {
         const float* row = r.ConstPlaneRow(dc, c, y);
@@ -471,8 +521,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   {
     BitWriter* group_writer = get_output(0);
     BitWriter::Allotment allotment(group_writer, 1024);
-    group_writer->Write(1, 1);  // default quant dc
-    quantizer.Encode(group_writer);
+    group_writer->Write(1, 1);  // default dequant dc
+    WriteQuantScales(qscales.global_scale, qscales.quant_dc, group_writer);
     group_writer->Write(1, 1);  // default BlockCtxMap
     int32_t ytox_dc = cmap.GetYToXDC();
     int32_t ytob_dc = cmap.GetYToBDC();

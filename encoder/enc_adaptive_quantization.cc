@@ -506,17 +506,18 @@ void ComputeTile(const Image3F& xyb, const Rect& rect, float distance,
                       rect, aq_map);
 }
 
-ImageF AdaptiveQuantField(const Image3F& opsin, const float distance,
-                          ThreadPool* pool, ImageF* mask) {
+void ComputeAdaptiveQuantField(const Image3F& opsin, const float distance,
+                               ThreadPool* pool, ImageF* mask,
+                               ImageF* quant_field) {
   const size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
   const size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
   const size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
   const size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
   static const float kAcQuant = 0.8294f;
   const float scale = kAcQuant / distance;
-  ImageF aq_map(xsize_blocks, ysize_blocks);
   std::vector<ImageF> pre_erosion;
   ImageF diff_buffer;
+  *quant_field = ImageF(xsize_blocks, ysize_blocks);
   *mask = ImageF(xsize_blocks, ysize_blocks);
   JXL_CHECK(RunOnPool(
       pool, 0, xsize_tiles * ysize_tiles,
@@ -537,11 +538,9 @@ ImageF AdaptiveQuantField(const Image3F& opsin, const float distance,
         size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
         Rect rect(bx0, by0, bx1 - bx0, by1 - by0);
         ComputeTile(opsin, rect, distance, scale, &pre_erosion[thread],
-                    diff_buffer.Row(thread), &aq_map, mask);
+                    diff_buffer.Row(thread), quant_field, mask);
       },
       "AQ DiffPrecompute"));
-
-  return aq_map;
 }
 
 }  // namespace
@@ -553,12 +552,24 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace jxl {
-HWY_EXPORT(AdaptiveQuantField);
+HWY_EXPORT(ComputeAdaptiveQuantField);
 
-ImageF AdaptiveQuantField(const Image3F& opsin, const float distance,
-                          ThreadPool* pool, ImageF* masking) {
-  return HWY_DYNAMIC_DISPATCH(AdaptiveQuantField)(opsin, distance, pool,
-                                                  masking);
+void ComputeAdaptiveQuantField(const Image3F& opsin, const float distance,
+                               const float scale, ThreadPool* pool,
+                               ImageF* masking, ImageF* quant_field,
+                               ImageI* raw_quant_field) {
+  HWY_DYNAMIC_DISPATCH(ComputeAdaptiveQuantField)
+  (opsin, distance, pool, masking, quant_field);
+  *raw_quant_field = ImageI(quant_field->xsize(), quant_field->ysize());
+  const float inv_scale = 1.0f / scale;
+  for (size_t y = 0; y < quant_field->ysize(); ++y) {
+    const float* row_qf = quant_field->ConstRow(y);
+    int32_t* row_qi = raw_quant_field->Row(y);
+    for (size_t x = 0; x < quant_field->xsize(); ++x) {
+      int val = Clamp1(static_cast<int>(row_qf[x] * inv_scale + 0.5f), 1, 256);
+      row_qi[x] = val;
+    }
+  }
 }
 
 }  // namespace jxl
