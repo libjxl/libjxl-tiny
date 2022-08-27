@@ -41,50 +41,6 @@ using hwy::HWY_NAMESPACE::Sqrt;
 
 static constexpr const float kAlmostZero = 1e-8f;
 
-void GetQuantWeightsDCT2(const QuantEncoding::DCT2Weights& dct2weights,
-                         float* weights) {
-  for (size_t c = 0; c < 3; c++) {
-    size_t start = c * 64;
-    weights[start] = 0xBAD;
-    weights[start + 1] = weights[start + 8] = dct2weights[c][0];
-    weights[start + 9] = dct2weights[c][1];
-    for (size_t y = 0; y < 2; y++) {
-      for (size_t x = 0; x < 2; x++) {
-        weights[start + y * 8 + x + 2] = dct2weights[c][2];
-        weights[start + (y + 2) * 8 + x] = dct2weights[c][2];
-      }
-    }
-    for (size_t y = 0; y < 2; y++) {
-      for (size_t x = 0; x < 2; x++) {
-        weights[start + (y + 2) * 8 + x + 2] = dct2weights[c][3];
-      }
-    }
-    for (size_t y = 0; y < 4; y++) {
-      for (size_t x = 0; x < 4; x++) {
-        weights[start + y * 8 + x + 4] = dct2weights[c][4];
-        weights[start + (y + 4) * 8 + x] = dct2weights[c][4];
-      }
-    }
-    for (size_t y = 0; y < 4; y++) {
-      for (size_t x = 0; x < 4; x++) {
-        weights[start + (y + 4) * 8 + x + 4] = dct2weights[c][5];
-      }
-    }
-  }
-}
-
-void GetQuantWeightsIdentity(const QuantEncoding::IdWeights& idweights,
-                             float* weights) {
-  for (size_t c = 0; c < 3; c++) {
-    for (int i = 0; i < 64; i++) {
-      weights[64 * c + i] = idweights[c][0];
-    }
-    weights[64 * c + 1] = idweights[c][1];
-    weights[64 * c + 8] = idweights[c][1];
-    weights[64 * c + 9] = idweights[c][2];
-  }
-}
-
 float Mult(float v) {
   if (v > 0.0f) return 1.0f + v;
   return 1.0f / (1.0f - v);
@@ -151,7 +107,6 @@ Status ComputeQuantTable(const QuantEncoding& encoding,
                          float* JXL_RESTRICT table,
                          float* JXL_RESTRICT inv_table, size_t table_num,
                          DequantMatrices::QuantTable kind, size_t* pos) {
-  constexpr size_t N = kBlockDim;
   size_t wrows = 8 * DequantMatrices::required_size_x[kind],
          wcols = 8 * DequantMatrices::required_size_y[kind];
   size_t num = wrows * wcols;
@@ -163,54 +118,6 @@ Status ComputeQuantTable(const QuantEncoding& encoding,
       // Library and copy quant encoding should get replaced by the actual
       // parameters by the caller.
       JXL_ASSERT(false);
-      break;
-    }
-    case QuantEncoding::kQuantModeID: {
-      JXL_ASSERT(num == kDCTBlockSize);
-      GetQuantWeightsIdentity(encoding.idweights, weights.data());
-      break;
-    }
-    case QuantEncoding::kQuantModeDCT2: {
-      JXL_ASSERT(num == kDCTBlockSize);
-      GetQuantWeightsDCT2(encoding.dct2weights, weights.data());
-      break;
-    }
-    case QuantEncoding::kQuantModeDCT4: {
-      JXL_ASSERT(num == kDCTBlockSize);
-      float weights4x4[3 * 4 * 4];
-      // Always use 4x4 GetQuantWeights for DCT4 quantization tables.
-      JXL_RETURN_IF_ERROR(
-          GetQuantWeights(4, 4, encoding.dct_params.distance_bands,
-                          encoding.dct_params.num_distance_bands, weights4x4));
-      for (size_t c = 0; c < 3; c++) {
-        for (size_t y = 0; y < kBlockDim; y++) {
-          for (size_t x = 0; x < kBlockDim; x++) {
-            weights[c * num + y * kBlockDim + x] =
-                weights4x4[c * 16 + (y / 2) * 4 + (x / 2)];
-          }
-        }
-        weights[c * num + 1] /= encoding.dct4multipliers[c][0];
-        weights[c * num + N] /= encoding.dct4multipliers[c][0];
-        weights[c * num + N + 1] /= encoding.dct4multipliers[c][1];
-      }
-      break;
-    }
-    case QuantEncoding::kQuantModeDCT4X8: {
-      JXL_ASSERT(num == kDCTBlockSize);
-      float weights4x8[3 * 4 * 8];
-      // Always use 4x8 GetQuantWeights for DCT4X8 quantization tables.
-      JXL_RETURN_IF_ERROR(
-          GetQuantWeights(4, 8, encoding.dct_params.distance_bands,
-                          encoding.dct_params.num_distance_bands, weights4x8));
-      for (size_t c = 0; c < 3; c++) {
-        for (size_t y = 0; y < kBlockDim; y++) {
-          for (size_t x = 0; x < kBlockDim; x++) {
-            weights[c * num + y * kBlockDim + x] =
-                weights4x8[c * 32 + (y / 2) * 8 + x];
-          }
-        }
-        weights[c * num + N] /= encoding.dct4x8multipliers[c];
-      }
       break;
     }
     case QuantEncoding::kQuantModeDCT: {
@@ -304,122 +211,6 @@ struct DequantMatricesLibraryDef {
                                                            6));
   }
 
-  // Identity
-  static constexpr const QuantEncodingInternal IDENTITY() {
-    return QuantEncodingInternal::Identity({{{{
-                                                 V(280.0),
-                                                 V(3160.0),
-                                                 V(3160.0),
-                                             }},
-                                             {{
-                                                 V(60.0),
-                                                 V(864.0),
-                                                 V(864.0),
-                                             }},
-                                             {{
-                                                 V(18.0),
-                                                 V(200.0),
-                                                 V(200.0),
-                                             }}}});
-  }
-
-  // DCT2
-  static constexpr const QuantEncodingInternal DCT2X2() {
-    return QuantEncodingInternal::DCT2({{{{
-                                             V(3840.0),
-                                             V(2560.0),
-                                             V(1280.0),
-                                             V(640.0),
-                                             V(480.0),
-                                             V(300.0),
-                                         }},
-                                         {{
-                                             V(960.0),
-                                             V(640.0),
-                                             V(320.0),
-                                             V(180.0),
-                                             V(140.0),
-                                             V(120.0),
-                                         }},
-                                         {{
-                                             V(640.0),
-                                             V(320.0),
-                                             V(128.0),
-                                             V(64.0),
-                                             V(32.0),
-                                             V(16.0),
-                                         }}}});
-  }
-
-  // DCT4 (quant_kind 3)
-  static constexpr const QuantEncodingInternal DCT4X4() {
-    return QuantEncodingInternal::DCT4(DctQuantWeightParams({{{{
-                                                                  V(2200.0),
-                                                                  V(0.0),
-                                                                  V(0.0),
-                                                                  V(0.0),
-                                                              }},
-                                                              {{
-                                                                  V(392.0),
-                                                                  V(0.0),
-                                                                  V(0.0),
-                                                                  V(0.0),
-                                                              }},
-                                                              {{
-                                                                  V(112.0),
-                                                                  V(-0.25),
-                                                                  V(-0.25),
-                                                                  V(-0.5),
-                                                              }}}},
-                                                            4),
-                                       /* kMul */
-                                       {{{{
-                                             V(1.0),
-                                             V(1.0),
-                                         }},
-                                         {{
-                                             V(1.0),
-                                             V(1.0),
-                                         }},
-                                         {{
-                                             V(1.0),
-                                             V(1.0),
-                                         }}}});
-  }
-
-  // DCT16
-  static constexpr const QuantEncodingInternal DCT16X16() {
-    return QuantEncodingInternal::DCT(
-        DctQuantWeightParams({{{{
-                                   V(8996.8725711814115328),
-                                   V(-1.3000777393353804),
-                                   V(-0.49424529824571225),
-                                   V(-0.439093774457103443),
-                                   V(-0.6350101832695744),
-                                   V(-0.90177264050827612),
-                                   V(-1.6162099239887414),
-                               }},
-                               {{
-                                   V(3191.48366296844234752),
-                                   V(-0.67424582104194355),
-                                   V(-0.80745813428471001),
-                                   V(-0.44925837484843441),
-                                   V(-0.35865440981033403),
-                                   V(-0.31322389111877305),
-                                   V(-0.37615025315725483),
-                               }},
-                               {{
-                                   V(1157.50408145487200256),
-                                   V(-2.0531423165804414),
-                                   V(-1.4),
-                                   V(-0.50687130033378396),
-                                   V(-0.42708730624733904),
-                                   V(-1.4856834539296244),
-                                   V(-4.9209142884401604),
-                               }}}},
-                             7));
-  }
-
   // DCT16X8
   static constexpr const QuantEncodingInternal DCT8X16() {
     return QuantEncodingInternal::DCT(
@@ -452,65 +243,18 @@ struct DequantMatricesLibraryDef {
                                }}}},
                              7));
   }
-
-  // DCT4X8 and 8x4
-  static constexpr const QuantEncodingInternal DCT4X8() {
-    return QuantEncodingInternal::DCT4X8(
-        DctQuantWeightParams({{
-                                 {{
-                                     V(2198.050556016380522),
-                                     V(-0.96269623020744692),
-                                     V(-0.76194253026666783),
-                                     V(-0.6551140670773547),
-                                 }},
-                                 {{
-                                     V(764.3655248643528689),
-                                     V(-0.92630200888366945),
-                                     V(-0.9675229603596517),
-                                     V(-0.27845290869168118),
-                                 }},
-                                 {{
-                                     V(527.107573587542228),
-                                     V(-1.4594385811273854),
-                                     V(-1.450082094097871593),
-                                     V(-1.5843722511996204),
-                                 }},
-                             }},
-                             4),
-        /* kMuls */
-        {{
-            V(1.0),
-            V(1.0),
-            V(1.0),
-        }});
-  }
-
 };
 }  // namespace
 
 const DequantMatrices::DequantLibraryInternal DequantMatrices::LibraryInit() {
-  static_assert(kNum == 7,
+  static_assert(kNum == 2,
                 "Update this function when adding new quantization kinds.");
-  static_assert(kNumPredefinedTables == 1,
-                "Update this function when adding new quantization matrices to "
-                "the library.");
-
   // The library and the indices need to be kept in sync manually.
   static_assert(0 == DCT, "Update the DequantLibrary array below.");
-  static_assert(1 == IDENTITY, "Update the DequantLibrary array below.");
-  static_assert(2 == DCT2X2, "Update the DequantLibrary array below.");
-  static_assert(3 == DCT4X4, "Update the DequantLibrary array below.");
-  static_assert(4 == DCT16X16, "Update the DequantLibrary array below.");
-  static_assert(5 == DCT8X16, "Update the DequantLibrary array below.");
-  static_assert(6 == DCT4X8, "Update the DequantLibrary array below.");
+  static_assert(1 == DCT8X16, "Update the DequantLibrary array below.");
   return DequantMatrices::DequantLibraryInternal{{
       DequantMatricesLibraryDef::DCT(),
-      DequantMatricesLibraryDef::IDENTITY(),
-      DequantMatricesLibraryDef::DCT2X2(),
-      DequantMatricesLibraryDef::DCT4X4(),
-      DequantMatricesLibraryDef::DCT16X16(),
       DequantMatricesLibraryDef::DCT8X16(),
-      DequantMatricesLibraryDef::DCT4X8(),
   }};
 }
 
