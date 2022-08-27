@@ -159,15 +159,9 @@ class DequantMatrices {
   };
 
   static constexpr QuantTable kQuantTable[] = {
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT8X16, QuantTable::DCT8X16, QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
-      QuantTable::DCT,     QuantTable::DCT,     QuantTable::DCT,
+      QuantTable::DCT,
+      QuantTable::DCT8X16,
+      QuantTable::DCT8X16,
   };
   static_assert(AcStrategy::kNumValidStrategies ==
                     sizeof(kQuantTable) / sizeof *kQuantTable,

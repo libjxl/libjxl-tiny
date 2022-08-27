@@ -146,7 +146,7 @@ Status ComputeQuantTable(const QuantEncoding& encoding,
   // slightly simpler.
   size_t xs = DequantMatrices::required_size_x[kind];
   size_t ys = DequantMatrices::required_size_y[kind];
-  CoefficientLayout(&ys, &xs);
+  if (ys > xs) std::swap(xs, ys);
   for (size_t c = 0; c < 3; c++) {
     for (size_t y = 0; y < ys; y++) {
       for (size_t x = 0; x < xs; x++) {

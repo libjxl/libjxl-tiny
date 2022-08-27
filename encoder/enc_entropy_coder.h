@@ -30,8 +30,7 @@ namespace jxl {
 // Generate DCT NxN quantized AC values tokens.
 // Only the subset "rect" [in units of blocks] within all images.
 // See also DecodeACVarBlock.
-void TokenizeCoefficients(const coeff_order_t* JXL_RESTRICT orders,
-                          const Rect& rect,
+void TokenizeCoefficients(const Rect& rect,
                           const int32_t* JXL_RESTRICT* JXL_RESTRICT ac_rows,
                           const AcStrategyImage& ac_strategy,
                           Image3I* JXL_RESTRICT tmp_num_nzeroes,
