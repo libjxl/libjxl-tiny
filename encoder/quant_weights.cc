@@ -7,331 +7,153 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <utility>
-
-#include "encoder/base/bits.h"
-#include "encoder/base/printf_macros.h"
-#include "encoder/base/status.h"
-#include "encoder/common.h"
-#include "encoder/image.h"
-
-#undef HWY_TARGET_INCLUDE
-#define HWY_TARGET_INCLUDE "encoder/quant_weights.cc"
-#include <hwy/foreach_target.h>
-#include <hwy/highway.h>
-
-#include "encoder/fast_math-inl.h"
-
-HWY_BEFORE_NAMESPACE();
-namespace jxl {
-namespace HWY_NAMESPACE {
-
-// These templates are not found via ADL.
-using hwy::HWY_NAMESPACE::Lt;
-using hwy::HWY_NAMESPACE::MulAdd;
-using hwy::HWY_NAMESPACE::Sqrt;
-
-// kQuantWeights[N * N * c + N * y + x] is the relative weight of the (x, y)
-// coefficient in component c. Higher weights correspond to finer quantization
-// intervals and more bits spent in encoding.
-
-static constexpr const float kAlmostZero = 1e-8f;
-
-float Mult(float v) {
-  if (v > 0.0f) return 1.0f + v;
-  return 1.0f / (1.0f - v);
-}
-
-using DF4 = HWY_CAPPED(float, 4);
-
-hwy::HWY_NAMESPACE::Vec<DF4> InterpolateVec(
-    hwy::HWY_NAMESPACE::Vec<DF4> scaled_pos, const float* array) {
-  HWY_CAPPED(int32_t, 4) di;
-
-  auto idx = ConvertTo(di, scaled_pos);
-
-  auto frac = Sub(scaled_pos, ConvertTo(DF4(), idx));
-
-  // TODO(veluca): in theory, this could be done with 8 TableLookupBytes, but
-  // it's probably slower.
-  auto a = GatherIndex(DF4(), array, idx);
-  auto b = GatherIndex(DF4(), array + 1, idx);
-
-  return Mul(a, FastPowf(DF4(), Div(b, a), frac));
-}
-
-// Computes quant weights for a COLS*ROWS-sized transform, using num_bands
-// eccentricity bands and num_ebands eccentricity bands. If print_mode is 1,
-// prints the resulting matrix; if print_mode is 2, prints the matrix in a
-// format suitable for a 3d plot with gnuplot.
-Status GetQuantWeights(
-    size_t ROWS, size_t COLS,
-    const DctQuantWeightParams::DistanceBandsArray& distance_bands,
-    size_t num_bands, float* out) {
-  for (size_t c = 0; c < 3; c++) {
-    float bands[DctQuantWeightParams::kMaxDistanceBands] = {
-        distance_bands[c][0]};
-    if (bands[0] < kAlmostZero) return JXL_FAILURE("Invalid distance bands");
-    for (size_t i = 1; i < num_bands; i++) {
-      bands[i] = bands[i - 1] * Mult(distance_bands[c][i]);
-      if (bands[i] < kAlmostZero) return JXL_FAILURE("Invalid distance bands");
-    }
-    static constexpr float kSqrt2 = 1.41421356237f;
-    float scale = (num_bands - 1) / (kSqrt2 + 1e-6f);
-    float rcpcol = scale / (COLS - 1);
-    float rcprow = scale / (ROWS - 1);
-    JXL_ASSERT(COLS >= Lanes(DF4()));
-    HWY_ALIGN float l0123[4] = {0, 1, 2, 3};
-    for (uint32_t y = 0; y < ROWS; y++) {
-      float dy = y * rcprow;
-      float dy2 = dy * dy;
-      for (uint32_t x = 0; x < COLS; x += Lanes(DF4())) {
-        auto dx =
-            Mul(Add(Set(DF4(), x), Load(DF4(), l0123)), Set(DF4(), rcpcol));
-        auto scaled_distance = Sqrt(MulAdd(dx, dx, Set(DF4(), dy2)));
-        auto weight = num_bands == 1 ? Set(DF4(), bands[0])
-                                     : InterpolateVec(scaled_distance, bands);
-        StoreU(weight, DF4(), out + c * COLS * ROWS + y * COLS + x);
-      }
-    }
-  }
-  return true;
-}
-
-// TODO(veluca): SIMD-fy. With 256x256, this is actually slow.
-Status ComputeQuantTable(const QuantEncoding& encoding,
-                         float* JXL_RESTRICT table,
-                         float* JXL_RESTRICT inv_table, size_t table_num,
-                         DequantMatrices::QuantTable kind, size_t* pos) {
-  size_t wrows = 8 * DequantMatrices::required_size_x[kind],
-         wcols = 8 * DequantMatrices::required_size_y[kind];
-  size_t num = wrows * wcols;
-
-  std::vector<float> weights(3 * num);
-
-  switch (encoding.mode) {
-    case QuantEncoding::kQuantModeLibrary: {
-      // Library and copy quant encoding should get replaced by the actual
-      // parameters by the caller.
-      JXL_ASSERT(false);
-      break;
-    }
-    case QuantEncoding::kQuantModeDCT: {
-      JXL_RETURN_IF_ERROR(GetQuantWeights(
-          wrows, wcols, encoding.dct_params.distance_bands,
-          encoding.dct_params.num_distance_bands, weights.data()));
-      break;
-    }
-  }
-  size_t prev_pos = *pos;
-  HWY_CAPPED(float, 64) d;
-  for (size_t i = 0; i < num * 3; i += Lanes(d)) {
-    auto inv_val = LoadU(d, weights.data() + i);
-    if (JXL_UNLIKELY(!AllFalse(d, Ge(inv_val, Set(d, 1.0f / kAlmostZero))) ||
-                     !AllFalse(d, Lt(inv_val, Set(d, kAlmostZero))))) {
-      return JXL_FAILURE("Invalid quantization table");
-    }
-    auto val = Div(Set(d, 1.0f), inv_val);
-    StoreU(val, d, table + *pos + i);
-    StoreU(inv_val, d, inv_table + *pos + i);
-  }
-  (*pos) += 3 * num;
-
-  // Ensure that the lowest frequencies have a 0 inverse table.
-  // This does not affect en/decoding, but allows AC strategy selection to be
-  // slightly simpler.
-  size_t xs = DequantMatrices::required_size_x[kind];
-  size_t ys = DequantMatrices::required_size_y[kind];
-  if (ys > xs) std::swap(xs, ys);
-  for (size_t c = 0; c < 3; c++) {
-    for (size_t y = 0; y < ys; y++) {
-      for (size_t x = 0; x < xs; x++) {
-        inv_table[prev_pos + c * ys * xs * kDCTBlockSize + y * kBlockDim * xs +
-                  x] = 0;
-      }
-    }
-  }
-  return true;
-}
-
-// NOLINTNEXTLINE(google-readability-namespace-comments)
-}  // namespace HWY_NAMESPACE
-}  // namespace jxl
-HWY_AFTER_NAMESPACE();
-
-#if HWY_ONCE
+#include <hwy/aligned_allocator.h>
 
 namespace jxl {
-namespace {
-
-HWY_EXPORT(ComputeQuantTable);
-
-}  // namespace
-
-// These definitions are needed before C++17.
-constexpr size_t DequantMatrices::required_size_[];
-constexpr size_t DequantMatrices::required_size_x[];
-constexpr size_t DequantMatrices::required_size_y[];
-constexpr DequantMatrices::QuantTable DequantMatrices::kQuantTable[];
-
-constexpr float V(float v) { return static_cast<float>(v); }
 
 namespace {
-struct DequantMatricesLibraryDef {
-  // DCT8
-  static constexpr const QuantEncodingInternal DCT() {
-    return QuantEncodingInternal::DCT(DctQuantWeightParams({{{{
-                                                                 V(3150.0),
-                                                                 V(0.0),
-                                                                 V(-0.4),
-                                                                 V(-0.4),
-                                                                 V(-0.4),
-                                                                 V(-2.0),
-                                                             }},
-                                                             {{
-                                                                 V(560.0),
-                                                                 V(0.0),
-                                                                 V(-0.3),
-                                                                 V(-0.3),
-                                                                 V(-0.3),
-                                                                 V(-0.3),
-                                                             }},
-                                                             {{
-                                                                 V(512.0),
-                                                                 V(-2.0),
-                                                                 V(-1.0),
-                                                                 V(0.0),
-                                                                 V(-1.0),
-                                                                 V(-2.0),
-                                                             }}}},
-                                                           6));
-  }
-
-  // DCT16X8
-  static constexpr const QuantEncodingInternal DCT8X16() {
-    return QuantEncodingInternal::DCT(
-        DctQuantWeightParams({{{{
-                                   V(7240.7734393502),
-                                   V(-0.7),
-                                   V(-0.7),
-                                   V(-0.2),
-                                   V(-0.2),
-                                   V(-0.2),
-                                   V(-0.5),
-                               }},
-                               {{
-                                   V(1448.15468787004),
-                                   V(-0.5),
-                                   V(-0.5),
-                                   V(-0.5),
-                                   V(-0.2),
-                                   V(-0.2),
-                                   V(-0.2),
-                               }},
-                               {{
-                                   V(506.854140754517),
-                                   V(-1.4),
-                                   V(-0.2),
-                                   V(-0.5),
-                                   V(-0.5),
-                                   V(-1.5),
-                                   V(-3.6),
-                               }}}},
-                             7));
-  }
+constexpr float kQuantWeights[] = {
+    3.1746033e-04, 3.1746057e-04, 3.1854658e-04, 3.7755401e-04, 4.4749113e-04,
+    5.3038419e-04, 6.2863121e-04, 7.4507861e-04, 3.1746057e-04, 3.1746062e-04,
+    3.3158599e-04, 3.8811122e-04, 4.5695182e-04, 5.3938502e-04, 6.3753547e-04,
+    7.5413194e-04, 3.1854658e-04, 3.3158599e-04, 3.6670428e-04, 4.1847790e-04,
+    4.8487642e-04, 5.6626293e-04, 6.6427846e-04, 7.8140449e-04, 3.7755401e-04,
+    3.8811122e-04, 4.1847790e-04, 4.6632939e-04, 5.3038419e-04, 6.1082945e-04,
+    7.0903177e-04, 8.2727504e-04, 4.4749113e-04, 4.5695182e-04, 4.8487642e-04,
+    5.3038419e-04, 5.9302151e-04, 6.7320757e-04, 7.7229418e-04, 9.4286882e-04,
+    5.3038419e-04, 5.3938502e-04, 5.6626293e-04, 6.1082945e-04, 6.7320757e-04,
+    7.5413194e-04, 8.5507357e-04, 1.2723245e-03, 6.2863121e-04, 6.3753547e-04,
+    6.6427846e-04, 7.0903177e-04, 7.7229418e-04, 8.5507357e-04, 1.1923184e-03,
+    1.7919940e-03, 7.4507861e-04, 7.5413194e-04, 7.8140449e-04, 8.2727504e-04,
+    9.4286882e-04, 1.2723245e-03, 1.7919940e-03, 2.6133191e-03, 1.7857145e-03,
+    1.7857157e-03, 1.7904768e-03, 2.0441783e-03, 2.3338278e-03, 2.6645192e-03,
+    3.0420676e-03, 3.4731133e-03, 1.7857157e-03, 1.7857160e-03, 1.8473724e-03,
+    2.0886122e-03, 2.3722122e-03, 2.6997121e-03, 3.0756146e-03, 3.5059757e-03,
+    1.7904768e-03, 1.8473724e-03, 1.9982266e-03, 2.2149722e-03, 2.4845072e-03,
+    2.8040458e-03, 3.1757555e-03, 3.6044519e-03, 2.0441783e-03, 2.0886122e-03,
+    2.2149722e-03, 2.4100873e-03, 2.6645192e-03, 2.9746795e-03, 3.3413812e-03,
+    3.7683977e-03, 2.3338278e-03, 2.3722122e-03, 2.4845072e-03, 2.6645192e-03,
+    2.9068382e-03, 3.2089923e-03, 3.5716419e-03, 3.9980840e-03, 2.6645192e-03,
+    2.6997121e-03, 2.8040458e-03, 2.9746795e-03, 3.2089923e-03, 3.5059757e-03,
+    3.8667743e-03, 4.2947000e-03, 3.0420676e-03, 3.0756146e-03, 3.1757555e-03,
+    3.3413812e-03, 3.5716419e-03, 3.8667743e-03, 4.2286036e-03, 4.6607289e-03,
+    3.4731133e-03, 3.5059757e-03, 3.6044519e-03, 3.7683977e-03, 3.9980840e-03,
+    4.2947000e-03, 4.6607289e-03, 5.1001739e-03, 1.9531252e-03, 3.4018266e-03,
+    5.9007513e-03, 8.3743408e-03, 1.1718751e-02, 1.1718759e-02, 1.1968765e-02,
+    1.6986061e-02, 3.4018266e-03, 4.2808522e-03, 6.4091417e-03, 8.8638803e-03,
+    1.1718752e-02, 1.1718759e-02, 1.2320629e-02, 1.7413978e-02, 5.9007513e-03,
+    6.4091417e-03, 7.8861341e-03, 1.0351914e-02, 1.1718754e-02, 1.1718762e-02,
+    1.3408982e-02, 1.8736197e-02, 8.3743408e-03, 8.8638803e-03, 1.0351914e-02,
+    1.1718752e-02, 1.1718759e-02, 1.1718766e-02, 1.5336527e-02, 2.1072537e-02,
+    1.1718751e-02, 1.1718752e-02, 1.1718754e-02, 1.1718759e-02, 1.1718764e-02,
+    1.3782934e-02, 1.8288977e-02, 2.5368163e-02, 1.1718759e-02, 1.1718759e-02,
+    1.1718762e-02, 1.1718766e-02, 1.3782934e-02, 1.7413978e-02, 2.2557227e-02,
+    3.4232263e-02, 1.1968765e-02, 1.2320629e-02, 1.3408982e-02, 1.5336527e-02,
+    1.8288977e-02, 2.2557227e-02, 3.2079678e-02, 4.8214123e-02, 1.6986061e-02,
+    1.7413978e-02, 1.8736197e-02, 2.1072537e-02, 2.5368163e-02, 3.4232263e-02,
+    4.8214123e-02, 7.0312120e-02, 1.3810680e-04, 1.6047071e-04, 1.8645605e-04,
+    2.1664926e-04, 2.5173181e-04, 2.9249521e-04, 3.3985957e-04, 3.9489369e-04,
+    4.1871337e-04, 4.4087201e-04, 4.6420316e-04, 4.8876996e-04, 5.1463587e-04,
+    5.4187077e-04, 5.7054684e-04, 6.0074159e-04, 1.9049694e-04, 1.9694651e-04,
+    2.1442315e-04, 2.4016941e-04, 2.7289384e-04, 3.1245520e-04, 3.5932945e-04,
+    4.0429863e-04, 4.2484730e-04, 4.4662904e-04, 4.6966935e-04, 4.9400958e-04,
+    5.1969837e-04, 5.4679497e-04, 5.7536521e-04, 6.0547784e-04, 2.6276117e-04,
+    2.6734054e-04, 2.8085473e-04, 3.0283103e-04, 3.3291124e-04, 3.7106971e-04,
+    4.0540050e-04, 4.2322354e-04, 4.4259510e-04, 4.6344541e-04, 4.8574654e-04,
+    5.0949713e-04, 5.3471868e-04, 5.6144706e-04, 5.8973121e-04, 6.1962701e-04,
+    3.6243827e-04, 3.6666830e-04, 3.7935356e-04, 3.9960333e-04, 4.0956112e-04,
+    4.2183659e-04, 4.3620329e-04, 4.5248115e-04, 4.7053859e-04, 4.9028790e-04,
+    5.1167433e-04, 5.3467450e-04, 5.5928703e-04, 5.8552966e-04, 6.1343284e-04,
+    6.4304151e-04, 4.3123538e-04, 4.3253010e-04, 4.3638589e-04, 4.4272337e-04,
+    4.5142765e-04, 4.6236772e-04, 4.7541404e-04, 4.9045112e-04, 5.0738233e-04,
+    5.2613625e-04, 5.4666388e-04, 5.6893763e-04, 5.9295003e-04, 6.1870721e-04,
+    6.4623309e-04, 6.7556335e-04, 4.8162136e-04, 4.8277923e-04, 4.8623976e-04,
+    4.9196521e-04, 4.9989921e-04, 5.0997391e-04, 5.2211789e-04, 5.3626322e-04,
+    5.5235048e-04, 5.7033246e-04, 5.9017621e-04, 6.1186077e-04, 6.3538179e-04,
+    6.6074729e-04, 6.8797835e-04, 7.5214857e-04, 5.3789350e-04, 5.3897168e-04,
+    5.4219965e-04, 5.4755906e-04, 5.5502116e-04, 5.6455150e-04, 5.7611306e-04,
+    5.8966759e-04, 6.0518348e-04, 6.2263483e-04, 6.4200454e-04, 6.6328526e-04,
+    6.8647927e-04, 7.3936180e-04, 8.0337300e-04, 8.7534159e-04, 6.0074159e-04,
+    6.0177385e-04, 6.0486794e-04, 6.1001495e-04, 6.1720144e-04, 6.2641077e-04,
+    6.3762552e-04, 6.5082888e-04, 6.6600717e-04, 6.8315107e-04, 7.1794738e-04,
+    7.6673855e-04, 8.2213664e-04, 8.8475435e-04, 9.5529074e-04, 1.0345384e-03,
+    6.9053401e-04, 7.7444571e-04, 8.6855399e-04, 9.7409816e-04, 1.0924696e-03,
+    1.2252233e-03, 1.3741088e-03, 1.5410866e-03, 1.7283577e-03, 1.9383827e-03,
+    2.1739292e-03, 2.3783136e-03, 2.5041751e-03, 2.6366978e-03, 2.7762330e-03,
+    2.9231580e-03, 8.8290084e-04, 9.0565201e-04, 9.6644071e-04, 1.0539154e-03,
+    1.1619731e-03, 1.2886107e-03, 1.4338633e-03, 1.5988132e-03, 1.7851711e-03,
+    1.9951246e-03, 2.2312698e-03, 2.4038092e-03, 2.5288085e-03, 2.6606584e-03,
+    2.7996788e-03, 2.9462043e-03, 1.1288587e-03, 1.1438611e-03, 1.1877866e-03,
+    1.2581701e-03, 1.3525900e-03, 1.4695247e-03, 1.6085195e-03, 1.7700332e-03,
+    1.9552717e-03, 2.1660449e-03, 2.3636019e-03, 2.4791702e-03, 2.6018962e-03,
+    2.7319542e-03, 2.8695827e-03, 3.0150530e-03, 1.4433329e-03, 1.4561869e-03,
+    1.4945272e-03, 1.5578135e-03, 1.6454635e-03, 1.7571596e-03, 1.8930284e-03,
+    2.0537286e-03, 2.2404641e-03, 2.3856999e-03, 2.4897642e-03, 2.6016813e-03,
+    2.7214440e-03, 2.8491386e-03, 2.9849128e-03, 3.1289863e-03, 1.8454153e-03,
+    1.8577600e-03, 1.8947916e-03, 1.9565322e-03, 2.0431101e-03, 2.1548597e-03,
+    2.2924175e-03, 2.3864941e-03, 2.4688798e-03, 2.5601350e-03, 2.6600207e-03,
+    2.7684029e-03, 2.8852450e-03, 3.0105773e-03, 3.1445161e-03, 3.2872346e-03,
+    2.3435291e-03, 2.3491632e-03, 2.3660017e-03, 2.3938618e-03, 2.4324679e-03,
+    2.4814904e-03, 2.5405819e-03, 2.6094120e-03, 2.6876912e-03, 2.7751899e-03,
+    2.8717481e-03, 2.9772632e-03, 3.0917146e-03, 3.2151414e-03, 3.3476453e-03,
+    3.4893905e-03, 2.6173447e-03, 2.6225911e-03, 2.6382981e-03, 2.6643763e-03,
+    2.7006865e-03, 2.7470603e-03, 2.8033180e-03, 2.8692731e-03, 2.9447721e-03,
+    3.0296890e-03, 3.1239407e-03, 3.2274905e-03, 3.3403505e-03, 3.4625907e-03,
+    3.5943130e-03, 3.7356857e-03, 2.9231580e-03, 2.9281813e-03, 2.9432368e-03,
+    2.9682817e-03, 3.0032503e-03, 3.0480621e-03, 3.1026325e-03, 3.1668788e-03,
+    3.2407353e-03, 3.3241559e-03, 3.4171303e-03, 3.5196650e-03, 3.6318223e-03,
+    3.7536959e-03, 3.8854245e-03, 4.0271855e-03, 1.9729543e-03, 2.5272998e-03,
+    3.2374004e-03, 4.1470206e-03, 4.8498721e-03, 5.1065302e-03, 5.3767711e-03,
+    5.6613120e-03, 6.3208523e-03, 7.0889443e-03, 7.9503711e-03, 8.9164926e-03,
+    9.9999988e-03, 1.1215170e-02, 1.2578006e-02, 1.5967883e-02, 3.3539708e-03,
+    3.5433732e-03, 4.0769530e-03, 4.7721486e-03, 4.9862624e-03, 5.2236770e-03,
+    5.4806760e-03, 5.8470899e-03, 6.5286267e-03, 7.2964565e-03, 8.1600742e-03,
+    9.1304630e-03, 1.0220082e-02, 1.1443083e-02, 1.2854187e-02, 1.6610704e-02,
+    4.9218577e-03, 4.9511627e-03, 5.0357706e-03, 5.1678251e-03, 5.3387447e-03,
+    5.5415547e-03, 5.8825868e-03, 6.4732647e-03, 7.1507092e-03, 7.9215374e-03,
+    8.7942975e-03, 9.7792931e-03, 1.0888627e-02, 1.2136214e-02, 1.4550334e-02,
+    1.8655479e-02, 5.4969229e-03, 5.5188821e-03, 5.5837538e-03, 5.6971479e-03,
+    6.0176966e-03, 6.4261849e-03, 6.9230762e-03, 7.5107799e-03, 8.1936987e-03,
+    8.9781955e-03, 9.8724691e-03, 1.0886625e-02, 1.2032620e-02, 1.4036770e-02,
+    1.7736901e-02, 2.2478340e-02, 6.7489492e-03, 6.7940955e-03, 6.9295247e-03,
+    7.1553192e-03, 7.4719470e-03, 7.8806318e-03, 8.3836997e-03, 8.9848433e-03,
+    9.6892491e-03, 1.0503774e-02, 1.1436986e-02, 1.2499244e-02, 1.4953869e-02,
+    1.8516723e-02, 2.3044668e-02, 2.8803868e-02, 8.6290650e-03, 8.6752698e-03,
+    8.8141672e-03, 9.0466458e-03, 9.3743140e-03, 9.7996546e-03, 1.0326200e-02,
+    1.0958694e-02, 1.1703256e-02, 1.2567491e-02, 1.4605597e-02, 1.7509630e-02,
+    2.1164555e-02, 2.5766177e-02, 3.1564441e-02, 4.4291977e-02, 1.1032925e-02,
+    1.1082166e-02, 1.1230315e-02, 1.1478675e-02, 1.1829470e-02, 1.2285955e-02,
+    1.2938387e-02, 1.4542448e-02, 1.6570158e-02, 1.9115077e-02, 2.2296766e-02,
+    2.6267400e-02, 3.1220267e-02, 4.1523870e-02, 5.6756895e-02, 7.8389272e-02,
+    1.5967883e-02, 1.6106272e-02, 1.6526788e-02, 1.7245775e-02, 1.8291343e-02,
+    1.9704822e-02, 2.1542856e-02, 2.3880199e-02, 2.6813647e-02, 3.0466938e-02,
+    3.7175436e-02, 4.7613274e-02, 6.1909460e-02, 8.1609353e-02, 1.0892317e-01,
+    1.4702357e-01,
 };
+constexpr size_t kTableSizeInBlocks[] = {1, 1, 1, 2, 2, 2, 2, 2, 2};
+constexpr size_t kTableOffsetInBlocks[] = {0, 1, 2, 3, 5, 7, 3, 5, 7};
+constexpr size_t kTotalTableSize = 9 * kDCTBlockSize;
 }  // namespace
-
-const DequantMatrices::DequantLibraryInternal DequantMatrices::LibraryInit() {
-  static_assert(kNum == 2,
-                "Update this function when adding new quantization kinds.");
-  // The library and the indices need to be kept in sync manually.
-  static_assert(0 == DCT, "Update the DequantLibrary array below.");
-  static_assert(1 == DCT8X16, "Update the DequantLibrary array below.");
-  return DequantMatrices::DequantLibraryInternal{{
-      DequantMatricesLibraryDef::DCT(),
-      DequantMatricesLibraryDef::DCT8X16(),
-  }};
-}
-
-const QuantEncoding* DequantMatrices::Library() {
-  static const DequantMatrices::DequantLibraryInternal kDequantLibrary =
-      DequantMatrices::LibraryInit();
-  // Downcast the result to a const QuantEncoding* from QuantEncodingInternal*
-  // since the subclass (QuantEncoding) doesn't add any new members and users
-  // will need to upcast to QuantEncodingInternal to access the members of that
-  // class.
-  return reinterpret_cast<const QuantEncoding*>(kDequantLibrary.data());
-}
 
 DequantMatrices::DequantMatrices() {
-  size_t pos = 0;
-  size_t offsets[kNum * 3];
-  for (size_t i = 0; i < size_t(QuantTable::kNum); i++) {
-    size_t num = required_size_[i] * kDCTBlockSize;
-    for (size_t c = 0; c < 3; c++) {
-      offsets[3 * i + c] = pos + c * num;
-    }
-    pos += 3 * num;
+  table_storage_ = hwy::AllocateAligned<float>(2 * kTotalTableSize);
+  memcpy(table_storage_.get(), kQuantWeights, sizeof(kQuantWeights));
+  float* inv_table = table_storage_.get() + kTotalTableSize;
+  for (size_t i = 0; i < kTotalTableSize; ++i) {
+    inv_table[i] = 1.0 / table_storage_[i];
   }
-  for (size_t i = 0; i < AcStrategy::kNumValidStrategies; i++) {
-    for (size_t c = 0; c < 3; c++) {
-      table_offsets_[i * 3 + c] = offsets[kQuantTable[i] * 3 + c];
-    }
-  }
-}
-
-Status DequantMatrices::EnsureComputed(uint32_t acs_mask) {
-  const QuantEncoding* library = Library();
-
-  if (!table_storage_) {
-    table_storage_ = hwy::AllocateAligned<float>(2 * kTotalTableSize);
-    table_ = table_storage_.get();
-    inv_table_ = table_storage_.get() + kTotalTableSize;
-  }
-
-  size_t offsets[kNum * 3 + 1];
-  size_t pos = 0;
-  for (size_t i = 0; i < kNum; i++) {
-    size_t num = required_size_[i] * kDCTBlockSize;
-    for (size_t c = 0; c < 3; c++) {
-      offsets[3 * i + c] = pos + c * num;
-    }
-    pos += 3 * num;
-  }
-  offsets[kNum * 3] = pos;
-  JXL_ASSERT(pos == kTotalTableSize);
-
-  uint32_t kind_mask = 0;
-  for (size_t i = 0; i < AcStrategy::kNumValidStrategies; i++) {
-    if (acs_mask & (1u << i)) {
-      kind_mask |= 1u << kQuantTable[i];
+  for (size_t i = 0, n = 0; i < AcStrategy::kNumValidStrategies; i++) {
+    for (size_t c = 0; c < 3; c++, n++) {
+      table_offsets_[n] = kTableOffsetInBlocks[n] * kDCTBlockSize;
+      for (size_t b = 0; b < kTableSizeInBlocks[n]; ++b) {
+        inv_table[table_offsets_[n] + b] = 0.0f;
+      }
     }
   }
-  uint32_t computed_kind_mask = 0;
-  for (size_t i = 0; i < AcStrategy::kNumValidStrategies; i++) {
-    if (computed_mask_ & (1u << i)) {
-      computed_kind_mask |= 1u << kQuantTable[i];
-    }
-  }
-  for (size_t table = 0; table < kNum; table++) {
-    if ((1 << table) & computed_kind_mask) continue;
-    if ((1 << table) & ~kind_mask) continue;
-    size_t pos = offsets[table * 3];
-    JXL_CHECK(HWY_DYNAMIC_DISPATCH(ComputeQuantTable)(
-        library[table], table_storage_.get(),
-        table_storage_.get() + kTotalTableSize, table, QuantTable(table),
-        &pos));
-    JXL_ASSERT(pos == offsets[table * 3 + 3]);
-  }
-  computed_mask_ |= acs_mask;
-
-  return true;
+  table_ = table_storage_.get();
+  inv_table_ = inv_table;
 }
 
 }  // namespace jxl
-#endif
