@@ -12,7 +12,7 @@
 
 #include "encoder/base/status.h"
 #include "encoder/convolve.h"
-#include "encoder/image_ops.h"
+#include "encoder/image.h"
 
 namespace jxl {
 

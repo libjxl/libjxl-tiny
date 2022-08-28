@@ -15,7 +15,6 @@
 
 #include "encoder/base/sanitizer_definitions.h"
 #include "encoder/common.h"
-#include "encoder/image_ops.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -46,7 +45,7 @@ size_t BytesPerRow(const size_t xsize, const size_t sizeof_t) {
   size_t valid_bytes = xsize * sizeof_t;
 
   // Allow unaligned accesses starting at the last valid value - this may raise
-  // msan errors unless the user calls InitializePaddingForUnalignedAccesses.
+  // msan errors.
   // Skip for the scalar case because no extra lanes will be loaded.
   if (vec_size != 0) {
     valid_bytes += vec_size - sizeof_t;

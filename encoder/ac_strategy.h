@@ -14,7 +14,7 @@
 
 #include "encoder/base/status.h"
 #include "encoder/common.h"
-#include "encoder/image_ops.h"
+#include "encoder/image.h"
 
 // Defines the different kinds of transforms, and heuristics to choose between
 // them.

@@ -15,7 +15,7 @@
 #include <string.h>
 
 #include <algorithm>
-#include <sstream>
+#include <limits>
 #include <utility>  // std::move
 
 #include "encoder/base/cache_aligned.h"
@@ -151,10 +151,6 @@ class Plane : public PlaneBase {
   Plane(const size_t xsize, const size_t ysize)
       : PlaneBase(xsize, ysize, sizeof(T)) {}
 
-  void InitializePaddingForUnalignedAccesses() {
-    InitializePadding(sizeof(T), Padding::kUnaligned);
-  }
-
   JXL_INLINE T* Row(const size_t y) { return static_cast<T*>(VoidRow(y)); }
 
   // Returns pointer to const (see above).
@@ -222,37 +218,6 @@ class RectT {
   RectT(const RectT&) = default;
   RectT& operator=(const RectT&) = default;
 
-  // Construct a subrect that resides in an image/plane/ImageBundle etc.
-  template <typename ImageT>
-  RectT Crop(const ImageT& image) const {
-    return Intersection(RectT(image));
-  }
-
-  // Construct a subrect that resides in the [0, ysize) x [0, xsize) region of
-  // the current rect.
-  RectT Crop(size_t area_xsize, size_t area_ysize) const {
-    return Intersection(RectT(0, 0, area_xsize, area_ysize));
-  }
-
-  // Returns a rect that only contains `num` lines with offset `y` from `y0()`.
-  RectT Lines(size_t y, size_t num) const {
-    JXL_DASSERT(y + num <= ysize_);
-    return RectT(x0_, y0_ + y, xsize_, num);
-  }
-
-  RectT Line(size_t y) const { return Lines(y, 1); }
-
-  JXL_MUST_USE_RESULT RectT Intersection(const RectT& other) const {
-    return RectT(std::max(x0_, other.x0_), std::max(y0_, other.y0_), xsize_,
-                 ysize_, std::min(x1(), other.x1()),
-                 std::min(y1(), other.y1()));
-  }
-
-  JXL_MUST_USE_RESULT RectT Translate(int64_t x_offset,
-                                      int64_t y_offset) const {
-    return RectT(x0_ + x_offset, y0_ + y_offset, xsize_, ysize_);
-  }
-
   template <typename V>
   V* Row(Plane<V>* image, size_t y) const {
     JXL_DASSERT(y + y0_ >= 0);
@@ -283,50 +248,12 @@ class RectT {
     return image.ConstPlaneRow(c, y + y0_) + x0_;
   }
 
-  bool IsInside(const RectT& other) const {
-    return x0_ >= other.x0() && x1() <= other.x1() && y0_ >= other.y0() &&
-           y1() <= other.y1();
-  }
-
-  // Returns true if this Rect fully resides in the given image. ImageT could be
-  // Plane<T> or Image3<T>; however if ImageT is Rect, results are nonsensical.
-  template <class ImageT>
-  bool IsInside(const ImageT& image) const {
-    return IsInside(RectT(image));
-  }
-
   T x0() const { return x0_; }
   T y0() const { return y0_; }
   size_t xsize() const { return xsize_; }
   size_t ysize() const { return ysize_; }
   T x1() const { return x0_ + xsize_; }
   T y1() const { return y0_ + ysize_; }
-
-  RectT<T> ShiftLeft(size_t shiftx, size_t shifty) const {
-    return RectT<T>(x0_ * (1 << shiftx), y0_ * (1 << shifty), xsize_ << shiftx,
-                    ysize_ << shifty);
-  }
-  RectT<T> ShiftLeft(size_t shift) const { return ShiftLeft(shift, shift); }
-
-  // Requires x0(), y0() to be multiples of 1<<shiftx, 1<<shifty.
-  RectT<T> CeilShiftRight(size_t shiftx, size_t shifty) const {
-    JXL_ASSERT(x0_ % (1 << shiftx) == 0);
-    JXL_ASSERT(y0_ % (1 << shifty) == 0);
-    return RectT<T>(x0_ / (1 << shiftx), y0_ / (1 << shifty),
-                    DivCeil(xsize_, T{1} << shiftx),
-                    DivCeil(ysize_, T{1} << shifty));
-  }
-  RectT<T> CeilShiftRight(std::pair<size_t, size_t> shift) const {
-    return CeilShiftRight(shift.first, shift.second);
-  }
-  RectT<T> CeilShiftRight(size_t shift) const {
-    return CeilShiftRight(shift, shift);
-  }
-
-  template <typename U>
-  RectT<U> As() const {
-    return RectT<U>(U(x0_), U(y0_), U(xsize_), U(ysize_));
-  }
 
  private:
   // Returns size_max, or whatever is left in [begin, end).
@@ -481,6 +408,172 @@ using Image3U = Image3<uint16_t>;
 using Image3I = Image3<int32_t>;
 using Image3F = Image3<float>;
 using Image3D = Image3<double>;
+
+template <typename T>
+void CopyImageTo(const Plane<T>& from, Plane<T>* JXL_RESTRICT to) {
+  JXL_ASSERT(SameSize(from, *to));
+  if (from.ysize() == 0 || from.xsize() == 0) return;
+  for (size_t y = 0; y < from.ysize(); ++y) {
+    const T* JXL_RESTRICT row_from = from.ConstRow(y);
+    T* JXL_RESTRICT row_to = to->Row(y);
+    memcpy(row_to, row_from, from.xsize() * sizeof(T));
+  }
+}
+
+// DEPRECATED - prefer to preallocate result.
+template <typename T>
+Plane<T> CopyImage(const Plane<T>& from) {
+  Plane<T> to(from.xsize(), from.ysize());
+  CopyImageTo(from, &to);
+  return to;
+}
+
+template <typename T, typename U>
+void ConvertPlaneAndClamp(const Rect& rect_from, const Plane<T>& from,
+                          const Rect& rect_to, Plane<U>* JXL_RESTRICT to) {
+  JXL_ASSERT(SameSize(rect_from, rect_to));
+  using M = decltype(T() + U());
+  for (size_t y = 0; y < rect_to.ysize(); ++y) {
+    const T* JXL_RESTRICT row_from = rect_from.ConstRow(from, y);
+    U* JXL_RESTRICT row_to = rect_to.Row(to, y);
+    for (size_t x = 0; x < rect_to.xsize(); ++x) {
+      row_to[x] =
+          std::min<M>(std::max<M>(row_from[x], std::numeric_limits<U>::min()),
+                      std::numeric_limits<U>::max());
+    }
+  }
+}
+
+template <typename T>
+void FillImage(const T value, Plane<T>* image) {
+  for (size_t y = 0; y < image->ysize(); ++y) {
+    T* const JXL_RESTRICT row = image->Row(y);
+    for (size_t x = 0; x < image->xsize(); ++x) {
+      row[x] = value;
+    }
+  }
+}
+
+template <typename T>
+void ZeroFillImage(Plane<T>* image) {
+  if (image->xsize() == 0) return;
+  for (size_t y = 0; y < image->ysize(); ++y) {
+    T* const JXL_RESTRICT row = image->Row(y);
+    memset(row, 0, image->xsize() * sizeof(T));
+  }
+}
+
+// Mirrors out of bounds coordinates and returns valid coordinates unchanged.
+// We assume the radius (distance outside the image) is small compared to the
+// image size, otherwise this might not terminate.
+// The mirror is outside the last column (border pixel is also replicated).
+static inline int64_t Mirror(int64_t x, const int64_t xsize) {
+  JXL_DASSERT(xsize != 0);
+
+  // TODO(janwas): replace with branchless version
+  while (x < 0 || x >= xsize) {
+    if (x < 0) {
+      x = -x - 1;
+    } else {
+      x = 2 * xsize - 1 - x;
+    }
+  }
+  return x;
+}
+
+// Wrap modes for ensuring X/Y coordinates are in the valid range [0, size):
+
+// Mirrors (repeating the edge pixel once). Useful for convolutions.
+struct WrapMirror {
+  JXL_INLINE int64_t operator()(const int64_t coord, const int64_t size) const {
+    return Mirror(coord, size);
+  }
+};
+
+// Returns the same coordinate: required for TFNode with Border(), or useful
+// when we know "coord" is already valid (e.g. interior of an image).
+struct WrapUnchanged {
+  JXL_INLINE int64_t operator()(const int64_t coord, int64_t /*size*/) const {
+    return coord;
+  }
+};
+
+// Similar to Wrap* but for row pointers (reduces Row() multiplications).
+
+class WrapRowMirror {
+ public:
+  template <class ImageOrView>
+  WrapRowMirror(const ImageOrView& image, size_t ysize)
+      : first_row_(image.ConstRow(0)), last_row_(image.ConstRow(ysize - 1)) {}
+
+  const float* operator()(const float* const JXL_RESTRICT row,
+                          const int64_t stride) const {
+    if (row < first_row_) {
+      const int64_t num_before = first_row_ - row;
+      // Mirrored; one row before => row 0, two before = row 1, ...
+      return first_row_ + num_before - stride;
+    }
+    if (row > last_row_) {
+      const int64_t num_after = row - last_row_;
+      // Mirrored; one row after => last row, two after = last - 1, ...
+      return last_row_ - num_after + stride;
+    }
+    return row;
+  }
+
+ private:
+  const float* const JXL_RESTRICT first_row_;
+  const float* const JXL_RESTRICT last_row_;
+};
+
+struct WrapRowUnchanged {
+  JXL_INLINE const float* operator()(const float* const JXL_RESTRICT row,
+                                     int64_t /*stride*/) const {
+    return row;
+  }
+};
+
+template <typename T>
+void FillPlane(const T value, Plane<T>* image) {
+  for (size_t y = 0; y < image->ysize(); ++y) {
+    T* JXL_RESTRICT row = image->Row(y);
+    for (size_t x = 0; x < image->xsize(); ++x) {
+      row[x] = value;
+    }
+  }
+}
+
+template <typename T>
+void FillPlane(const T value, Plane<T>* image, Rect rect) {
+  for (size_t y = 0; y < rect.ysize(); ++y) {
+    T* JXL_RESTRICT row = rect.Row(image, y);
+    for (size_t x = 0; x < rect.xsize(); ++x) {
+      row[x] = value;
+    }
+  }
+}
+
+template <typename T>
+void ZeroFillImage(Image3<T>* image) {
+  for (size_t c = 0; c < 3; ++c) {
+    for (size_t y = 0; y < image->ysize(); ++y) {
+      T* JXL_RESTRICT row = image->PlaneRow(c, y);
+      if (image->xsize() != 0) memset(row, 0, image->xsize() * sizeof(T));
+    }
+  }
+}
+
+template <typename T>
+void ZeroFillPlane(Plane<T>* image, Rect rect) {
+  for (size_t y = 0; y < rect.ysize(); ++y) {
+    T* JXL_RESTRICT row = rect.Row(image, y);
+    memset(row, 0, rect.xsize() * sizeof(T));
+  }
+}
+
+// Same as above, but operates in-place. Assumes that the `in` image was
+// allocated large enough.
+void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in);
 
 }  // namespace jxl
 
