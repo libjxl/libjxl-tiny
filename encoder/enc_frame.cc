@@ -378,8 +378,6 @@ Status EncodeFrame(const float distance, const Image3F& linear,
 
   // Initialize quant weights and compute X quant matrix scale.
   DequantMatrices matrices;
-  constexpr uint32_t kAcStrategyMask = 0x30df;  // up to 16x16 DCT
-  JXL_CHECK(matrices.EnsureComputed(kAcStrategyMask));
   float x_qm_multiplier = std::pow(1.25f, x_qm_scale - 2.0f);
 
   // Apply inverse-gaborish.
@@ -418,10 +416,10 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     const Rect r = block_rect(group_index, xsize_dc_groups, kGroupDim);
     dc_tokens[group_index].reserve(3 * r.xsize() * r.ysize());
     Image3I quant_dc(r.xsize(), r.ysize());
-    const float y_dc_step = matrices.DCQuant(1) / qscales.scale_dc;
+    const float y_dc_step = kDCQuant[1] / qscales.scale_dc;
     for (size_t c : {1, 0, 2}) {
       const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
-      float inv_factor = matrices.InvDCQuant(c) * qscales.scale_dc;
+      float inv_factor = kInvDCQuant[c] * qscales.scale_dc;
       float cfl_factor = c == 1 ? 0.0f : cmap.DCFactors()[c] * y_dc_step;
       for (size_t y = 0; y < r.ysize(); y++) {
         const float* row = r.ConstPlaneRow(dc, c, y);
