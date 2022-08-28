@@ -5,11 +5,9 @@
 # https://developers.google.com/open-source/licenses/bsd
 
 add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
-  ac_strategy.cc
   base/cache_aligned.cc
   base/data_parallel.cc
   base/padded_bytes.cc
-  cmdline.cc
   convolve_symmetric5.cc
   dct_scales.cc
   enc_ac_strategy.cc
@@ -23,7 +21,6 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_frame.cc
   enc_group.cc
   enc_xyb.cc
-  file_io.cc
   gaborish.cc
   image.cc
   quant_weights.cc
@@ -31,7 +28,7 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
 )
 target_compile_options(jxl_tiny PUBLIC "${JPEGXL_INTERNAL_FLAGS}")
 target_include_directories(jxl_tiny PUBLIC "${PROJECT_SOURCE_DIR}")
-target_link_libraries(jxl_tiny hwy)
+target_link_libraries(jxl_tiny hwy pthread)
 
 
 add_executable(cjxl_tiny cjxl_main.cc)
