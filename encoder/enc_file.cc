@@ -11,6 +11,7 @@
 
 #include <vector>
 
+#include "encoder/base/data_parallel.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_frame.h"
 #include "encoder/image.h"
@@ -135,7 +136,8 @@ bool EncodeFile(const Image3F& input, float distance,
   writer.ZeroPadToByte();
   allotment.Reclaim(&writer);
 
-  JXL_RETURN_IF_ERROR(EncodeFrame(distance, input, nullptr, &writer));
+  ThreadPool pool;
+  JXL_RETURN_IF_ERROR(EncodeFrame(distance, input, &pool, &writer));
 
   PaddedBytes compressed;
   compressed = std::move(writer).TakeBytes();

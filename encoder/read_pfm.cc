@@ -6,8 +6,11 @@
 
 #include "encoder/read_pfm.h"
 
+#include <limits.h>
+
+#include <vector>
+
 #include "encoder/base/byte_order.h"
-#include "encoder/file_io.h"
 
 namespace jxl {
 
@@ -142,11 +145,38 @@ class Parser {
   const uint8_t* const end_;
 };
 
+bool ReadFile(const char* filename, std::vector<uint8_t>* out) {
+  FILE* file = fopen(filename, "rb");
+  if (!file) {
+    return false;
+  }
+  if (fseek(file, 0, SEEK_END) != 0) {
+    fclose(file);
+    return false;
+  }
+  long size = ftell(file);
+  // Avoid invalid file or directory.
+  if (size >= LONG_MAX || size < 0) {
+    fclose(file);
+    return false;
+  }
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    return false;
+  }
+  out->resize(size);
+  size_t readsize = fread(out->data(), 1, size, file);
+  if (fclose(file) != 0) {
+    return false;
+  }
+  return readsize == static_cast<size_t>(size);
+}
+
 }  // namespace
 
 bool ReadPFM(const char* fn, Image3F* image) {
   std::vector<uint8_t> data;
-  if (!jpegxl::tools::ReadFile(fn, &data)) {
+  if (!ReadFile(fn, &data)) {
     fprintf(stderr, "Could not read %s\n", fn);
     return false;
   }
