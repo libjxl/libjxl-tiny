@@ -416,17 +416,18 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     const Rect r = block_rect(group_index, xsize_dc_groups, kGroupDim);
     dc_tokens[group_index].reserve(3 * r.xsize() * r.ysize());
     Image3I quant_dc(r.xsize(), r.ysize());
-    const float y_dc_step = kDCQuant[1] / qscales.scale_dc;
     for (size_t c : {1, 0, 2}) {
       const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
       float inv_factor = kInvDCQuant[c] * qscales.scale_dc;
-      float cfl_factor = c == 1 ? 0.0f : cmap.DCFactors()[c] * y_dc_step;
+      float cfl_factor = cmap.DCFactors()[c] * kInvDCQuant[c] * kDCQuant[1];
       for (size_t y = 0; y < r.ysize(); y++) {
         const float* row = r.ConstPlaneRow(dc, c, y);
         const int32_t* qrow_y = quant_dc.PlaneRow(1, y);
         int32_t* qrow = quant_dc.PlaneRow(c, y);
         for (size_t x = 0; x < r.xsize(); x++) {
-          qrow[x] = roundf((row[x] - qrow_y[x] * cfl_factor) * inv_factor);
+          float val = row[x] * inv_factor;
+          if (c != 1) val -= qrow_y[x] * cfl_factor;
+          qrow[x] = roundf(val);
           int64_t left = (x ? qrow[x - 1] : y ? *(qrow + x - onerow) : 0);
           int64_t top = (y ? *(qrow + x - onerow) : left);
           int64_t topleft = (x && y ? *(qrow + x - 1 - onerow) : left);

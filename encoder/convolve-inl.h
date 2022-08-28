@@ -15,7 +15,7 @@
 
 #include "encoder/base/data_parallel.h"
 #include "encoder/base/status.h"
-#include "encoder/image_ops.h"
+#include "encoder/image.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {

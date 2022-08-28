@@ -25,41 +25,6 @@ namespace {
 // ensures there were no 7-bit transmission limitations.
 static constexpr uint8_t kCodestreamMarker = 0x0A;
 
-struct Rational {
-  constexpr explicit Rational(uint32_t num, uint32_t den)
-      : num(num), den(den) {}
-
-  // Returns floor(multiplicand * rational).
-  constexpr uint32_t MulTruncate(uint32_t multiplicand) const {
-    return uint64_t(multiplicand) * num / den;
-  }
-
-  uint32_t num;
-  uint32_t den;
-};
-
-Rational FixedAspectRatios(uint32_t ratio) {
-  JXL_ASSERT(0 != ratio && ratio < 8);
-  // Other candidates: 5/4, 7/5, 14/9, 16/10, 5/3, 21/9, 12/5
-  constexpr Rational kRatios[7] = {Rational(1, 1),    // square
-                                   Rational(12, 10),  //
-                                   Rational(4, 3),    // camera
-                                   Rational(3, 2),    // mobile camera
-                                   Rational(16, 9),   // camera/display
-                                   Rational(5, 4),    //
-                                   Rational(2, 1)};   //
-  return kRatios[ratio - 1];
-}
-
-uint32_t FindAspectRatio(uint32_t xsize, uint32_t ysize) {
-  for (uint32_t r = 1; r < 8; ++r) {
-    if (xsize == FixedAspectRatios(r).MulTruncate(ysize)) {
-      return r;
-    }
-  }
-  return 0;  // Must send xsize instead
-}
-
 void WriteSize(uint32_t size, BitWriter* writer) {
   size -= 1;
   uint32_t kBits[4] = {9, 13, 18, 30};
@@ -71,7 +36,6 @@ void WriteSize(uint32_t size, BitWriter* writer) {
     }
   }
 }
-}  // namespace
 
 Status WriteSizeHeader(size_t xsize64, size_t ysize64, BitWriter* writer) {
   if (xsize64 > 0x3FFFFFFFull || ysize64 > 0x3FFFFFFFull) {
@@ -79,26 +43,14 @@ Status WriteSizeHeader(size_t xsize64, size_t ysize64, BitWriter* writer) {
   }
   const uint32_t xsize32 = static_cast<uint32_t>(xsize64);
   const uint32_t ysize32 = static_cast<uint32_t>(ysize64);
-
-  uint32_t ratio = FindAspectRatio(xsize32, ysize32);
-  bool small = (ysize64 <= 256 && (ysize64 % 8) == 0 &&
-                (ratio != 0 || (xsize64 <= 256 && (xsize64 % 8) == 0)));
-  writer->Write(1, small);
-  if (small) {
-    writer->Write(5, ysize32 / 8 - 1);
-  } else {
-    WriteSize(ysize32, writer);
-  }
-  writer->Write(3, ratio);
-  if (ratio == 0) {
-    if (small) {
-      writer->Write(5, xsize32 / 8 - 1);
-    } else {
-      WriteSize(xsize32, writer);
-    }
-  }
+  writer->Write(1, 0);  // small
+  WriteSize(ysize32, writer);
+  writer->Write(3, 0);  // ratio
+  WriteSize(xsize32, writer);
   return true;
 }
+
+}  // namespace
 
 bool EncodeFile(const Image3F& input, float distance,
                 std::vector<uint8_t>* output) {

@@ -25,7 +25,6 @@
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/image.h"
-#include "encoder/image_ops.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {

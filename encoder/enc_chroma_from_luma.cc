@@ -22,7 +22,7 @@
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/enc_transforms-inl.h"
-#include "encoder/image_ops.h"
+#include "encoder/image.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
