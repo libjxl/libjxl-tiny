@@ -1,31 +1,23 @@
 # JPEG XL reference implementation
 
-[![Build/Test](https://github.com/libjxl/libjxl/actions/workflows/build_test.yml/badge.svg)](
-https://github.com/libjxl/libjxl/actions/workflows/build_test.yml)
-[![Build/Test Cross](https://github.com/libjxl/libjxl/actions/workflows/build_test_cross.yml/badge.svg)](
-https://github.com/libjxl/libjxl/actions/workflows/build_test_cross.yml)
-[![Conformance](https://github.com/libjxl/libjxl/actions/workflows/conformance.yml/badge.svg)](
-https://github.com/libjxl/libjxl/actions/workflows/conformance.yml)
-[![CIFuzz](https://github.com/libjxl/libjxl/actions/workflows/fuzz.yml/badge.svg)](
-https://github.com/libjxl/libjxl/actions/workflows/fuzz.yml)
-[![Releases](https://github.com/libjxl/libjxl/actions/workflows/release.yaml/badge.svg)](
-https://github.com/libjxl/libjxl/actions/workflows/release.yaml)
-[![Doc](https://readthedocs.org/projects/libjxl/badge/?version=latest)](
-https://libjxl.readthedocs.io/en/latest/?badge=latest)
-[![codecov](https://codecov.io/gh/libjxl/libjxl/branch/main/graph/badge.svg)](
-https://codecov.io/gh/libjxl/libjxl)
+[![Build/Test](https://github.com/libjxl/libjxl-tiny/actions/workflows/build_test.yml/badge.svg)](
+https://github.com/libjxl/libjxl-tiny/actions/workflows/build_test.yml)
 
 <img src="doc/jxl.svg" width="100" align="right" alt="JXL logo">
 
-This repository contains a reference implementation of JPEG XL (encoder and
-decoder), called `libjxl`. This software library is
-[used by many applications that support JPEG XL](doc/software_support.md).
+This repository contains a simpler encoder implementation of JPEG XL, aimed at
+photographic images without an alpha channel. The goal is to guide hardware
+implementations of the encoder where support for the full set of encoding tools
+is not feasible. The color management is outside the scope of this library, the
+encoder input is given as a portable float map (PFM) in the linear sRGB
+colorspace, where individual sample values can be outside the [0.0, 1.0] range
+for out-of-gammut colors.
 
 JPEG XL is in the final stages of standardization and its codestream and file format
 are frozen.
 
 The library API, command line options, and tools in this repository are subject
-to change, however files encoded with `cjxl` conform to the JPEG XL format
+to change, however files encoded with `cjxl_tiny` conform to the JPEG XL format
 specification and can be decoded with current and future `djxl` decoders or
 `libjxl` decoding library.
 
@@ -36,7 +28,7 @@ For more details and other workflows see the "Advanced guide" below.
 ### Checking out the code
 
 ```bash
-git clone https://github.com/libjxl/libjxl.git --recursive --shallow-submodules
+git clone https://github.com/libjxl/libjxl-tiny.git --recursive --shallow-submodules
 ```
 
 This repository uses git submodules to handle some third party dependencies
@@ -49,7 +41,7 @@ git submodule update --init --recursive --depth 1 --recommend-shallow
 
 The `--shallow-submodules` and `--depth 1 --recommend-shallow` options create
 shallow clones which only downloads the commits requested, and is all that is
-needed to build `libjxl`. Should full clones be necessary, you could always run:
+needed to build `libjxl-tiny`. Should full clones be necessary, you could always run:
 
 ```bash
 git submodule foreach git fetch --unshallow
@@ -69,14 +61,7 @@ Required dependencies for compiling the code, in a Debian/Ubuntu based
 distribution run:
 
 ```bash
-sudo apt install cmake pkg-config libbrotli-dev
-```
-
-Optional dependencies for supporting other formats in the `cjxl`/`djxl` tools,
-in a Debian/Ubuntu based distribution run:
-
-```bash
-sudo apt install libgif-dev libjpeg-dev libopenexr-dev libpng-dev libwebp-dev
+sudo apt install cmake pkg-config
 ```
 
 We recommend using a recent Clang compiler (version 7 or newer), for that
@@ -90,14 +75,14 @@ export CC=clang CXX=clang++
 ### Building
 
 ```bash
-cd libjxl
+cd libjxl-tiny
 mkdir build
 cd build
 cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF ..
 cmake --build . -- -j$(nproc)
 ```
 
-The encoder/decoder tools will be available in the `build/tools` directory.
+The encoder tool `cjxl_tiny` will be available in the `build/encoder` directory.
 
 ### <a name="installing"></a> Installing
 
@@ -105,35 +90,15 @@ The encoder/decoder tools will be available in the `build/tools` directory.
 sudo cmake --install .
 ```
 
-### Basic encoder/decoder
+### Basic encoder
 
 To encode a source image to JPEG XL with default settings:
 
 ```bash
-build/tools/cjxl input.png output.jxl
+build/encoder/cjxl_tiny input.pfm output.jxl
 ```
 
-For more settings run `build/tools/cjxl --help` or for a full list of options
-run `build/tools/cjxl -v -v --help`.
-
-To decode a JPEG XL file run:
-
-```bash
-build/tools/djxl input.jxl output.png
-```
-
-When possible `cjxl`/`djxl` are able to read/write the following
-image formats: .exr, .gif, .jpeg/.jpg, .pfm, .pgm/.ppm, .pgx, .png.
-
-### Benchmarking
-
-For speed benchmarks on single images in single or multi-threaded decoding
-`djxl` can print decoding speed information. See `djxl --help` for details
-on the decoding options and note that the output image is optional for
-benchmarking purposes.
-
-For more comprehensive benchmarking options, see the
-[benchmarking guide](doc/benchmarking.md).
+For more settings run `build/encoder/cjxl_tiny --help`
 
 ## Advanced guide
 
@@ -182,11 +147,6 @@ format: Cloudinary and Google.
 
 *   [More information on testing/build options](doc/building_and_testing.md)
 *   [Git guide for JPEG XL](doc/developing_in_github.md) - for developers
-*   [Fuzzing](doc/fuzzing.md) - for developers
-*   [Building Web Assembly artifacts](doc/building_wasm.md)
-*   [Test coverage on Codecov.io](https://app.codecov.io/gh/libjxl/libjxl) - for
-    developers
-*   [libjxl documentation on readthedocs.io](https://libjxl.readthedocs.io/)
 
 ### Contact
 
