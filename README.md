@@ -1,4 +1,4 @@
-# JPEG XL reference implementation
+# Simple JPEG XL encoder implementation
 
 [![Build/Test](https://github.com/libjxl/libjxl-tiny/actions/workflows/build_test.yml/badge.svg)](
 https://github.com/libjxl/libjxl-tiny/actions/workflows/build_test.yml)
