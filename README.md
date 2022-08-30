@@ -11,7 +11,7 @@ implementations of the encoder where support for the full set of encoding tools
 is not feasible. The color management is outside the scope of this library, the
 encoder input is given as a portable float map (PFM) in the linear sRGB
 colorspace, where individual sample values can be outside the [0.0, 1.0] range
-for out-of-gammut colors.
+for out-of-gammut colors. For more details, see [the overview of the coding tools](doc/coding_tools.md).
 
 JPEG XL is in the final stages of standardization and its codestream and file format
 are frozen.
