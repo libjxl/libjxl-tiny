@@ -54,8 +54,14 @@ Status WriteSizeHeader(size_t xsize64, size_t ysize64, BitWriter* writer) {
 
 bool EncodeFile(const Image3F& input, float distance,
                 std::vector<uint8_t>* output) {
-  if (distance < 0.01) {
-    return JXL_FAILURE("Butteraugli distance is too low (%f)", distance);
+  if (distance < 0.0) {
+    return JXL_FAILURE("Invalid butteraugli distance (%f)", distance);
+  } else if (distance == 0.0) {
+    return JXL_FAILURE("Lossless compression is not supported.");
+  } else if (distance <= 0.03) {
+    // Distance where the average BPP is still slightly smaller on photographs
+    // than for lossless JPEG XL.
+    distance = 0.03;
   }
   if (input.xsize() == 0 || input.ysize() == 0) {
     return JXL_FAILURE("Empty image");

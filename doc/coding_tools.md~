@@ -1,5 +1,0 @@
-# Coding tools used in tiny encoder
-
-The data dependency flow chart of the encoder is shown below.
-
-<img src="data_flow.svg" align="center" alt="Data Flow Chart">
