@@ -129,6 +129,7 @@ QuantScales ComputeQuantScales(float distance) {
   constexpr float kQuantFieldTarget = 5;
   float quant_dc = QuantDC(distance);
   float scale = kGlobalScaleDenom * kAcQuant / (distance * kQuantFieldTarget);
+  scale = Clamp1(scale, 1.0f, 1.0f * (1 << 15));
   int scaled_quant_dc =
       static_cast<int>(quant_dc * kGlobalScaleNumerator * 1.6);
   QuantScales quant;
@@ -377,7 +378,7 @@ Status ComputeACMetadataTokens(const ColorCorrelationMap& cmap,
                    compute_ac_meta_tokens, "Compute AC Metadata tokens");
 }
 
-void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
+void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters, bool gaborish,
                       BitWriter* writer) {
   BitWriter::Allotment allotment(writer, 1024);
   writer->Write(1, 0);    // not all default
@@ -397,8 +398,8 @@ void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
     writer->Write(1, 1);  // default loop filter
   } else {
     writer->Write(1, 0);  // not default loop filter
-    writer->Write(1, 1);  // gaborish on
-    writer->Write(1, 0);  // default gaborish
+    writer->Write(1, gaborish);
+    if (gaborish) writer->Write(1, 0);  // default gaborish
     writer->Write(2, epf_iters);
     if (epf_iters > 0) {
       writer->Write(1, 0);  // default epf sharpness
@@ -518,7 +519,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   // Write frame header.
   uint32_t x_qm_scale = ComputeXQuantScale(distance);
   uint32_t epf_iters = ComputeNumEpfIters(distance);
-  WriteFrameHeader(x_qm_scale, epf_iters, writer);
+  bool gaborish = distance >= 0.1;
+  WriteFrameHeader(x_qm_scale, epf_iters, gaborish, writer);
 
   // Transform image to XYB colorspace.
   Image3F opsin(dim.xsize_blocks * kBlockDim, dim.ysize_blocks * kBlockDim);
@@ -537,8 +539,10 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   DequantMatrices matrices;
   float x_qm_mul = std::pow(1.25f, x_qm_scale - 2.0f);
 
-  // Apply inverse-gaborish.
-  GaborishInverse(&opsin, 0.9908511000000001f, pool);
+  if (gaborish) {
+    // Apply inverse-gaborish.
+    GaborishInverse(&opsin, 0.9908511000000001f, pool);
+  }
 
   // Compute per-tile color correlation values.
   ColorCorrelationMap cmap(dim.xsize, dim.ysize);
