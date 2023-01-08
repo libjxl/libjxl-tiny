@@ -4,6 +4,8 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
+find_package(Threads REQUIRED)
+
 add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   base/cache_aligned.cc
   base/data_parallel.cc
@@ -27,7 +29,7 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
 )
 target_compile_options(jxl_tiny PUBLIC "${JPEGXL_INTERNAL_FLAGS}")
 target_include_directories(jxl_tiny PUBLIC "${PROJECT_SOURCE_DIR}")
-target_link_libraries(jxl_tiny hwy pthread)
+target_link_libraries(jxl_tiny hwy Threads::Threads)
 
 
 add_executable(cjxl_tiny cjxl_main.cc)
