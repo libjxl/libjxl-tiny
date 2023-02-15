@@ -8,22 +8,22 @@
 #define ENCODER_ENC_AC_STRATEGY_H_
 
 #include "encoder/ac_strategy.h"
-#include "encoder/base/data_parallel.h"
 #include "encoder/base/status.h"
-#include "encoder/chroma_from_luma.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
 
 namespace jxl {
 
-Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
-                              const ColorCorrelationMap& cmap,
-                              const ImageF& quant_field,
-                              const ImageF& masking_field, ThreadPool* pool,
-                              const DequantMatrices& matrices,
-                              AcStrategyImage* ac_strategy);
+void FindBest16x16Transform(const Image3F& opsin, const Rect& block_rect,
+                            size_t bx, size_t by, size_t cx, size_t cy,
+                            float distance, const DequantMatrices& matrices,
+                            const ImageF& qf, const ImageF& maskf, int8_t ytox,
+                            int8_t ytob,
+                            AcStrategyImage* JXL_RESTRICT ac_strategy,
+                            float* block, float* scratch_space);
 
-void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field);
+void AdjustQuantField(const AcStrategyImage& ac_strategy,
+                      const Rect& block_rect, ImageB* quant_field);
 
 }  // namespace jxl
 

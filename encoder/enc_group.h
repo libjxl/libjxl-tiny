@@ -10,21 +10,19 @@
 #include <stddef.h>
 
 #include "encoder/ac_strategy.h"
-#include "encoder/base/data_parallel.h"
-#include "encoder/base/status.h"
-#include "encoder/chroma_from_luma.h"
+#include "encoder/dc_group_data.h"
+#include "encoder/enc_bit_writer.h"
+#include "encoder/entropy_code.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
-#include "encoder/token.h"
 
 namespace jxl {
 
-Status ComputeCoefficients(const Image3F& opsin, const ImageI& raw_quant_field,
-                           const DequantMatrices& matrices, const float scale,
-                           const ColorCorrelationMap& cmap,
-                           const AcStrategyImage& ac_strategy,
-                           const float x_qm_mul, ThreadPool* pool, Image3F* dc,
-                           std::vector<std::vector<Token>>* ac_tokens);
+void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
+                  const DequantMatrices& matrices, const float scale,
+                  const float scale_dc, const uint32_t x_qm_scale,
+                  DCGroupData* dc_data, const EntropyCode& ac_code,
+                  BitWriter* writer);
 
 }  // namespace jxl
 

@@ -15,70 +15,28 @@
 #include <queue>
 #include <tuple>
 
-#undef HWY_TARGET_INCLUDE
-#define HWY_TARGET_INCLUDE "encoder/enc_cluster.cc"
-#include <hwy/foreach_target.h>
-#include <hwy/highway.h>
+#include "encoder/enc_huffman_tree.h"
 
-#include "encoder/fast_math-inl.h"
-HWY_BEFORE_NAMESPACE();
 namespace jxl {
-namespace HWY_NAMESPACE {
+namespace {
 
-// These templates are not found via ADL.
-using hwy::HWY_NAMESPACE::Eq;
-using hwy::HWY_NAMESPACE::IfThenZeroElse;
-
-template <class V>
-V Entropy(V count, V inv_total, V total) {
-  const HWY_CAPPED(float, Histogram::kRounding) d;
-  const auto zero = Set(d, 0.0f);
-  // TODO(eustas): why (0 - x) instead of Neg(x)?
-  return IfThenZeroElse(
-      Eq(count, total),
-      Sub(zero, Mul(count, FastLog2f(d, Mul(inv_total, count)))));
-}
-
-void HistogramEntropy(const Histogram& a) {
-  a.entropy_ = 0.0f;
-  if (a.total_count_ == 0) return;
-
-  const HWY_CAPPED(float, Histogram::kRounding) df;
-  const HWY_CAPPED(int32_t, Histogram::kRounding) di;
-
-  const auto inv_tot = Set(df, 1.0f / a.total_count_);
-  auto entropy_lanes = Zero(df);
-  auto total = Set(df, a.total_count_);
-
-  for (size_t i = 0; i < a.data_.size(); i += Lanes(di)) {
-    const auto counts = LoadU(di, &a.data_[i]);
-    entropy_lanes =
-        Add(entropy_lanes, Entropy(ConvertTo(df, counts), inv_tot, total));
+void HistogramBitCost(const Histogram& a) {
+  a.bit_cost = 0;
+  if (a.total_count == 0) return;
+  uint8_t depths[kAlphabetSize];
+  CreateHuffmanTree(a.counts, kAlphabetSize, 15, depths);
+  for (size_t i = 0; i < kAlphabetSize; ++i) {
+    a.bit_cost += a.counts[i] * depths[i];
   }
-  a.entropy_ += GetLane(SumOfLanes(df, entropy_lanes));
 }
 
 float HistogramDistance(const Histogram& a, const Histogram& b) {
-  if (a.total_count_ == 0 || b.total_count_ == 0) return 0;
-
-  const HWY_CAPPED(float, Histogram::kRounding) df;
-  const HWY_CAPPED(int32_t, Histogram::kRounding) di;
-
-  const auto inv_tot = Set(df, 1.0f / (a.total_count_ + b.total_count_));
-  auto distance_lanes = Zero(df);
-  auto total = Set(df, a.total_count_ + b.total_count_);
-
-  for (size_t i = 0; i < std::max(a.data_.size(), b.data_.size());
-       i += Lanes(di)) {
-    const auto a_counts =
-        a.data_.size() > i ? LoadU(di, &a.data_[i]) : Zero(di);
-    const auto b_counts =
-        b.data_.size() > i ? LoadU(di, &b.data_[i]) : Zero(di);
-    const auto counts = ConvertTo(df, Add(a_counts, b_counts));
-    distance_lanes = Add(distance_lanes, Entropy(counts, inv_tot, total));
-  }
-  const float total_distance = GetLane(SumOfLanes(df, distance_lanes));
-  return total_distance - a.entropy_ - b.entropy_;
+  if (a.total_count == 0 || b.total_count == 0) return 0;
+  Histogram combined;
+  combined.AddHistogram(a);
+  combined.AddHistogram(b);
+  HistogramBitCost(combined);
+  return combined.bit_cost - a.bit_cost - b.bit_cost;
 }
 
 // First step of a k-means clustering with a fancy distance metric.
@@ -93,13 +51,13 @@ void FastClusterHistograms(const std::vector<Histogram>& in,
   std::vector<float> dists(in.size(), std::numeric_limits<float>::max());
   size_t largest_idx = 0;
   for (size_t i = 0; i < in.size(); i++) {
-    if (in[i].total_count_ == 0) {
+    if (in[i].total_count == 0) {
       (*histogram_symbols)[i] = 0;
       dists[i] = 0.0f;
       continue;
     }
-    HistogramEntropy(in[i]);
-    if (in[i].total_count_ > in[largest_idx].total_count_) {
+    HistogramBitCost(in[i]);
+    if (in[i].total_count > in[largest_idx].total_count) {
       largest_idx = i;
     }
   }
@@ -130,21 +88,11 @@ void FastClusterHistograms(const std::vector<Histogram>& in,
       }
     }
     (*out)[best].AddHistogram(in[i]);
-    HistogramEntropy((*out)[best]);
+    HistogramBitCost((*out)[best]);
     (*histogram_symbols)[i] = best;
   }
 }
 
-// NOLINTNEXTLINE(google-readability-namespace-comments)
-}  // namespace HWY_NAMESPACE
-}  // namespace jxl
-HWY_AFTER_NAMESPACE();
-
-#if HWY_ONCE
-namespace jxl {
-HWY_EXPORT(FastClusterHistograms);  // Local function
-
-namespace {
 // -----------------------------------------------------------------------------
 // Histogram refinement
 
@@ -175,17 +123,15 @@ void HistogramReindex(const std::vector<uint32_t>& symbols,
 void ClusterHistograms(std::vector<Histogram>* histograms,
                        std::vector<uint8_t>* context_map) {
   if (histograms->size() <= 1) return;
-  static const size_t kClustersLimit = 128;
+  static const size_t kClustersLimit = 8;
   size_t max_histograms = std::min(kClustersLimit, histograms->size());
 
   std::vector<Histogram> in(*histograms);
   std::vector<uint32_t> histogram_symbols;
-  HWY_DYNAMIC_DISPATCH(FastClusterHistograms)
-  (in, max_histograms, histograms, &histogram_symbols);
+  FastClusterHistograms(in, max_histograms, histograms, &histogram_symbols);
 
   // Convert the context map to a canonical form.
   HistogramReindex(histogram_symbols, histograms, context_map);
 }
 
 }  // namespace jxl
-#endif  // HWY_ONCE
