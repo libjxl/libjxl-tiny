@@ -27,17 +27,19 @@
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
+#include "encoder/dc_group_data.h"
 #include "encoder/enc_ac_strategy.h"
 #include "encoder/enc_adaptive_quantization.h"
-#include "encoder/enc_ans.h"
 #include "encoder/enc_bit_writer.h"
 #include "encoder/enc_chroma_from_luma.h"
 #include "encoder/enc_cluster.h"
+#include "encoder/enc_entropy_code.h"
 #include "encoder/enc_group.h"
 #include "encoder/enc_xyb.h"
-#include "encoder/gaborish.h"
+#include "encoder/entropy_code.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
+#include "encoder/static_entropy_codes.h"
 
 namespace jxl {
 namespace {
@@ -82,31 +84,35 @@ struct ImageDim {
   ImageDim(size_t xs, size_t ys)
       : xsize(xs),
         ysize(ys),
-        xsize_blocks(DivCeil(xs, kBlockDim)),
-        ysize_blocks(DivCeil(ys, kBlockDim)),
+        xsize_blocks(DivCeil(xsize, kBlockDim)),
+        ysize_blocks(DivCeil(ysize, kBlockDim)),
+        xsize_tiles(DivCeil(xsize, kColorTileDim)),
+        ysize_tiles(DivCeil(ysize, kColorTileDim)),
         xsize_groups(DivCeil(xsize, kGroupDim)),
         ysize_groups(DivCeil(ysize, kGroupDim)),
-        xsize_dc_groups(DivCeil(xsize_blocks, kGroupDim)),
-        ysize_dc_groups(DivCeil(ysize_blocks, kGroupDim)),
+        xsize_dc_groups(DivCeil(xsize, kDCGroupDim)),
+        ysize_dc_groups(DivCeil(ysize, kDCGroupDim)),
         num_groups(xsize_groups * ysize_groups),
         num_dc_groups(xsize_dc_groups * ysize_dc_groups) {}
 
-  Rect DCBlockRect(size_t idx) const {
-    return Rect((idx % xsize_dc_groups) * kGroupDim,
-                (idx / xsize_dc_groups) * kGroupDim, kGroupDim, kGroupDim,
-                xsize_blocks, ysize_blocks);
+  Rect PixelRect(size_t ix, size_t iy, size_t dim) const {
+    return Rect(ix * dim, iy * dim, dim, dim, xsize, ysize);
   }
 
-  Rect BlockRect(size_t idx) const {
-    return Rect((idx % xsize_groups) * kGroupDimInBlocks,
-                (idx / xsize_groups) * kGroupDimInBlocks, kGroupDimInBlocks,
-                kGroupDimInBlocks, xsize_blocks, ysize_blocks);
+  Rect BlockRect(size_t ix, size_t iy, size_t dim) const {
+    return Rect(ix * dim, iy * dim, dim, dim, xsize_blocks, ysize_blocks);
+  }
+
+  Rect TileRect(size_t ix, size_t iy, size_t dim) const {
+    return Rect(ix * dim, iy * dim, dim, dim, xsize_tiles, ysize_tiles);
   }
 
   const size_t xsize;
   const size_t ysize;
   const size_t xsize_blocks;
   const size_t ysize_blocks;
+  const size_t xsize_tiles;
+  const size_t ysize_tiles;
   const size_t xsize_groups;
   const size_t ysize_groups;
   const size_t xsize_dc_groups;
@@ -119,6 +125,7 @@ struct QuantScales {
   int global_scale;
   int quant_dc;
   float scale;
+  float inv_scale;
   float scale_dc;
 };
 
@@ -135,6 +142,7 @@ QuantScales ComputeQuantScales(float distance) {
   QuantScales quant;
   quant.global_scale = Clamp1(static_cast<int>(scale), 1, scaled_quant_dc);
   quant.scale = quant.global_scale * (1.0f / kGlobalScaleDenom);
+  quant.inv_scale = 1.0f / quant.scale;
   quant.quant_dc = static_cast<int>(quant_dc / quant.scale + 0.5f);
   quant.quant_dc = Clamp1(quant.quant_dc, 1, 1 << 16);
   quant.scale_dc = quant.quant_dc * quant.scale;
@@ -270,115 +278,97 @@ static constexpr int64_t kGradRangeMid = 512;
 static constexpr int64_t kGradRangeMax = 1023;
 static constexpr size_t kNumDCContexts = 45;
 
-Status ComputeDCTokens(const Image3F& dc, const ColorCorrelationMap& cmap,
-                       const ImageDim& dim, const float scale_dc,
-                       ThreadPool* pool,
-                       std::vector<std::vector<Token>>* dc_tokens) {
-  auto compute_dc_tokens = [&](int group_index, int /* thread */) {
-    const Rect r = dim.DCBlockRect(group_index);
-    (*dc_tokens)[group_index].reserve(3 * r.xsize() * r.ysize());
-    Image3I quant_dc(r.xsize(), r.ysize());
-    for (size_t c : {1, 0, 2}) {
-      const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
-      float inv_factor = kInvDCQuant[c] * scale_dc;
-      float cfl_factor = cmap.DCFactors()[c] * kInvDCQuant[c] * kDCQuant[1];
-      for (size_t y = 0; y < r.ysize(); y++) {
-        const float* row = r.ConstPlaneRow(dc, c, y);
-        const int32_t* qrow_y = quant_dc.PlaneRow(1, y);
-        int32_t* qrow = quant_dc.PlaneRow(c, y);
-        for (size_t x = 0; x < r.xsize(); x++) {
-          float val = row[x] * inv_factor;
-          if (c != 1) val -= qrow_y[x] * cfl_factor;
-          qrow[x] = roundf(val);
-          int64_t left = (x ? qrow[x - 1] : y ? *(qrow + x - onerow) : 0);
-          int64_t top = (y ? *(qrow + x - onerow) : left);
-          int64_t topleft = (x && y ? *(qrow + x - 1 - onerow) : left);
-          int32_t guess = ClampedGradient(top, left, topleft);
-          uint32_t gradprop = Clamp1(kGradRangeMid + top + left - topleft,
-                                     kGradRangeMin, kGradRangeMax);
-          int32_t residual = qrow[x] - guess;
-          uint32_t ctx_id = kGradientContextLut[gradprop];
-          (*dc_tokens)[group_index].push_back(
-              Token(ctx_id, PackSigned(residual)));
-        }
-      }
-    }
-  };
-  return RunOnPool(pool, 0, dim.num_dc_groups, ThreadPool::NoInit,
-                   compute_dc_tokens, "Compute DC tokens");
-}
-
-Status ComputeACMetadataTokens(const ColorCorrelationMap& cmap,
-                               const AcStrategyImage& ac_strategy,
-                               const ImageI& raw_quant_field,
-                               const ImageDim& dim, ThreadPool* pool,
-                               std::vector<std::vector<Token>>* ac_meta_tokens,
-                               std::vector<size_t>* num_ac_blocks) {
-  auto compute_ac_meta_tokens = [&](int group_index, int /* thread */) {
-    const Rect r = dim.DCBlockRect(group_index);
-    Rect cr(r.x0() >> 3, r.y0() >> 3, (r.xsize() + 7) >> 3,
-            (r.ysize() + 7) >> 3);
-    // YtoX and YtoB tokens.
-    for (size_t c = 0; c < 2; ++c) {
-      const ImageSB& cfl_map = (c == 0 ? cmap.ytox_map : cmap.ytob_map);
-      ImageI cfl_imap(cr.xsize(), cr.ysize());
-      ConvertPlaneAndClamp(cr, cfl_map, Rect(cfl_imap), &cfl_imap);
-      const intptr_t onerow = cfl_imap.PixelsPerRow();
-      for (size_t y = 0; y < cr.ysize(); y++) {
-        const int32_t* row = cfl_imap.ConstRow(y);
-        for (size_t x = 0; x < cr.xsize(); x++) {
-          int64_t left = (x ? row[x - 1] : y ? *(row + x - onerow) : 0);
-          int64_t top = (y ? *(row + x - onerow) : left);
-          int64_t topleft = (x && y ? *(row + x - 1 - onerow) : left);
-          int32_t guess = ClampedGradient(top, left, topleft);
-          int32_t residual = row[x] - guess;
-          uint32_t ctx_id = 2u - c;
-          Token token(ctx_id, PackSigned(residual));
-          (*ac_meta_tokens)[group_index].push_back(token);
-        }
-      }
-    }
-    // Ac strategy tokens.
-    size_t num = 0;
-    int32_t left = 0;
-    for (size_t y = 0; y < r.ysize(); y++) {
-      AcStrategyRow row_acs = ac_strategy.ConstRow(r, y);
-      for (size_t x = 0; x < r.xsize(); x++) {
-        if (!row_acs[x].IsFirstBlock()) continue;
-        int32_t cur = row_acs[x].StrategyCode();
-        uint32_t ctx_id = (left > 11 ? 7 : left > 5 ? 8 : left > 3 ? 9 : 10);
-        Token token(ctx_id, PackSigned(cur));
-        (*ac_meta_tokens)[group_index].push_back(token);
-        left = cur;
-        num++;
-      }
-    }
-    (*num_ac_blocks)[group_index] = num;
-    // Quant field tokens.
-    left = ac_strategy.ConstRow(r, 0)[0].StrategyCode();
-    for (size_t y = 0; y < r.ysize(); y++) {
-      AcStrategyRow row_acs = ac_strategy.ConstRow(r, y);
-      const int32_t* row_qf = r.ConstRow(raw_quant_field, y);
-      for (size_t x = 0; x < r.xsize(); x++) {
-        if (!row_acs[x].IsFirstBlock()) continue;
-        size_t cur = row_qf[x] - 1;
-        int32_t residual = cur - left;
-        uint32_t ctx_id = (left > 11 ? 3 : left > 5 ? 4 : left > 3 ? 5 : 6);
+void WriteDCTokens(const Image3S& quant_dc, const EntropyCode& dc_code,
+                   BitWriter* writer) {
+  const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
+  for (size_t c : {1, 0, 2}) {
+    for (size_t y = 0; y < quant_dc.ysize(); y++) {
+      for (size_t x = 0; x < quant_dc.xsize(); x++) {
+        const int16_t* qrow = quant_dc.PlaneRow(c, y);
+        int64_t left = (x ? qrow[x - 1] : y ? *(qrow + x - onerow) : 0);
+        int64_t top = (y ? *(qrow + x - onerow) : left);
+        int64_t topleft = (x && y ? *(qrow + x - 1 - onerow) : left);
+        int32_t guess = ClampedGradient(top, left, topleft);
+        uint32_t gradprop = Clamp1(kGradRangeMid + top + left - topleft,
+                                   kGradRangeMin, kGradRangeMax);
+        int32_t residual = qrow[x] - guess;
+        uint32_t ctx_id = kGradientContextLut[gradprop];
         Token token(ctx_id, PackSigned(residual));
-        (*ac_meta_tokens)[group_index].push_back(token);
-        left = cur;
+        WriteToken(token, dc_code, writer);
       }
     }
-    // EPF tokens.
-    for (size_t i = 0; i < r.ysize() * r.xsize(); ++i) {
-      (*ac_meta_tokens)[group_index].push_back(Token(0, PackSigned(4)));
-    }
-  };
-  return RunOnPool(pool, 0, dim.num_dc_groups, ThreadPool::NoInit,
-                   compute_ac_meta_tokens, "Compute AC Metadata tokens");
+  }
 }
 
-void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters, bool gaborish,
+size_t CountACBlocks(const AcStrategyImage& ac_strategy) {
+  size_t num = 0;
+  for (size_t y = 0; y < ac_strategy.ysize(); y++) {
+    AcStrategyRow row_acs = ac_strategy.ConstRow(y);
+    for (size_t x = 0; x < ac_strategy.xsize(); x++) {
+      if (row_acs[x].IsFirstBlock()) ++num;
+    }
+  }
+  return num;
+}
+
+void WriteACMetadataTokens(const ImageSB& ytox_map, const ImageSB& ytob_map,
+                           const AcStrategyImage& ac_strategy,
+                           const ImageB& raw_quant_field,
+                           const EntropyCode& dc_code, BitWriter* writer) {
+  // YtoX and YtoB tokens.
+  for (size_t c = 0; c < 2; ++c) {
+    const ImageSB& cfl_map = (c == 0 ? ytox_map : ytob_map);
+    const intptr_t onerow = cfl_map.PixelsPerRow();
+    for (size_t y = 0; y < cfl_map.ysize(); y++) {
+      const int8_t* row = cfl_map.ConstRow(y);
+      for (size_t x = 0; x < cfl_map.xsize(); x++) {
+        int64_t left = (x ? row[x - 1] : y ? *(row + x - onerow) : 0);
+        int64_t top = (y ? *(row + x - onerow) : left);
+        int64_t topleft = (x && y ? *(row + x - 1 - onerow) : left);
+        int32_t guess = ClampedGradient(top, left, topleft);
+        int32_t residual = static_cast<int32_t>(row[x]) - guess;
+        uint32_t ctx_id = 2u - c;
+        Token token(ctx_id, PackSigned(residual));
+        WriteToken(token, dc_code, writer);
+      }
+    }
+  }
+  // Ac strategy tokens.
+  int32_t left = 0;
+  for (size_t y = 0; y < ac_strategy.ysize(); y++) {
+    AcStrategyRow row_acs = ac_strategy.ConstRow(y);
+    for (size_t x = 0; x < ac_strategy.xsize(); x++) {
+      if (!row_acs[x].IsFirstBlock()) continue;
+      int32_t cur = row_acs[x].StrategyCode();
+      uint32_t ctx_id = (left > 11 ? 7 : left > 5 ? 8 : left > 3 ? 9 : 10);
+      Token token(ctx_id, PackSigned(cur));
+      WriteToken(token, dc_code, writer);
+      left = cur;
+    }
+  }
+  // Quant field tokens.
+  left = ac_strategy.ConstRow(0)[0].StrategyCode();
+  for (size_t y = 0; y < ac_strategy.ysize(); y++) {
+    AcStrategyRow row_acs = ac_strategy.ConstRow(y);
+    const uint8_t* row_qf = raw_quant_field.ConstRow(y);
+    for (size_t x = 0; x < ac_strategy.xsize(); x++) {
+      if (!row_acs[x].IsFirstBlock()) continue;
+      size_t cur = row_qf[x] - 1;
+      int32_t residual = cur - left;
+      uint32_t ctx_id = (left > 11 ? 3 : left > 5 ? 4 : left > 3 ? 5 : 6);
+      Token token(ctx_id, PackSigned(residual));
+      WriteToken(token, dc_code, writer);
+      left = cur;
+    }
+  }
+  // EPF tokens.
+  for (size_t i = 0; i < ac_strategy.ysize() * ac_strategy.xsize(); ++i) {
+    Token token(0, PackSigned(4));
+    WriteToken(token, dc_code, writer);
+  }
+}
+
+void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters,
                       BitWriter* writer) {
   BitWriter::Allotment allotment(writer, 1024);
   writer->Write(1, 0);    // not all default
@@ -398,8 +388,7 @@ void WriteFrameHeader(uint32_t x_qm_scale, uint32_t epf_iters, bool gaborish,
     writer->Write(1, 1);  // default loop filter
   } else {
     writer->Write(1, 0);  // not default loop filter
-    writer->Write(1, gaborish);
-    if (gaborish) writer->Write(1, 0);  // default gaborish
+    writer->Write(1, 0);  // no gaborish
     writer->Write(2, epf_iters);
     if (epf_iters > 0) {
       writer->Write(1, 0);  // default epf sharpness
@@ -440,73 +429,222 @@ void WriteQuantScales(int global_scale, int quant_dc, BitWriter* writer) {
   }
 }
 
-void WriteContextMap(const std::vector<uint8_t>& context_map,
-                     BitWriter* writer) {
-  if (context_map.empty()) {
-    return;
-  }
-  if (*std::max_element(context_map.begin(), context_map.end()) == 0) {
-    writer->AllocateAndWrite(3, 1);  // simple code, 0 bits per entry
-    return;
-  }
-  writer->AllocateAndWrite(3, 0);  // no simple code, no MTF, no LZ77
-  std::vector<Token> tokens;
-  for (size_t i = 0; i < context_map.size(); i++) {
-    tokens.emplace_back(0, context_map[i]);
-  }
-  EntropyEncodingData codes;
-  std::vector<uint8_t> dummy_context_map(1);
-  WriteHistograms(BuildHistograms(1, tokens), &codes, writer);
-  WriteTokens(tokens, codes, dummy_context_map, writer);
-}
-
 void WriteContextTree(size_t num_dc_groups, BitWriter* writer) {
   std::vector<Token> tokens(kContextTreeTokens,
                             kContextTreeTokens + kNumContextTreeTokens);
   tokens[1].value = PackSigned(1 + num_dc_groups);
-  EntropyEncodingData codes;
-  std::vector<uint8_t> context_map;
-  auto histograms = BuildHistograms(kNumTreeContexts, tokens);
-  ClusterHistograms(&histograms, &context_map);
+  EntropyCode code(kContextTreeContextMap, kNumTreeContexts, nullptr,
+                   kNumContextTreePrefixCodes);
+  OptimizePrefixCodes(tokens, &code);
   writer->AllocateAndWrite(1, 1);  // not an empty tree
   writer->AllocateAndWrite(1, 0);  // no lz77
-  WriteContextMap(context_map, writer);
-  WriteHistograms(histograms, &codes, writer);
-  WriteTokens(tokens, codes, context_map, writer);
+  WriteEntropyCode(code, writer);
+  for (const Token& t : tokens) {
+    WriteToken(t, code, writer);
+  }
 }
 
-void WriteDCGlobal(const QuantScales& qscales, const ColorCorrelationMap& cmap,
-                   const size_t num_dc_groups,
-                   const std::vector<std::vector<Token>>& dc_tokens,
-                   const std::vector<std::vector<Token>>& ac_meta_tokens,
-                   EntropyEncodingData* dc_code,
-                   std::vector<uint8_t>* dc_context_map,
-                   BitWriter* group_writer) {
-  BitWriter::Allotment allotment(group_writer, 1024);
-  group_writer->Write(1, 1);  // default dequant dc
-  WriteQuantScales(qscales.global_scale, qscales.quant_dc, group_writer);
-  group_writer->Write(1, 1);  // default BlockCtxMap
-  int32_t ytox_dc = cmap.GetYToXDC();
-  int32_t ytob_dc = cmap.GetYToBDC();
-  if (ytox_dc == 0 && ytob_dc == 0) {
-    group_writer->Write(1, 1);  // default DC camp
-  } else {
-    group_writer->Write(1, 0);        // non-default DC cmap
-    group_writer->Write(2, 0);        // default color factor
-    group_writer->Write(16, 0);       // base ytox 0.0
-    group_writer->Write(16, 0x3c00);  // base ytob 1.0
-    group_writer->Write(8, ytox_dc + 128);
-    group_writer->Write(8, ytob_dc + 128);
+void WriteDCGlobal(const QuantScales& qscales, const size_t num_dc_groups,
+                   const EntropyCode& dc_code, BitWriter* writer) {
+  BitWriter::Allotment allotment(writer, 1024);
+  writer->Write(1, 1);  // default dequant dc
+  WriteQuantScales(qscales.global_scale, qscales.quant_dc, writer);
+  writer->Write(1, 1);  // default BlockCtxMap
+  writer->Write(1, 1);  // default DC camp
+  WriteContextTree(num_dc_groups, writer);
+  writer->Write(1, 0);  // no lz77
+  allotment.Reclaim(writer);
+  WriteEntropyCode(dc_code, writer);
+}
+
+void WriteACGlobal(size_t num_groups, const EntropyCode& ac_code,
+                   BitWriter* writer) {
+  BitWriter::Allotment allotment(writer, 1024);
+  writer->Write(1, 1);  // all default quant matrices
+  size_t num_histo_bits = CeilLog2Nonzero(num_groups);
+  if (num_histo_bits != 0) writer->Write(num_histo_bits, 0);
+  writer->Write(2, 3);
+  writer->Write(13, 0);  // all default coeff order
+  writer->Write(1, 0);   // no lz77
+  allotment.Reclaim(writer);
+  WriteEntropyCode(ac_code, writer);
+}
+
+void WriteDCGroup(const DCGroupData& data, const EntropyCode& dc_code,
+                  BitWriter* writer) {
+  {
+    BitWriter::Allotment allotment(writer, 1024);
+    writer->Write(2, 0);  // extra_dc_precision
+    writer->Write(4, 3);  // use global tree, default wp, no transforms
+    allotment.Reclaim(writer);
+    WriteDCTokens(data.quant_dc, dc_code, writer);
   }
-  allotment.Reclaim(group_writer);
-  WriteContextTree(num_dc_groups, group_writer);
-  HistogramBuilder builder(kNumDCContexts);
-  builder.Add(dc_tokens);
-  builder.Add(ac_meta_tokens);
-  group_writer->AllocateAndWrite(1, 0);  // no lz77
-  ClusterHistograms(&builder.histograms, dc_context_map);
-  WriteContextMap(*dc_context_map, group_writer);
-  WriteHistograms(builder.histograms, dc_code, group_writer);
+  {
+    size_t num_blocks = data.ac_strategy.xsize() * data.ac_strategy.ysize();
+    size_t num_ac_blocks = CountACBlocks(data.ac_strategy);
+    size_t nb_bits = CeilLog2Nonzero(num_blocks);
+    BitWriter::Allotment allotment(writer, 1024);
+    if (nb_bits != 0) writer->Write(nb_bits, num_ac_blocks - 1);
+    writer->Write(4, 3);  // use global tree, default wp, no transforms
+    allotment.Reclaim(writer);
+    WriteACMetadataTokens(data.ytox_map, data.ytob_map, data.ac_strategy,
+                          data.raw_quant_field, dc_code, writer);
+  }
+}
+
+Status WriteTOC(const std::vector<BitWriter>& sections, BitWriter* output) {
+  BitWriter::Allotment allotment(output, 1024 + 30 * sections.size());
+  output->Write(1, 0);      // no permutation
+  output->ZeroPadToByte();  // before TOC entries
+  for (size_t i = 0; i < sections.size(); i++) {
+    size_t section_size = DivCeil(sections[i].BitsWritten(), kBitsPerByte);
+    size_t offset = 0;
+    bool success = false;
+    static const size_t kBits[4] = {10, 14, 22, 30};
+    for (size_t i = 0; i < 4; ++i) {
+      if (section_size < offset + (1u << kBits[i])) {
+        output->Write(2, i);
+        output->Write(kBits[i], section_size - offset);
+        success = true;
+        break;
+      }
+      offset += (1u << kBits[i]);
+    }
+    JXL_RETURN_IF_ERROR(success);
+  }
+  output->ZeroPadToByte();
+  allotment.Reclaim(output);
+  return true;
+}
+
+void CopyAndPadImage(const Image3F& from, const Rect& r, Image3F* to) {
+  size_t xsize_padded = DivCeil(r.xsize(), kBlockDim) * kBlockDim;
+  size_t ysize_padded = DivCeil(r.ysize(), kBlockDim) * kBlockDim;
+  to->ShrinkTo(xsize_padded, ysize_padded);
+  for (size_t y = 0; y < r.ysize(); ++y) {
+    for (size_t c = 0; c < 3; ++c) {
+      memcpy(to->PlaneRow(c, y), r.ConstPlaneRow(from, c, y),
+             r.xsize() * sizeof(float));
+      float last_val = to->PlaneRow(c, y)[r.xsize() - 1];
+      for (size_t x = r.xsize(); x < xsize_padded; ++x) {
+        to->PlaneRow(c, y)[x] = last_val;
+      }
+    }
+  }
+  for (size_t c = 0; c < 3; ++c) {
+    float* last_row = to->PlaneRow(c, r.ysize() - 1);
+    for (size_t y = r.ysize(); y < ysize_padded; ++y) {
+      memcpy(to->PlaneRow(c, y), last_row, xsize_padded * sizeof(float));
+    }
+  }
+}
+
+// These are temporary structures needed to process one 64x64 tile.
+struct TileProcessorMemory {
+  TileProcessorMemory()
+      : quant_field(kColorTileDimInBlocks, kColorTileDimInBlocks),
+        masking(kColorTileDimInBlocks, kColorTileDimInBlocks),
+        pre_erosion(kColorTileDimInBlocks * 2 + 2,
+                    kColorTileDimInBlocks * 2 + 2),
+        diff_buffer(kColorTileDim + 8, 1) {
+    mem = hwy::AllocateAligned<float>(AcStrategy::kMaxCoeffArea * 4 +
+                                      kColorTileDim * kColorTileDim * 4);
+  }
+  float* block_storage() { return mem.get(); }
+  float* scratch_space() { return mem.get() + 3 * AcStrategy::kMaxCoeffArea; }
+  float* coeff_storage() { return mem.get() + AcStrategy::kMaxCoeffArea; }
+  ImageF quant_field;
+  ImageF masking;
+  ImageF pre_erosion;
+  ImageF diff_buffer;
+  hwy::AlignedFreeUniquePtr<float[]> mem;
+};
+
+void ProcessTile(const Image3F& group, const Rect& tile_brect,
+                 const Rect& group_brect, const Rect& group_trect,
+                 float distance, const QuantScales& qscales,
+                 const DequantMatrices& matrices, DCGroupData* dc_data,
+                 TileProcessorMemory* tmem) {
+  ComputeAdaptiveQuantFieldTile(group, tile_brect, group_brect, distance,
+                                qscales.inv_scale, &tmem->pre_erosion,
+                                tmem->diff_buffer.Row(0), &tmem->quant_field,
+                                &tmem->masking, &dc_data->raw_quant_field);
+  int8_t ytox, ytob;
+  ComputeCmapTile(group, tile_brect, matrices, &ytox, &ytob,
+                  tmem->block_storage(), tmem->coeff_storage(),
+                  tmem->scratch_space());
+  const size_t tx = tile_brect.x0() / kColorTileDimInBlocks;
+  const size_t ty = tile_brect.y0() / kColorTileDimInBlocks;
+  group_trect.Row(&dc_data->ytox_map, ty)[tx] = ytox;
+  group_trect.Row(&dc_data->ytob_map, ty)[tx] = ytob;
+  for (size_t cy = 0; cy + 1 < tile_brect.ysize(); cy += 2) {
+    for (size_t cx = 0; cx + 1 < tile_brect.xsize(); cx += 2) {
+      FindBest16x16Transform(
+          group, group_brect, tile_brect.x0(), tile_brect.y0(), cx, cy,
+          distance, matrices, tmem->quant_field, tmem->masking, ytox, ytob,
+          &dc_data->ac_strategy, tmem->block_storage(), tmem->scratch_space());
+    }
+  }
+  Rect rect(group_brect.x0() + tile_brect.x0(),
+            group_brect.y0() + tile_brect.y0(), tile_brect.xsize(),
+            tile_brect.ysize());
+  AdjustQuantField(dc_data->ac_strategy, rect, &dc_data->raw_quant_field);
+}
+
+Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
+                      const float distance, const QuantScales& qscales,
+                      const uint32_t x_qm_scale,
+                      const DequantMatrices& matrices,
+                      const EntropyCode& dc_code, const EntropyCode& ac_code,
+                      ThreadPool* pool, std::vector<BitWriter>* output) {
+  // Dimensions of the whole image.
+  ImageDim dim(linear.xsize(), linear.ysize());
+  // Rectangle of the current DC group within the image.
+  Rect dc_group_rect = dim.PixelRect(dc_gx, dc_gy, kDCGroupDim);
+  // Dimensions of the current DC group.
+  ImageDim dc_group_dim(dc_group_rect.xsize(), dc_group_rect.ysize());
+
+  DCGroupData dc_data(dc_group_dim.xsize_blocks, dc_group_dim.ysize_blocks);
+  Image3F group(kGroupDim, kGroupDim);
+  TileProcessorMemory tmem;
+
+  // Process AC groups.
+  for (size_t gix = 0; gix < dc_group_dim.num_groups; ++gix) {
+    size_t gx = gix % dc_group_dim.xsize_groups;
+    size_t gy = gix / dc_group_dim.xsize_groups;
+    size_t image_gx = dc_gx * kBlockDim + gx;
+    size_t image_gy = dc_gy * kBlockDim + gy;
+    // Rectangle of the current AC group within the image.
+    Rect group_rect = dim.PixelRect(image_gx, image_gy, kGroupDim);
+    // Dimensions of the current AC group.
+    ImageDim group_dim(group_rect.xsize(), group_rect.ysize());
+    // Block-rectangle of the current AC group within the DC group.
+    Rect group_brect = dc_group_dim.BlockRect(gx, gy, kGroupDimInBlocks);
+    // Tile-rectangle of the current AC group within the DC group.
+    Rect group_trect = dc_group_dim.TileRect(gx, gy, kGroupDimInColorTiles);
+    // Convert current AC group to XYB, pad to whole blocks if necessary.
+    CopyAndPadImage(linear, group_rect, &group);
+    ToXYB(&group);
+    // Compute heuristics data one 64x64 tile at a time.
+    for (size_t tx = 0; tx < group_dim.xsize_tiles; ++tx) {
+      for (size_t ty = 0; ty < group_dim.ysize_tiles; ++ty) {
+        // Block-rectangle of the current tile within the AC group.
+        Rect tile_brect = group_dim.BlockRect(tx, ty, kColorTileDimInBlocks);
+        ProcessTile(group, tile_brect, group_brect, group_trect, distance,
+                    qscales, matrices, &dc_data, &tmem);
+      }
+    }
+    const size_t ac_group_idx =
+        2 + dim.num_dc_groups + image_gy * dim.xsize_groups + image_gx;
+    // Write AC group to bitstream and fill in dc_data->quant_dc.
+    WriteACGroup(group, group_brect, matrices, qscales.scale, qscales.scale_dc,
+                 x_qm_scale, &dc_data, ac_code, &(*output)[ac_group_idx]);
+  }
+
+  // Write DC group to bitstream.
+  const size_t dc_group_idx = 1 + dc_gy * dim.xsize_dc_groups + dc_gx;
+  WriteDCGroup(dc_data, dc_code, &(*output)[dc_group_idx]);
+  return true;
 }
 
 }  // namespace
@@ -516,166 +654,39 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   // Pre-compute image dimension-derived values.
   ImageDim dim(linear.xsize(), linear.ysize());
 
-  // Write frame header.
+  // Compute distance dependent parameters.
+  QuantScales qscales = ComputeQuantScales(distance);
   uint32_t x_qm_scale = ComputeXQuantScale(distance);
   uint32_t epf_iters = ComputeNumEpfIters(distance);
-  bool gaborish = distance >= 0.1;
-  WriteFrameHeader(x_qm_scale, epf_iters, gaborish, writer);
-
-  // Transform image to XYB colorspace.
-  Image3F opsin(dim.xsize_blocks * kBlockDim, dim.ysize_blocks * kBlockDim);
-  opsin.ShrinkTo(dim.xsize, dim.ysize);
-  ToXYB(linear, pool, &opsin);
-  PadImageToBlockMultipleInPlace(&opsin);
-
-  // Compute adaptive quantization field (relies on pre-gaborish values).
-  QuantScales qscales = ComputeQuantScales(distance);
-  ImageF quant_field, masking;
-  ImageI raw_quant_field;
-  ComputeAdaptiveQuantField(opsin, distance, qscales.scale, pool, &masking,
-                            &quant_field, &raw_quant_field);
-
-  // Initialize quant weights and compute X quant matrix scale.
   DequantMatrices matrices;
-  float x_qm_mul = std::pow(1.25f, x_qm_scale - 2.0f);
 
-  if (gaborish) {
-    // Apply inverse-gaborish.
-    GaborishInverse(&opsin, 0.9908511000000001f, pool);
+  // Initialize static entropy codes.
+  EntropyCode dc_code(kDCContextMap, kNumDCContexts, kDCPrefixCodes,
+                      kNumDCPrefixCodes);
+  EntropyCode ac_code(kACContextMap, kNumACContexts, kACPrefixCodes,
+                      kNumACPrefixCodes);
+
+  // Allocate section writers.
+  const size_t num_sections = 2 + dim.num_dc_groups + dim.num_groups;
+  std::vector<BitWriter> sections(num_sections);
+
+  // Generate DC group and AC group sections per 2048x2048 tile.
+  for (size_t i = 0; i < dim.num_dc_groups; ++i) {
+    size_t dc_gx = i % dim.xsize_dc_groups;
+    size_t dc_gy = i / dim.xsize_dc_groups;
+    JXL_RETURN_IF_ERROR(ProcessDCGroup(linear, dc_gx, dc_gy, distance, qscales,
+                                       x_qm_scale, matrices, dc_code, ac_code,
+                                       pool, &sections));
   }
+  // Generate DC/AC global sections.
+  WriteDCGlobal(qscales, dim.num_dc_groups, dc_code, &sections[0]);
+  WriteACGlobal(dim.num_groups, ac_code, &sections[1 + dim.num_dc_groups]);
 
-  // Compute per-tile color correlation values.
-  ColorCorrelationMap cmap(dim.xsize, dim.ysize);
-  JXL_RETURN_IF_ERROR(ComputeColorCorrelationMap(opsin, matrices, pool, &cmap));
-
-  // Compute block sizes.
-  AcStrategyImage ac_strategy(dim.xsize_blocks, dim.ysize_blocks);
-  JXL_RETURN_IF_ERROR(ComputeAcStrategyImage(opsin, distance, cmap, quant_field,
-                                             masking, pool, matrices,
-                                             &ac_strategy));
-  AdjustQuantField(ac_strategy, &raw_quant_field);
-
-  // Compute DC image and AC coefficient tokens.
-  Image3F dc(dim.xsize_blocks, dim.ysize_blocks);
-  std::vector<std::vector<Token>> ac_tokens(dim.num_groups);
-  JXL_RETURN_IF_ERROR(ComputeCoefficients(opsin, raw_quant_field, matrices,
-                                          qscales.scale, cmap, ac_strategy,
-                                          x_qm_mul, pool, &dc, &ac_tokens));
-
-  // Compute DC tokens.
-  std::vector<std::vector<Token>> dc_tokens(dim.num_dc_groups);
-  JXL_RETURN_IF_ERROR(
-      ComputeDCTokens(dc, cmap, dim, qscales.scale_dc, pool, &dc_tokens));
-
-  // Compute control fields tokens.
-  std::vector<std::vector<Token>> ac_meta_tokens(dim.num_dc_groups);
-  std::vector<size_t> num_ac_blocks(dim.num_dc_groups);
-  JXL_RETURN_IF_ERROR(ComputeACMetadataTokens(cmap, ac_strategy,
-                                              raw_quant_field, dim, pool,
-                                              &ac_meta_tokens, &num_ac_blocks));
-
-  // Allocate bit writers for all sections.
-  size_t num_toc_entries = 2 + dim.num_dc_groups + dim.num_groups;
-  std::vector<BitWriter> group_codes(num_toc_entries);
-  const size_t global_ac_index = dim.num_dc_groups + 1;
-  const bool is_small_image = dim.num_groups == 1;
-  const auto get_output = [&](const size_t index) {
-    return &group_codes[is_small_image ? 0 : index];
-  };
-
-  // Write DC global and compute DC and control fields histograms.
-  EntropyEncodingData dc_code;
-  std::vector<uint8_t> dc_context_map;
-  WriteDCGlobal(qscales, cmap, dim.num_dc_groups, dc_tokens, ac_meta_tokens,
-                &dc_code, &dc_context_map, get_output(0));
-
-  // Write DC groups and control fields.
-  const auto process_dc_group = [&](const uint32_t group_index,
-                                    const size_t thread) {
-    BitWriter* writer = get_output(group_index + 1);
-    {
-      BitWriter::Allotment allotment(writer, 1024);
-      writer->Write(2, 0);  // extra_dc_precision
-      writer->Write(4, 3);  // use global tree, default wp, no transforms
-      allotment.Reclaim(writer);
-      WriteTokens(dc_tokens[group_index], dc_code, dc_context_map, writer);
-    }
-    {
-      const Rect r = dim.DCBlockRect(group_index);
-      BitWriter::Allotment allotment(writer, 1024);
-      size_t nb_bits = CeilLog2Nonzero(r.xsize() * r.ysize());
-      if (nb_bits != 0) writer->Write(nb_bits, num_ac_blocks[group_index] - 1);
-      writer->Write(4, 3);  // use global tree, default wp, no transforms
-      allotment.Reclaim(writer);
-      WriteTokens(ac_meta_tokens[group_index], dc_code, dc_context_map, writer);
-    }
-  };
-  JXL_CHECK(RunOnPool(pool, 0, dim.num_dc_groups, ThreadPool::NoInit,
-                      process_dc_group, "EncodeDCGroup"));
-
-  // Write AC global and compute AC histograms.
-  std::vector<uint8_t> context_map;
-  EntropyEncodingData codes;
-  {
-    BitWriter* group_writer = get_output(global_ac_index);
-    BitWriter::Allotment allotment(group_writer, 1024);
-    group_writer->Write(1, 1);  // all default quant matrices
-    size_t num_histo_bits = CeilLog2Nonzero(dim.num_groups);
-    if (num_histo_bits != 0) group_writer->Write(num_histo_bits, 0);
-    group_writer->Write(2, 3);
-    group_writer->Write(13, 0);  // all default coeff order
-    allotment.Reclaim(group_writer);
-    auto histograms = BuildHistograms(kNumACContexts, ac_tokens);
-    group_writer->AllocateAndWrite(1, 0);  // no lz77
-    ClusterHistograms(&histograms, &context_map);
-    WriteContextMap(context_map, group_writer);
-    WriteHistograms(histograms, &codes, group_writer);
-  }
-
-  // Write AC groups.
-  const auto process_group = [&](const uint32_t group_index,
-                                 const size_t thread) {
-    BitWriter* writer = get_output(2 + dim.num_dc_groups + group_index);
-    WriteTokens(ac_tokens[group_index], codes, context_map, writer);
-  };
-  JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, dim.num_groups, ThreadPool::NoInit,
-                                process_group, "EncodeGroupCoefficients"));
-
-  // Zero pad all sections.
-  for (BitWriter& bw : group_codes) {
-    BitWriter::Allotment allotment(&bw, 8);
-    bw.ZeroPadToByte();  // end of group.
-    allotment.Reclaim(&bw);
-  }
-
-  // Write TOC and assemble bit stream.
-  {
-    size_t num_sizes = group_codes.size();
-    BitWriter::Allotment allotment(writer, 1024 + 30 * num_sizes);
-    writer->Write(1, 0);      // no permutation
-    writer->ZeroPadToByte();  // before TOC entries
-    for (size_t i = 0; i < group_codes.size(); i++) {
-      JXL_ASSERT(group_codes[i].BitsWritten() % kBitsPerByte == 0);
-      const size_t group_size = group_codes[i].BitsWritten() / kBitsPerByte;
-      size_t offset = 0;
-      bool success = false;
-      static const size_t kBits[4] = {10, 14, 22, 30};
-      for (size_t i = 0; i < 4; ++i) {
-        if (group_size < offset + (1u << kBits[i])) {
-          writer->Write(2, i);
-          writer->Write(kBits[i], group_size - offset);
-          success = true;
-          break;
-        }
-        offset += (1u << kBits[i]);
-      }
-      JXL_RETURN_IF_ERROR(success);
-    }
-    writer->ZeroPadToByte();
-    allotment.Reclaim(writer);
-  }
-  writer->AppendByteAligned(group_codes);
-
+  // Assemble final bit stream.
+  // TODO(szabadka) Fix it for small images.
+  WriteFrameHeader(x_qm_scale, epf_iters, writer);
+  JXL_RETURN_IF_ERROR(WriteTOC(sections, writer));
+  writer->AppendByteAligned(&sections);
   return true;
 }
 

@@ -34,8 +34,10 @@ constexpr size_t kBlockDim = 8;
 constexpr size_t kDCTBlockSize = kBlockDim * kBlockDim;
 constexpr size_t kGroupDim = 256;
 constexpr size_t kGroupDimInBlocks = kGroupDim / kBlockDim;
+constexpr size_t kDCGroupDim = kGroupDim * kBlockDim;
 constexpr size_t kColorTileDim = 64;
 constexpr size_t kColorTileDimInBlocks = kColorTileDim / kBlockDim;
+constexpr size_t kGroupDimInColorTiles = kGroupDim / kColorTileDim;
 
 template <typename T>
 JXL_INLINE T Clamp1(T val, T low, T hi) {

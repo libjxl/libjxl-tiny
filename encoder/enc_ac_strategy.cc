@@ -17,8 +17,10 @@
 #include <hwy/highway.h>
 
 #include "encoder/ac_strategy.h"
+#include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
 #include "encoder/base/status.h"
+#include "encoder/chroma_from_luma.h"
 #include "encoder/enc_transforms-inl.h"
 
 // Some of the floating point constants in this file and in other
@@ -46,13 +48,15 @@ using hwy::HWY_NAMESPACE::IfThenZeroElse;
 using hwy::HWY_NAMESPACE::Round;
 using hwy::HWY_NAMESPACE::Sqrt;
 
-float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx,
-                      size_t by, const float distance,
+float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx0,
+                      size_t by0, size_t cx, size_t cy, const float distance,
                       const DequantMatrices& matrices, const ImageF& qf,
-                      const ImageF& maskf, const float* cmap_factors,
+                      const ImageF& maskf, int8_t ytox, int8_t ytob,
                       float* block, float* scratch_space) {
   const size_t num_blocks = acs.covered_blocks_x() * acs.covered_blocks_y();
   const size_t size = num_blocks * kDCTBlockSize;
+  const size_t bx = bx0 + cx;
+  const size_t by = by0 + cy;
 
   // Apply transform.
   for (size_t c = 0; c < 3; c++) {
@@ -68,8 +72,8 @@ float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx,
   float masking = 0;
   for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
     for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
-      quant = std::max(quant, qf.ConstRow(by + iy)[bx + ix]);
-      masking = std::max(masking, maskf.ConstRow(by + iy)[bx + ix]);
+      quant = std::max(quant, qf.ConstRow(cy + iy)[cx + ix]);
+      masking = std::max(masking, maskf.ConstRow(cy + iy)[cx + ix]);
     }
   }
 
@@ -85,6 +89,7 @@ float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx,
   float entropy = 0.0f;
   auto info_loss = Zero(df);
   auto info_loss2 = Zero(df);
+  const float cmap_factors[3] = {YtoXRatio(ytox), 0.0f, YtoBRatio(ytob)};
 
   for (size_t c = 0; c < 3; c++) {
     const float* inv_matrix = matrices.InvMatrix(acs.RawStrategy(), c);
@@ -151,24 +156,23 @@ HWY_EXPORT(EstimateEntropy);
 
 // These definitions are needed before C++17.
 constexpr size_t AcStrategy::kMaxCoeffBlocks;
-constexpr size_t AcStrategy::kMaxBlockDim;
 constexpr size_t AcStrategy::kMaxCoeffArea;
 
 float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx,
-                      size_t by, const float distance,
+                      size_t by, size_t cx, size_t cy, const float distance,
                       const DequantMatrices& matrices, const ImageF& qf,
-                      const ImageF& maskf, const float* cmap_factors,
+                      const ImageF& maskf, int8_t ytox, int8_t ytob,
                       float* block, float* scratch_space) {
   return HWY_DYNAMIC_DISPATCH(EstimateEntropy)(
-      acs, opsin, bx, by, distance, matrices, qf, maskf, cmap_factors, block,
-      scratch_space);
+      acs, opsin, bx, by, cx, cy, distance, matrices, qf, maskf, ytox, ytob,
+      block, scratch_space);
 }
 
-void FindBest16x16Transform(const Image3F& opsin, size_t bx, size_t by,
-                            size_t cx, size_t cy, float distance,
-                            const DequantMatrices& matrices, const ImageF& qf,
-                            const ImageF& maskf,
-                            const float* JXL_RESTRICT cmap_factors,
+void FindBest16x16Transform(const Image3F& opsin, const Rect& block_rect,
+                            size_t bx, size_t by, size_t cx, size_t cy,
+                            float distance, const DequantMatrices& matrices,
+                            const ImageF& qf, const ImageF& maskf, int8_t ytox,
+                            int8_t ytob,
                             AcStrategyImage* JXL_RESTRICT ac_strategy,
                             float* block, float* scratch_space) {
   const AcStrategy acs8X8 = AcStrategy::FromRawStrategy(AcStrategy::DCT);
@@ -188,27 +192,27 @@ void FindBest16x16Transform(const Image3F& opsin, size_t bx, size_t by,
     for (size_t dx = 0; dx < 2; ++dx) {
       float entropy8x8 = 3.0f * mul8x8;
       entropy8x8 +=
-          mul8x8 * EstimateEntropy(acs8X8, opsin, bx + cx + dx, by + cy + dy,
-                                   distance, matrices, qf, maskf, cmap_factors,
+          mul8x8 * EstimateEntropy(acs8X8, opsin, bx, by, cx + dx, cy + dy,
+                                   distance, matrices, qf, maskf, ytox, ytob,
                                    block, scratch_space);
       entropy[dy][dx] = entropy8x8;
     }
   }
   float entropy_16X8_left =
-      mul16x8 * EstimateEntropy(acs16X8, opsin, bx + cx, by + cy, distance,
-                                matrices, qf, maskf, cmap_factors, block,
+      mul16x8 * EstimateEntropy(acs16X8, opsin, bx, by, cx, cy, distance,
+                                matrices, qf, maskf, ytox, ytob, block,
                                 scratch_space);
   float entropy_16X8_right =
-      mul16x8 * EstimateEntropy(acs16X8, opsin, bx + cx + 1, by + cy, distance,
-                                matrices, qf, maskf, cmap_factors, block,
+      mul16x8 * EstimateEntropy(acs16X8, opsin, bx, by, cx + 1, cy, distance,
+                                matrices, qf, maskf, ytox, ytob, block,
                                 scratch_space);
   float entropy_8X16_top =
-      mul16x8 * EstimateEntropy(acs8X16, opsin, bx + cx, by + cy, distance,
-                                matrices, qf, maskf, cmap_factors, block,
+      mul16x8 * EstimateEntropy(acs8X16, opsin, bx, by, cx, cy, distance,
+                                matrices, qf, maskf, ytox, ytob, block,
                                 scratch_space);
   float entropy_8X16_bottom =
-      mul16x8 * EstimateEntropy(acs8X16, opsin, bx + cx, by + cy + 1, distance,
-                                matrices, qf, maskf, cmap_factors, block,
+      mul16x8 * EstimateEntropy(acs8X16, opsin, bx, by, cx, cy + 1, distance,
+                                matrices, qf, maskf, ytox, ytob, block,
                                 scratch_space);
   // Test if this 16x16 block should have 16x8 or 8x16 transforms,
   // because it can have only one or the other.
@@ -218,73 +222,39 @@ void FindBest16x16Transform(const Image3F& opsin, size_t bx, size_t by,
                    std::min(entropy_8X16_bottom, entropy[1][0] + entropy[1][1]);
   if (cost16x8 < cost8x16) {
     if (entropy_16X8_left < entropy[0][0] + entropy[1][0]) {
-      ac_strategy->Set(bx + cx, by + cy, AcStrategy::DCT16X8);
+      ac_strategy->Set(block_rect.x0() + bx + cx, block_rect.y0() + by + cy,
+                       AcStrategy::DCT16X8);
     }
     if (entropy_16X8_right < entropy[0][1] + entropy[1][1]) {
-      ac_strategy->Set(bx + cx + 1, by + cy, AcStrategy::DCT16X8);
+      ac_strategy->Set(block_rect.x0() + bx + cx + 1, block_rect.y0() + by + cy,
+                       AcStrategy::DCT16X8);
     }
   } else {
     if (entropy_8X16_top < entropy[0][0] + entropy[0][1]) {
-      ac_strategy->Set(bx + cx, by + cy, AcStrategy::DCT8X16);
+      ac_strategy->Set(block_rect.x0() + bx + cx, block_rect.y0() + by + cy,
+                       AcStrategy::DCT8X16);
     }
     if (entropy_8X16_bottom < entropy[1][0] + entropy[1][1]) {
-      ac_strategy->Set(bx + cx, by + cy + 1, AcStrategy::DCT8X16);
+      ac_strategy->Set(block_rect.x0() + bx + cx, block_rect.y0() + by + cy + 1,
+                       AcStrategy::DCT8X16);
     }
   }
 }
 
-Status ComputeAcStrategyImage(const Image3F& opsin, const float distance,
-                              const ColorCorrelationMap& cmap,
-                              const ImageF& quant_field,
-                              const ImageF& masking_field, ThreadPool* pool,
-                              const DequantMatrices& matrices,
-                              AcStrategyImage* ac_strategy) {
-  ac_strategy->FillDCT8();
-  size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
-  size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
-  size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
-  size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
-  auto process_tile_acs = [&](const uint32_t tid, const size_t thread) {
-    size_t tx = tid % xsize_tiles;
-    size_t ty = tid / xsize_tiles;
-    size_t by0 = ty * kColorTileDimInBlocks;
-    size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks, ysize_blocks);
-    size_t bx0 = tx * kColorTileDimInBlocks;
-    size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
-    Rect rect(bx0, by0, bx1 - bx0, by1 - by0);
-    auto mem = hwy::AllocateAligned<float>(5 * AcStrategy::kMaxCoeffArea);
-    float* block = mem.get();
-    float* scratch_space = mem.get() + 3 * AcStrategy::kMaxCoeffArea;
-    const float cmap_factors[3] = {
-        cmap.YtoXRatio(cmap.ytox_map.ConstRow(ty)[tx]),
-        0.0f,
-        cmap.YtoBRatio(cmap.ytob_map.ConstRow(ty)[tx]),
-    };
-    for (size_t cy = 0; cy + 1 < rect.ysize(); cy += 2) {
-      for (size_t cx = 0; cx + 1 < rect.xsize(); cx += 2) {
-        FindBest16x16Transform(opsin, bx0, by0, cx, cy, distance, matrices,
-                               quant_field, masking_field, cmap_factors,
-                               ac_strategy, block, scratch_space);
-      }
-    }
-  };
-  return RunOnPool(pool, 0, xsize_tiles * ysize_tiles, ThreadPool::NoInit,
-                   process_tile_acs, "Acs Heuristics");
-}
-
-void AdjustQuantField(const AcStrategyImage& ac_strategy, ImageI* quant_field) {
+void AdjustQuantField(const AcStrategyImage& ac_strategy,
+                      const Rect& block_rect, ImageB* quant_field) {
   // Replace the whole quant_field in non-8x8 blocks with the maximum of each
   // 8x8 block.
   size_t stride = quant_field->PixelsPerRow();
-  for (size_t y = 0; y < quant_field->ysize(); ++y) {
-    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(y);
-    int* JXL_RESTRICT quant_row = quant_field->Row(y);
-    for (size_t x = 0; x < quant_field->xsize(); ++x) {
+  for (size_t y = 0; y < block_rect.ysize(); ++y) {
+    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(block_rect, y);
+    uint8_t* JXL_RESTRICT quant_row = block_rect.Row(quant_field, y);
+    for (size_t x = 0; x < block_rect.xsize(); ++x) {
       AcStrategy acs = ac_strategy_row[x];
       if (!acs.IsFirstBlock()) continue;
-      JXL_ASSERT(x + acs.covered_blocks_x() <= quant_field->xsize());
-      JXL_ASSERT(y + acs.covered_blocks_y() <= quant_field->ysize());
-      int max = quant_row[x];
+      JXL_ASSERT(x + acs.covered_blocks_x() <= block_rect.xsize());
+      JXL_ASSERT(y + acs.covered_blocks_y() <= block_rect.ysize());
+      uint8_t max = quant_row[x];
       for (size_t iy = 0; iy < acs.covered_blocks_y(); iy++) {
         for (size_t ix = 0; ix < acs.covered_blocks_x(); ix++) {
           max = std::max(quant_row[x + ix + iy * stride], max);

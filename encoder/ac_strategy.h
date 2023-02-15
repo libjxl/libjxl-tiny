@@ -29,12 +29,9 @@ namespace jxl {
 
 class AcStrategy {
  public:
-  // Extremal values for the number of blocks/coefficients of a single strategy.
-  static constexpr size_t kMaxCoeffBlocks = 32;
-  static constexpr size_t kMaxBlockDim = kBlockDim * kMaxCoeffBlocks;
-  // Maximum number of coefficients in a block. Guaranteed to be a multiple of
-  // the vector size.
-  static constexpr size_t kMaxCoeffArea = kMaxBlockDim * kMaxBlockDim;
+  // TODO(szabadka): why does it not work with 2?
+  static constexpr size_t kMaxCoeffBlocks = 4;
+  static constexpr size_t kMaxCoeffArea = kMaxCoeffBlocks * kDCTBlockSize;
   static_assert((kMaxCoeffArea * sizeof(float)) % hwy::kMaxVectorSize == 0,
                 "Coefficient area is not a multiple of vector size");
 

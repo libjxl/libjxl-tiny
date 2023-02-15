@@ -9,7 +9,6 @@
 #ifndef ENCODER_ENC_CLUSTER_H_
 #define ENCODER_ENC_CLUSTER_H_
 
-#include <stddef.h>
 #include <stdint.h>
 
 #include <vector>
