@@ -44,42 +44,6 @@
 namespace jxl {
 namespace {
 
-uint32_t ComputeXQuantScale(float distance) {
-  uint32_t x_qm_scale = 2;
-  float x_qm_scale_steps[2] = {1.25f, 9.0f};
-  for (float x_qm_scale_step : x_qm_scale_steps) {
-    if (distance > x_qm_scale_step) {
-      x_qm_scale++;
-    }
-  }
-  if (distance < 0.299f) {
-    // Favor chromacity preservation for making images appear more
-    // faithful to original even with extreme (5-10x) zooming.
-    x_qm_scale++;
-  }
-  return x_qm_scale;
-}
-
-uint32_t ComputeNumEpfIters(float distance) {
-  constexpr float kEpfThresholds[3] = {0.7, 1.5, 4.0};
-  uint32_t epf_iters = 0;
-  for (size_t i = 0; i < 3; i++) {
-    if (distance >= kEpfThresholds[i]) {
-      epf_iters++;
-    }
-  }
-  return epf_iters;
-}
-
-float QuantDC(float distance) {
-  const float kDcQuantPow = 0.57f;
-  const float kDcQuant = 1.12f;
-  const float kDcMul = 2.9;  // Butteraugli target where non-linearity kicks in.
-  float effective_dist = kDcMul * std::pow(distance / kDcMul, kDcQuantPow);
-  effective_dist = Clamp1(effective_dist, 0.5f * distance, distance);
-  return std::min(kDcQuant / effective_dist, 50.f);
-}
-
 struct ImageDim {
   ImageDim(size_t xs, size_t ys)
       : xsize(xs),
@@ -121,15 +85,30 @@ struct ImageDim {
   const size_t num_dc_groups;
 };
 
-struct QuantScales {
+float QuantDC(float distance) {
+  const float kDcQuantPow = 0.57f;
+  const float kDcQuant = 1.12f;
+  const float kDcMul = 2.9;  // Butteraugli target where non-linearity kicks in.
+  float effective_dist = kDcMul * std::pow(distance / kDcMul, kDcQuantPow);
+  effective_dist = Clamp1(effective_dist, 0.5f * distance, distance);
+  return std::min(kDcQuant / effective_dist, 50.f);
+}
+
+struct DistanceParams {
+  float distance;
   int global_scale;
   int quant_dc;
   float scale;
   float inv_scale;
   float scale_dc;
+  uint32_t x_qm_scale;
+  uint32_t epf_iters;
 };
 
-QuantScales ComputeQuantScales(float distance) {
+DistanceParams ComputeDistanceParams(float distance) {
+  DistanceParams p;
+  p.distance = distance;
+  // Quantization scales.
   constexpr int kGlobalScaleDenom = 1 << 16;
   constexpr int kGlobalScaleNumerator = 4096;
   constexpr float kAcQuant = 0.8f;
@@ -139,14 +118,34 @@ QuantScales ComputeQuantScales(float distance) {
   scale = Clamp1(scale, 1.0f, 1.0f * (1 << 15));
   int scaled_quant_dc =
       static_cast<int>(quant_dc * kGlobalScaleNumerator * 1.6);
-  QuantScales quant;
-  quant.global_scale = Clamp1(static_cast<int>(scale), 1, scaled_quant_dc);
-  quant.scale = quant.global_scale * (1.0f / kGlobalScaleDenom);
-  quant.inv_scale = 1.0f / quant.scale;
-  quant.quant_dc = static_cast<int>(quant_dc / quant.scale + 0.5f);
-  quant.quant_dc = Clamp1(quant.quant_dc, 1, 1 << 16);
-  quant.scale_dc = quant.quant_dc * quant.scale;
-  return quant;
+  p.global_scale = Clamp1(static_cast<int>(scale), 1, scaled_quant_dc);
+  p.scale = p.global_scale * (1.0f / kGlobalScaleDenom);
+  p.inv_scale = 1.0f / p.scale;
+  p.quant_dc = static_cast<int>(quant_dc / p.scale + 0.5f);
+  p.quant_dc = Clamp1(p.quant_dc, 1, 1 << 16);
+  p.scale_dc = p.quant_dc * p.scale;
+  // X quant matrix scale.
+  p.x_qm_scale = 2;
+  float x_qm_scale_steps[2] = {1.25f, 9.0f};
+  for (float x_qm_scale_step : x_qm_scale_steps) {
+    if (distance > x_qm_scale_step) {
+      p.x_qm_scale++;
+    }
+  }
+  if (distance < 0.299f) {
+    // Favor chromacity preservation for making images appear more
+    // faithful to original even with extreme (5-10x) zooming.
+    p.x_qm_scale++;
+  }
+  // Number of edge preserving filter iters that the decoder will do.
+  constexpr float kEpfThresholds[3] = {0.7, 1.5, 4.0};
+  p.epf_iters = 0;
+  for (size_t i = 0; i < 3; i++) {
+    if (distance >= kEpfThresholds[i]) {
+      p.epf_iters++;
+    }
+  }
+  return p;
 }
 
 // Clamps gradient to the min/max of n, w (and l, implicitly).
@@ -444,11 +443,11 @@ void WriteContextTree(size_t num_dc_groups, BitWriter* writer) {
   }
 }
 
-void WriteDCGlobal(const QuantScales& qscales, const size_t num_dc_groups,
+void WriteDCGlobal(const DistanceParams& distp, const size_t num_dc_groups,
                    const EntropyCode& dc_code, BitWriter* writer) {
   BitWriter::Allotment allotment(writer, 1024);
   writer->Write(1, 1);  // default dequant dc
-  WriteQuantScales(qscales.global_scale, qscales.quant_dc, writer);
+  WriteQuantScales(distp.global_scale, distp.quant_dc, writer);
   writer->Write(1, 1);  // default BlockCtxMap
   writer->Write(1, 1);  // default DC camp
   WriteContextTree(num_dc_groups, writer);
@@ -492,7 +491,7 @@ void WriteDCGroup(const DCGroupData& data, const EntropyCode& dc_code,
   }
 }
 
-Status WriteTOC(const std::vector<BitWriter>& sections, BitWriter* output) {
+void WriteTOC(const std::vector<BitWriter>& sections, BitWriter* output) {
   BitWriter::Allotment allotment(output, 1024 + 30 * sections.size());
   output->Write(1, 0);      // no permutation
   output->ZeroPadToByte();  // before TOC entries
@@ -510,11 +509,10 @@ Status WriteTOC(const std::vector<BitWriter>& sections, BitWriter* output) {
       }
       offset += (1u << kBits[i]);
     }
-    JXL_RETURN_IF_ERROR(success);
+    JXL_ASSERT(success);
   }
   output->ZeroPadToByte();
   allotment.Reclaim(output);
-  return true;
 }
 
 void CopyAndPadImage(const Image3F& from, const Rect& r, Image3F* to) {
@@ -562,11 +560,10 @@ struct TileProcessorMemory {
 
 void ProcessTile(const Image3F& group, const Rect& tile_brect,
                  const Rect& group_brect, const Rect& group_trect,
-                 float distance, const QuantScales& qscales,
-                 const DequantMatrices& matrices, DCGroupData* dc_data,
-                 TileProcessorMemory* tmem) {
-  ComputeAdaptiveQuantFieldTile(group, tile_brect, group_brect, distance,
-                                qscales.inv_scale, &tmem->pre_erosion,
+                 const DistanceParams& distp, const DequantMatrices& matrices,
+                 DCGroupData* dc_data, TileProcessorMemory* tmem) {
+  ComputeAdaptiveQuantFieldTile(group, tile_brect, group_brect, distp.distance,
+                                distp.inv_scale, &tmem->pre_erosion,
                                 tmem->diff_buffer.Row(0), &tmem->quant_field,
                                 &tmem->masking, &dc_data->raw_quant_field);
   int8_t ytox, ytob;
@@ -579,10 +576,11 @@ void ProcessTile(const Image3F& group, const Rect& tile_brect,
   group_trect.Row(&dc_data->ytob_map, ty)[tx] = ytob;
   for (size_t cy = 0; cy + 1 < tile_brect.ysize(); cy += 2) {
     for (size_t cx = 0; cx + 1 < tile_brect.xsize(); cx += 2) {
-      FindBest16x16Transform(
-          group, group_brect, tile_brect.x0(), tile_brect.y0(), cx, cy,
-          distance, matrices, tmem->quant_field, tmem->masking, ytox, ytob,
-          &dc_data->ac_strategy, tmem->block_storage(), tmem->scratch_space());
+      FindBest16x16Transform(group, group_brect, tile_brect.x0(),
+                             tile_brect.y0(), cx, cy, distp.distance, matrices,
+                             tmem->quant_field, tmem->masking, ytox, ytob,
+                             &dc_data->ac_strategy, tmem->block_storage(),
+                             tmem->scratch_space());
     }
   }
   Rect rect(group_brect.x0() + tile_brect.x0(),
@@ -592,8 +590,7 @@ void ProcessTile(const Image3F& group, const Rect& tile_brect,
 }
 
 Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
-                      const float distance, const QuantScales& qscales,
-                      const uint32_t x_qm_scale,
+                      const DistanceParams& distp,
                       const DequantMatrices& matrices,
                       const EntropyCode& dc_code, const EntropyCode& ac_code,
                       ThreadPool* pool, std::vector<BitWriter>* output) {
@@ -630,21 +627,32 @@ Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
       for (size_t ty = 0; ty < group_dim.ysize_tiles; ++ty) {
         // Block-rectangle of the current tile within the AC group.
         Rect tile_brect = group_dim.BlockRect(tx, ty, kColorTileDimInBlocks);
-        ProcessTile(group, tile_brect, group_brect, group_trect, distance,
-                    qscales, matrices, &dc_data, &tmem);
+        ProcessTile(group, tile_brect, group_brect, group_trect, distp,
+                    matrices, &dc_data, &tmem);
       }
     }
     const size_t ac_group_idx =
         2 + dim.num_dc_groups + image_gy * dim.xsize_groups + image_gx;
     // Write AC group to bitstream and fill in dc_data->quant_dc.
-    WriteACGroup(group, group_brect, matrices, qscales.scale, qscales.scale_dc,
-                 x_qm_scale, &dc_data, ac_code, &(*output)[ac_group_idx]);
+    WriteACGroup(group, group_brect, matrices, distp.scale, distp.scale_dc,
+                 distp.x_qm_scale, &dc_data, ac_code, &(*output)[ac_group_idx]);
   }
 
   // Write DC group to bitstream.
   const size_t dc_group_idx = 1 + dc_gy * dim.xsize_dc_groups + dc_gx;
   WriteDCGroup(dc_data, dc_code, &(*output)[dc_group_idx]);
   return true;
+}
+
+void CombineSections(const ImageDim& dim, const DistanceParams& distp,
+                     EntropyCode* dc_code, EntropyCode* ac_code,
+                     std::vector<BitWriter>* sections, BitWriter* writer) {
+  WriteDCGlobal(distp, dim.num_dc_groups, *dc_code, &(*sections)[0]);
+  WriteACGlobal(dim.num_groups, *ac_code, &(*sections)[1 + dim.num_dc_groups]);
+  WriteFrameHeader(distp.x_qm_scale, distp.epf_iters, writer);
+  // TODO(szabadka) Fix this for small images.
+  WriteTOC(*sections, writer);
+  writer->AppendByteAligned(sections);
 }
 
 }  // namespace
@@ -655,12 +663,10 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   ImageDim dim(linear.xsize(), linear.ysize());
 
   // Compute distance dependent parameters.
-  QuantScales qscales = ComputeQuantScales(distance);
-  uint32_t x_qm_scale = ComputeXQuantScale(distance);
-  uint32_t epf_iters = ComputeNumEpfIters(distance);
-  DequantMatrices matrices;
+  DistanceParams distp = ComputeDistanceParams(distance);
 
-  // Initialize static entropy codes.
+  // Initialize dequantization matrices and static entropy codes.
+  DequantMatrices matrices;
   EntropyCode dc_code(kDCContextMap, kNumDCContexts, kDCPrefixCodes,
                       kNumDCPrefixCodes);
   EntropyCode ac_code(kACContextMap, kNumACContexts, kACPrefixCodes,
@@ -674,19 +680,12 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   for (size_t i = 0; i < dim.num_dc_groups; ++i) {
     size_t dc_gx = i % dim.xsize_dc_groups;
     size_t dc_gy = i / dim.xsize_dc_groups;
-    JXL_RETURN_IF_ERROR(ProcessDCGroup(linear, dc_gx, dc_gy, distance, qscales,
-                                       x_qm_scale, matrices, dc_code, ac_code,
-                                       pool, &sections));
+    JXL_RETURN_IF_ERROR(ProcessDCGroup(linear, dc_gx, dc_gy, distp, matrices,
+                                       dc_code, ac_code, pool, &sections));
   }
-  // Generate DC/AC global sections.
-  WriteDCGlobal(qscales, dim.num_dc_groups, dc_code, &sections[0]);
-  WriteACGlobal(dim.num_groups, ac_code, &sections[1 + dim.num_dc_groups]);
 
   // Assemble final bit stream.
-  // TODO(szabadka) Fix it for small images.
-  WriteFrameHeader(x_qm_scale, epf_iters, writer);
-  JXL_RETURN_IF_ERROR(WriteTOC(sections, writer));
-  writer->AppendByteAligned(&sections);
+  CombineSections(dim, distp, &dc_code, &ac_code, &sections, writer);
   return true;
 }
 
