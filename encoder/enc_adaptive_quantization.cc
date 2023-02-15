@@ -19,7 +19,6 @@
 #include <hwy/highway.h>
 
 #include "encoder/base/compiler_specific.h"
-#include "encoder/base/data_parallel.h"
 #include "encoder/base/status.h"
 #include "encoder/common.h"
 #include "encoder/fast_math-inl.h"
@@ -251,8 +250,6 @@ void PerBlockModulations(const float butteraugli_target, const ImageF& xyb_x,
                          const ImageF& xyb_y, const ImageF& xyb_b,
                          const float scale, const Rect& rect, ImageF* out) {
   JXL_ASSERT(SameSize(xyb_x, xyb_y));
-  JXL_ASSERT(DivCeil(xyb_x.xsize(), kBlockDim) == out->xsize());
-  JXL_ASSERT(DivCeil(xyb_x.ysize(), kBlockDim) == out->ysize());
 
   float base_level = 0.5f * scale;
   float kDampenRampStart = 7.0f;
@@ -269,11 +266,11 @@ void PerBlockModulations(const float butteraugli_target, const ImageF& xyb_x,
   const float add = (1.0f - dampen) * base_level;
   for (size_t iy = rect.y0(); iy < rect.y0() + rect.ysize(); iy++) {
     const size_t y = iy * 8;
-    float* const JXL_RESTRICT row_out = out->Row(iy);
+    float* const JXL_RESTRICT row_out = out->Row(iy - rect.y0());
     const HWY_CAPPED(float, kBlockDim) df;
     for (size_t ix = rect.x0(); ix < rect.x0() + rect.xsize(); ix++) {
       size_t x = ix * 8;
-      auto out_val = Set(df, row_out[ix]);
+      auto out_val = Set(df, row_out[ix - rect.x0()]);
       out_val = ComputeMask(df, out_val);
       out_val = HfModulation(df, x, y, xyb_y, out_val);
       out_val = ColorModulation(df, x, y, xyb_x, xyb_y, xyb_b,
@@ -281,7 +278,8 @@ void PerBlockModulations(const float butteraugli_target, const ImageF& xyb_x,
       out_val = GammaModulation(df, x, y, xyb_x, xyb_y, out_val);
       // We want multiplicative quantization field, so everything
       // until this point has been modulating the exponent.
-      row_out[ix] = FastPow2f(GetLane(out_val) * 1.442695041f) * mul + add;
+      row_out[ix - rect.x0()] =
+          FastPow2f(GetLane(out_val) * 1.442695041f) * mul + add;
     }
   }
 }
@@ -325,14 +323,11 @@ void StoreMin4(const float v, float& min0, float& min1, float& min2,
 // Look for smooth areas near the area of degradation.
 // If the areas are generally smooth, don't do masking.
 // Output is downsampled 2x.
-void FuzzyErosion(const Rect& from_rect, const ImageF& from,
-                  const Rect& to_rect, ImageF* to) {
+void FuzzyErosion(const Rect& from_rect, const ImageF& from, ImageF* to) {
   const size_t xsize = from.xsize();
   const size_t ysize = from.ysize();
   constexpr int kStep = 1;
   static_assert(kStep == 1, "Step must be 1");
-  JXL_ASSERT(to_rect.xsize() * 2 == from_rect.xsize());
-  JXL_ASSERT(to_rect.ysize() * 2 == from_rect.ysize());
   for (size_t fy = 0; fy < from_rect.ysize(); ++fy) {
     size_t y = fy + from_rect.y0();
     size_t ym1 = y >= kStep ? y - kStep : y;
@@ -340,7 +335,7 @@ void FuzzyErosion(const Rect& from_rect, const ImageF& from,
     const float* rowt = from.Row(ym1);
     const float* row = from.Row(y);
     const float* rowb = from.Row(yp1);
-    float* row_out = to_rect.Row(to, fy / 2);
+    float* row_out = to->Row(fy / 2);
     for (size_t fx = 0; fx < from_rect.xsize(); ++fx) {
       size_t x = fx + from_rect.x0();
       size_t xm1 = x >= kStep ? x - kStep : x;
@@ -378,11 +373,14 @@ void FuzzyErosion(const Rect& from_rect, const ImageF& from,
   }
 }
 
-void ComputeTile(const Image3F& xyb, const Rect& rect, float distance,
-                 float scale, ImageF* pre_erosion, float* diff_buffer,
-                 ImageF* aq_map, ImageF* mask) {
+void ComputeAdaptiveQuantFieldTile(const Image3F& xyb, const Rect& rect,
+                                   float distance, ImageF* pre_erosion,
+                                   float* diff_buffer, ImageF* aq_map,
+                                   ImageF* mask) {
   const size_t xsize = xyb.xsize();
   const size_t ysize = xyb.ysize();
+  static const float kAcQuant = 0.8294f;
+  const float scale = kAcQuant / distance;
 
   // The XYB gamma is 3.0 to be able to decode faster with two muls.
   // Butteraugli's gamma is matching the gamma of human eye, around 2.6.
@@ -494,10 +492,10 @@ void ComputeTile(const Image3F& xyb, const Rect& rect, float distance,
   }
   Rect from_rect(x0 % 8 == 0 ? 0 : 1, y_start % 8 == 0 ? 0 : 1,
                  rect.xsize() * 2, rect.ysize() * 2);
-  FuzzyErosion(from_rect, *pre_erosion, rect, aq_map);
+  FuzzyErosion(from_rect, *pre_erosion, aq_map);
   for (size_t y = 0; y < rect.ysize(); ++y) {
-    const float* aq_map_row = rect.ConstRow(*aq_map, y);
-    float* mask_row = rect.Row(mask, y);
+    const float* aq_map_row = aq_map->ConstRow(y);
+    float* mask_row = mask->Row(y);
     for (size_t x = 0; x < rect.xsize(); ++x) {
       mask_row[x] = ComputeMaskForAcStrategyUse(aq_map_row[x]);
     }
@@ -505,44 +503,6 @@ void ComputeTile(const Image3F& xyb, const Rect& rect, float distance,
   PerBlockModulations(distance, xyb.Plane(0), xyb.Plane(1), xyb.Plane(2), scale,
                       rect, aq_map);
 }
-
-void ComputeAdaptiveQuantField(const Image3F& opsin, const float distance,
-                               ThreadPool* pool, ImageF* mask,
-                               ImageF* quant_field) {
-  const size_t xsize_blocks = DivCeil(opsin.xsize(), kBlockDim);
-  const size_t ysize_blocks = DivCeil(opsin.ysize(), kBlockDim);
-  const size_t xsize_tiles = DivCeil(xsize_blocks, kColorTileDimInBlocks);
-  const size_t ysize_tiles = DivCeil(ysize_blocks, kColorTileDimInBlocks);
-  static const float kAcQuant = 0.8294f;
-  const float scale = kAcQuant / distance;
-  std::vector<ImageF> pre_erosion;
-  ImageF diff_buffer;
-  *quant_field = ImageF(xsize_blocks, ysize_blocks);
-  *mask = ImageF(xsize_blocks, ysize_blocks);
-  JXL_CHECK(RunOnPool(
-      pool, 0, xsize_tiles * ysize_tiles,
-      [&](const size_t num_threads) {
-        diff_buffer = ImageF(kColorTileDim + 8, num_threads);
-        for (size_t i = pre_erosion.size(); i < num_threads; i++) {
-          pre_erosion.emplace_back(kColorTileDimInBlocks * 2 + 2,
-                                   kColorTileDimInBlocks * 2 + 2);
-        }
-        return true;
-      },
-      [&](const uint32_t tid, const size_t thread) {
-        size_t tx = tid % xsize_tiles;
-        size_t ty = tid / xsize_tiles;
-        size_t by0 = ty * kColorTileDimInBlocks;
-        size_t by1 = std::min((ty + 1) * kColorTileDimInBlocks, ysize_blocks);
-        size_t bx0 = tx * kColorTileDimInBlocks;
-        size_t bx1 = std::min((tx + 1) * kColorTileDimInBlocks, xsize_blocks);
-        Rect rect(bx0, by0, bx1 - bx0, by1 - by0);
-        ComputeTile(opsin, rect, distance, scale, &pre_erosion[thread],
-                    diff_buffer.Row(thread), quant_field, mask);
-      },
-      "AQ DiffPrecompute"));
-}
-
 }  // namespace
 
 // NOLINTNEXTLINE(google-readability-namespace-comments)
@@ -552,22 +512,23 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace jxl {
-HWY_EXPORT(ComputeAdaptiveQuantField);
+HWY_EXPORT(ComputeAdaptiveQuantFieldTile);
+// HWY_EXPORT(ComputeAdaptiveQuantField);
 
-void ComputeAdaptiveQuantField(const Image3F& opsin, const float distance,
-                               const float scale, ThreadPool* pool,
-                               ImageF* masking, ImageF* quant_field,
-                               ImageI* raw_quant_field) {
-  HWY_DYNAMIC_DISPATCH(ComputeAdaptiveQuantField)
-  (opsin, distance, pool, masking, quant_field);
-  *raw_quant_field = ImageI(quant_field->xsize(), quant_field->ysize());
-  const float inv_scale = 1.0f / scale;
-  for (size_t y = 0; y < quant_field->ysize(); ++y) {
-    const float* row_qf = quant_field->ConstRow(y);
-    int32_t* row_qi = raw_quant_field->Row(y);
-    for (size_t x = 0; x < quant_field->xsize(); ++x) {
-      int val = Clamp1(static_cast<int>(row_qf[x] * inv_scale + 0.5f), 1, 256);
-      row_qi[x] = val;
+void ComputeAdaptiveQuantFieldTile(const Image3F& xyb, const Rect& rect,
+                                   const Rect& block_rect, float distance,
+                                   float inv_scale, ImageF* pre_erosion,
+                                   float* diff_buffer, ImageF* aq_map,
+                                   ImageF* mask, ImageB* raw_quant_field) {
+  HWY_DYNAMIC_DISPATCH(ComputeAdaptiveQuantFieldTile)
+  (xyb, rect, distance, pre_erosion, diff_buffer, aq_map, mask);
+  for (size_t y = 0; y < rect.ysize(); ++y) {
+    const float* row_qf = aq_map->ConstRow(y);
+    uint8_t* row_qi = block_rect.Row(raw_quant_field, rect.y0() + y);
+    for (size_t x = 0; x < rect.xsize(); ++x) {
+      uint8_t val =
+          Clamp1(static_cast<int>(row_qf[x] * inv_scale + 0.5f), 1, 255);
+      row_qi[rect.x0() + x] = val;
     }
   }
 }

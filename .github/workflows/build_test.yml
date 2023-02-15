@@ -26,7 +26,7 @@ jobs:
       matrix:
         # We have one job per "name" in the matrix. Attributes are set on the
         # specific job names.
-        name: [release, debug, asan, msan, scalar]
+        name: [release, debug, asan, scalar]
         include:
           - name: release
             test_in_pr: true
@@ -35,10 +35,6 @@ jobs:
             max_stack: 3000
             # Conformance tooling test requires numpy.
             apt_pkgs: graphviz python3-numpy
-          - name: lowprecision
-            mode: release
-            test_in_pr: true
-            cmake_args: -DCMAKE_CXX_FLAGS=-DJXL_HIGH_PRECISION=0
           - name: debug
             # Runs on AVX3 CPUs require more stack than others. Make sure to
             # test on AVX3-enabled CPUs when changing this value.
@@ -47,30 +43,8 @@ jobs:
           - name: scalar
             mode: release
             cxxflags: -DHWY_COMPILE_ONLY_SCALAR
-          # Disabling optional features to speed up msan build a little bit.
-          - name: msan
-            skip_install: true
-            cmake_args: >-
-              -DJPEGXL_ENABLE_DEVTOOLS=OFF -DJPEGXL_ENABLE_PLUGINS=OFF
-              -DJPEGXL_ENABLE_VIEWERS=OFF
           - name: asan
             skip_install: true
-          # Builds with gcc in release mode
-          - name: release:gcc8
-            mode: release
-            apt_pkgs: gcc-8 g++-8
-            cmake_args: >-
-              -DCMAKE_C_COMPILER=gcc-8 -DCMAKE_CXX_COMPILER=g++-8
-          # Builds with clang-5 in release mode
-          - name: release:clang-5
-            os: ubuntu-18.04
-            mode: release
-            # TODO(eustas): investigate, why static brotli library is not found.
-            skip_install: true
-            apt_pkgs: clang-5.0
-            cmake_args: >-
-              -DCMAKE_C_COMPILER=clang-5.0 -DCMAKE_CXX_COMPILER=clang++-5.0
-              -DJPEGXL_ENABLE_PLUGINS=OFF
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -85,7 +59,7 @@ jobs:
         sudo apt update
         sudo apt install -y \
           ccache \
-          clang-7 \
+          clang \
           cmake \
           doxygen \
           libbenchmark-dev \
@@ -104,34 +78,13 @@ jobs:
           xvfb \
           ${{ matrix.apt_pkgs }} \
         #
-        echo "CC=clang-7" >> $GITHUB_ENV
-        echo "CXX=clang++-7" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CXX=clang++" >> $GITHUB_ENV
     - name: Checkout the source
       uses: actions/checkout@v2
       with:
         submodules: true
         fetch-depth: 2
-
-    - name: Setup the LLVM source path
-      if: matrix.name == 'msan'
-      run: |
-        LLVM_ROOT=${GITHUB_WORKSPACE}/llvm_root
-        mkdir -p ${LLVM_ROOT}
-        echo "LLVM_ROOT=${LLVM_ROOT}" >> $GITHUB_ENV
-    - name: Cache LLVM sources
-      if: matrix.name == 'msan'
-      uses: actions/cache@v2
-      with:
-        path: ${{ env.LLVM_ROOT }}
-        key: llvm
-    - name: Checkout the LLVM source
-      if: matrix.name == 'msan'
-      uses: actions/checkout@v2
-      with:
-        submodules: false
-        repository: llvm/llvm-project
-        ref: llvmorg-7.0.1
-        path: llvm_root
 
     - name: Sphinx dependencies
       # Dependencies for sphinx HTML documentation

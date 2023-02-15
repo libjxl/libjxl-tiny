@@ -19,7 +19,9 @@
 #include "encoder/ac_strategy.h"
 #include "encoder/base/bits.h"
 #include "encoder/base/compiler_specific.h"
+#include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
+#include "encoder/enc_entropy_code.h"
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/image.h"
 HWY_BEFORE_NAMESPACE();
@@ -300,32 +302,20 @@ void QuantizeRoundtripYBlockAC(const float* JXL_RESTRICT qm,
   }
 }
 
-void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
-                         const ImageI& raw_quant_field,
-                         const DequantMatrices& matrices, const float scale,
-                         const ColorCorrelationMap& cmap,
-                         const AcStrategyImage& ac_strategy,
-                         const float x_qm_mul, Image3I* tmp_num_nzeroes,
-                         Image3F* dc, std::vector<Token>* output) {
-  const size_t xsize_groups = DivCeil(opsin.xsize(), kGroupDim);
-  const size_t gx = group_idx % xsize_groups;
-  const size_t gy = group_idx / xsize_groups;
-  const Rect block_group_rect(gx * kGroupDimInBlocks, gy * kGroupDimInBlocks,
-                              kGroupDimInBlocks, kGroupDimInBlocks,
-                              DivCeil(opsin.xsize(), kBlockDim),
-                              DivCeil(opsin.ysize(), kBlockDim));
-  const Rect group_rect(gx * kGroupDim, gy * kGroupDim, kGroupDim, kGroupDim,
-                        opsin.xsize(), opsin.ysize());
-  const Rect cmap_rect(
-      block_group_rect.x0() / kColorTileDimInBlocks,
-      block_group_rect.y0() / kColorTileDimInBlocks,
-      DivCeil(block_group_rect.xsize(), kColorTileDimInBlocks),
-      DivCeil(block_group_rect.ysize(), kColorTileDimInBlocks));
+void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
+                  const DequantMatrices& matrices, const float scale,
+                  const float scale_dc, const uint32_t x_qm_scale,
+                  DCGroupData* dc_data, const EntropyCode& ac_code,
+                  BitWriter* writer) {
+  const size_t xsize_blocks = group_brect.xsize();
+  const size_t ysize_blocks = group_brect.ysize();
+  const Rect cmap_rect(group_brect.x0() / kColorTileDimInBlocks,
+                       group_brect.y0() / kColorTileDimInBlocks,
+                       DivCeil(xsize_blocks, kColorTileDimInBlocks),
+                       DivCeil(ysize_blocks, kColorTileDimInBlocks));
 
-  const size_t xsize_blocks = block_group_rect.xsize();
-  const size_t ysize_blocks = block_group_rect.ysize();
-
-  const size_t dc_stride = static_cast<size_t>(dc->PixelsPerRow());
+  const size_t dc_stride =
+      static_cast<size_t>(dc_data->quant_dc.PixelsPerRow());
   const size_t opsin_stride = static_cast<size_t>(opsin.PixelsPerRow());
 
   // TODO(veluca): consider strategies to reduce this memory.
@@ -337,45 +327,53 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
   HWY_ALIGN float* coeffs_in = fmem.get();
   HWY_ALIGN int32_t* quantized = mem.get();
 
-  output->reserve(output->size() +
-                  3 * xsize_blocks * ysize_blocks * kDCTBlockSize);
+  HWY_ALIGN float tmp_dc[4];
+  const size_t tmp_dc_stride = 2;
+  float inv_factor[3];
+  float cfl_factor[3] = {0.0f, 0.0f, kInvDCQuant[2] * kDCQuant[1]};
+  for (size_t c = 0; c < 3; ++c) {
+    inv_factor[c] = kInvDCQuant[c] * scale_dc;
+  }
 
-  const size_t nzeros_stride = tmp_num_nzeroes->PixelsPerRow();
+  Image3I num_nzeros(kGroupDimInBlocks, kGroupDimInBlocks);
+  const size_t nzeros_stride = num_nzeros.PixelsPerRow();
+  const float x_qm_mul = std::pow(1.25f, x_qm_scale - 2.0f);
 
   for (size_t by = 0; by < ysize_blocks; ++by) {
-    const int32_t* JXL_RESTRICT row_quant_ac =
-        block_group_rect.ConstRow(raw_quant_field, by);
+    const uint8_t* JXL_RESTRICT row_quant_ac =
+        group_brect.ConstRow(dc_data->raw_quant_field, by);
     size_t ty = by / kColorTileDimInBlocks;
     const int8_t* JXL_RESTRICT row_cmap[3] = {
-        cmap_rect.ConstRow(cmap.ytox_map, ty),
+        cmap_rect.ConstRow(dc_data->ytox_map, ty),
         nullptr,
-        cmap_rect.ConstRow(cmap.ytob_map, ty),
+        cmap_rect.ConstRow(dc_data->ytob_map, ty),
     };
     const float* JXL_RESTRICT opsin_rows[3] = {
-        group_rect.ConstPlaneRow(opsin, 0, by * kBlockDim),
-        group_rect.ConstPlaneRow(opsin, 1, by * kBlockDim),
-        group_rect.ConstPlaneRow(opsin, 2, by * kBlockDim),
+        opsin.ConstPlaneRow(0, by * kBlockDim),
+        opsin.ConstPlaneRow(1, by * kBlockDim),
+        opsin.ConstPlaneRow(2, by * kBlockDim),
     };
-    float* JXL_RESTRICT dc_rows[3] = {
-        block_group_rect.PlaneRow(dc, 0, by),
-        block_group_rect.PlaneRow(dc, 1, by),
-        block_group_rect.PlaneRow(dc, 2, by),
+    int16_t* JXL_RESTRICT dc_rows[3] = {
+        group_brect.PlaneRow(&dc_data->quant_dc, 0, by),
+        group_brect.PlaneRow(&dc_data->quant_dc, 1, by),
+        group_brect.PlaneRow(&dc_data->quant_dc, 2, by),
     };
-    AcStrategyRow ac_strategy_row = ac_strategy.ConstRow(block_group_rect, by);
+    AcStrategyRow ac_strategy_row =
+        dc_data->ac_strategy.ConstRow(group_brect, by);
     int32_t* JXL_RESTRICT row_nzeros[3] = {
-        tmp_num_nzeroes->PlaneRow(0, by),
-        tmp_num_nzeroes->PlaneRow(1, by),
-        tmp_num_nzeroes->PlaneRow(2, by),
+        num_nzeros.PlaneRow(0, by),
+        num_nzeros.PlaneRow(1, by),
+        num_nzeros.PlaneRow(2, by),
     };
     const int32_t* JXL_RESTRICT row_nzeros_top[3] = {
-        by == 0 ? nullptr : tmp_num_nzeroes->ConstPlaneRow(0, by - 1),
-        by == 0 ? nullptr : tmp_num_nzeroes->ConstPlaneRow(1, by - 1),
-        by == 0 ? nullptr : tmp_num_nzeroes->ConstPlaneRow(2, by - 1),
+        by == 0 ? nullptr : num_nzeros.ConstPlaneRow(0, by - 1),
+        by == 0 ? nullptr : num_nzeros.ConstPlaneRow(1, by - 1),
+        by == 0 ? nullptr : num_nzeros.ConstPlaneRow(2, by - 1),
     };
     for (size_t bx = 0; bx < xsize_blocks; ++bx) {
       size_t tx = bx / kColorTileDimInBlocks;
-      const auto x_factor = Set(d, cmap.YtoXRatio(row_cmap[0][tx]));
-      const auto b_factor = Set(d, cmap.YtoBRatio(row_cmap[2][tx]));
+      const auto x_factor = Set(d, YtoXRatio(row_cmap[0][tx]));
+      const auto b_factor = Set(d, YtoBRatio(row_cmap[2][tx]));
       const AcStrategy acs = ac_strategy_row[bx];
       if (!acs.IsFirstBlock()) continue;
 
@@ -389,8 +387,14 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
       const int32_t quant_ac = row_quant_ac[bx];
       TransformFromPixels(acs.Strategy(), opsin_rows[1] + bx * kBlockDim,
                           opsin_stride, coeffs_in + size, scratch_space);
-      DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size, dc_rows[1] + bx,
-                              dc_stride);
+      DCFromLowestFrequencies(acs.Strategy(), coeffs_in + size, tmp_dc,
+                              tmp_dc_stride);
+      for (size_t iy = 0; iy < acs.covered_blocks_y(); ++iy) {
+        for (size_t ix = 0; ix < acs.covered_blocks_x(); ++ix) {
+          dc_rows[1][iy * dc_stride + bx + ix] =
+              std::round(inv_factor[1] * tmp_dc[iy * tmp_dc_stride + ix]);
+        }
+      }
       int kind = acs.RawStrategy();
       const float* JXL_RESTRICT yqm = matrices.InvMatrix(kind, 1);
       const float* JXL_RESTRICT ydqm = matrices.Matrix(kind, 1);
@@ -419,8 +423,15 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
         const float* JXL_RESTRICT qm = matrices.InvMatrix(kind, c);
         QuantizeBlockAC(coeffs_in + c * size, c, qm, quant_ac, scale,
                         c == 0 ? x_qm_mul : 1.0, cx, cy, quantized + c * size);
-        DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size,
-                                dc_rows[c] + bx, dc_stride);
+        DCFromLowestFrequencies(acs.Strategy(), coeffs_in + c * size, tmp_dc,
+                                tmp_dc_stride);
+        for (size_t iy = 0; iy < acs.covered_blocks_y(); ++iy) {
+          for (size_t ix = 0; ix < acs.covered_blocks_x(); ++ix) {
+            dc_rows[c][iy * dc_stride + bx + ix] = std::round(
+                tmp_dc[iy * tmp_dc_stride + ix] * inv_factor[c] -
+                dc_rows[1][iy * dc_stride + bx + ix] * cfl_factor[c]);
+          }
+        }
       }
 
       // Tokenize coefficients
@@ -445,7 +456,8 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
         const size_t nzero_ctx = NonZeroContext(predicted_nzeros, block_ctx);
         const size_t histo_offset = ZeroDensityContextsOffset(block_ctx);
 
-        output->emplace_back(nzero_ctx, nzeros);
+        Token token(nzero_ctx, nzeros);
+        WriteToken(token, ac_code, writer);
         // Skip LLF.
         size_t prev = (nzeros > static_cast<ssize_t>(size / 16) ? 0 : 1);
         for (size_t k = covered_blocks; k < size && nzeros != 0; ++k) {
@@ -454,7 +466,8 @@ void ComputeCoefficients(size_t group_idx, const Image3F& opsin,
               histo_offset + ZeroDensityContext(nzeros, k, covered_blocks,
                                                 log2_covered_blocks, prev);
           uint32_t u_coeff = PackSigned(coeff);
-          output->emplace_back(ctx, u_coeff);
+          Token token(ctx, u_coeff);
+          WriteToken(token, ac_code, writer);
           prev = coeff != 0;
           nzeros -= prev;
         }
@@ -471,32 +484,15 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 namespace jxl {
-HWY_EXPORT(ComputeCoefficients);
-Status ComputeCoefficients(const Image3F& opsin, const ImageI& raw_quant_field,
-                           const DequantMatrices& matrices, const float scale,
-                           const ColorCorrelationMap& cmap,
-                           const AcStrategyImage& ac_strategy,
-                           const float x_qm_mul, ThreadPool* pool, Image3F* dc,
-                           std::vector<std::vector<Token>>* ac_tokens) {
-  const size_t xsize_groups = DivCeil(opsin.xsize(), kGroupDim);
-  const size_t ysize_groups = DivCeil(opsin.ysize(), kGroupDim);
-  std::vector<Image3I> num_nzeroes;
-  const auto tokenize_group_init = [&](const size_t num_threads) {
-    num_nzeroes.resize(num_threads);
-    for (size_t t = 0; t < num_threads; ++t) {
-      num_nzeroes[t] = Image3I(kGroupDimInBlocks, kGroupDimInBlocks);
-    }
-    return true;
-  };
-  return RunOnPool(
-      pool, 0, xsize_groups * ysize_groups, tokenize_group_init,
-      [&](size_t group_idx, size_t thread) {
-        HWY_DYNAMIC_DISPATCH(ComputeCoefficients)
-        (group_idx, opsin, raw_quant_field, matrices, scale, cmap, ac_strategy,
-         x_qm_mul, &num_nzeroes[thread], dc, &(*ac_tokens)[group_idx]);
-      },
-      "Compute coeffs");
+HWY_EXPORT(WriteACGroup);
+void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
+                  const DequantMatrices& matrices, const float scale,
+                  const float scale_dc, const uint32_t x_qm_scale,
+                  DCGroupData* dc_data, const EntropyCode& ac_code,
+                  BitWriter* writer) {
+  return HWY_DYNAMIC_DISPATCH(WriteACGroup)(opsin, group_brect, matrices, scale,
+                                            scale_dc, x_qm_scale, dc_data,
+                                            ac_code, writer);
 }
-
 }  // namespace jxl
 #endif  // HWY_ONCE

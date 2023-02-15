@@ -8,19 +8,18 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   base/cache_aligned.cc
   base/data_parallel.cc
   base/padded_bytes.cc
-  convolve_symmetric5.cc
   dct_scales.cc
   enc_ac_strategy.cc
   enc_adaptive_quantization.cc
-  enc_ans.cc
   enc_bit_writer.cc
   enc_chroma_from_luma.cc
   enc_cluster.cc
+  enc_entropy_code.cc
   enc_file.cc
   enc_frame.cc
   enc_group.cc
+  enc_huffman_tree.cc
   enc_xyb.cc
-  gaborish.cc
   image.cc
   quant_weights.cc
   read_pfm.cc

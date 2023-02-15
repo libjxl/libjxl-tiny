@@ -7,13 +7,12 @@
 #ifndef ENCODER_ENC_XYB_H_
 #define ENCODER_ENC_XYB_H_
 
-#include "encoder/base/data_parallel.h"
 #include "encoder/image.h"
 
 namespace jxl {
 
-// Converts linear SRGB to XYB.
-void ToXYB(const Image3F& linear, ThreadPool* pool, Image3F* JXL_RESTRICT xyb);
+// Converts linear SRGB to XYB in place.
+void ToXYB(Image3F* image);
 
 }  // namespace jxl
 

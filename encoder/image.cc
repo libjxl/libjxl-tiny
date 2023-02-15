@@ -133,26 +133,5 @@ constexpr inline size_t RoundUpToBlockDim(size_t dim) {
   return (dim + 7) & ~size_t(7);
 }
 
-void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in) {
-  const size_t xsize_orig = in->xsize();
-  const size_t ysize_orig = in->ysize();
-  const size_t xsize = RoundUpToBlockDim(xsize_orig);
-  const size_t ysize = RoundUpToBlockDim(ysize_orig);
-  // Expands image size to the originally-allocated size.
-  in->ShrinkTo(xsize, ysize);
-  for (size_t c = 0; c < 3; c++) {
-    for (size_t y = 0; y < ysize_orig; y++) {
-      float* JXL_RESTRICT row = in->PlaneRow(c, y);
-      for (size_t x = xsize_orig; x < xsize; x++) {
-        row[x] = row[xsize_orig - 1];
-      }
-    }
-    const float* JXL_RESTRICT row_src = in->ConstPlaneRow(c, ysize_orig - 1);
-    for (size_t y = ysize_orig; y < ysize; y++) {
-      memcpy(in->PlaneRow(c, y), row_src, xsize * sizeof(float));
-    }
-  }
-}
-
 }  // namespace jxl
 #endif  // HWY_ONCE

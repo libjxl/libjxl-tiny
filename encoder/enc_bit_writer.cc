@@ -55,12 +55,11 @@ void BitWriter::Allotment::PrivateReclaim(BitWriter* JXL_RESTRICT writer,
   }
 }
 
-void BitWriter::AppendByteAligned(const std::vector<BitWriter>& others) {
+void BitWriter::AppendByteAligned(std::vector<BitWriter>* others) {
   // Total size to add so we can preallocate
   size_t other_bytes = 0;
-  for (const BitWriter& writer : others) {
-    JXL_ASSERT(writer.BitsWritten() % kBitsPerByte == 0);
-    other_bytes += writer.BitsWritten() / kBitsPerByte;
+  for (const BitWriter& writer : *others) {
+    other_bytes += DivCeil(writer.BitsWritten(), kBitsPerByte);
   }
   if (other_bytes == 0) {
     // No bytes to append: this happens for example when creating per-group
@@ -73,7 +72,10 @@ void BitWriter::AppendByteAligned(const std::vector<BitWriter>& others) {
   // Concatenate by copying bytes because both source and destination are bytes.
   JXL_ASSERT(BitsWritten() % kBitsPerByte == 0);
   size_t pos = BitsWritten() / kBitsPerByte;
-  for (const BitWriter& writer : others) {
+  for (BitWriter& writer : *others) {
+    BitWriter::Allotment allotment(&writer, 8);
+    writer.ZeroPadToByte();
+    allotment.Reclaim(&writer);
     const Span<const uint8_t> span = writer.GetSpan();
     if (!span.empty()) {
       memcpy(storage_.data() + pos, span.data(), span.size());
