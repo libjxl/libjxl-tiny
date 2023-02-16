@@ -500,7 +500,13 @@ void WriteDCGlobal(const DistanceParams& distp, const size_t num_dc_groups,
   BitWriter::Allotment allotment(writer, 1024);
   writer->Write(1, 1);  // default dequant dc
   WriteQuantScales(distp.global_scale, distp.quant_dc, writer);
-  writer->Write(1, 1);  // default BlockCtxMap
+  writer->Write(1, 0);   // non-default BlockCtxMap
+  writer->Write(16, 0);  // no dc ctx, no qft
+  {
+    EntropyCode code(kCompactBlockContextMap, sizeof(kCompactBlockContextMap),
+                     nullptr, 0);
+    WriteContextMap(code, writer);
+  }
   writer->Write(1, 1);  // default DC camp
   WriteContextTree(num_dc_groups, writer);
   writer->Write(1, 0);  // no lz77
