@@ -14,6 +14,7 @@
 namespace jxl {
 
 static constexpr size_t kAlphabetSize = 64;
+static constexpr uint8_t kMaxContexts = 128;
 
 struct PrefixCode {
   uint8_t depths[kAlphabetSize];
@@ -34,6 +35,9 @@ struct EntropyCode {
   // Data storage for the optimized entropy codes.
   std::vector<uint8_t> context_map_storage;
   std::vector<PrefixCode> prefix_code_storage;
+  // Original context map, in case the contexts were clustered.
+  const uint8_t* orig_context_map = nullptr;
+  size_t orig_num_contexts = 0;
 };
 
 }  // namespace jxl

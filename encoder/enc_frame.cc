@@ -27,6 +27,7 @@
 #include "encoder/base/status.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
+#include "encoder/config.h"
 #include "encoder/dc_group_data.h"
 #include "encoder/enc_ac_strategy.h"
 #include "encoder/enc_adaptive_quantization.h"
@@ -279,8 +280,11 @@ static constexpr size_t kNumDCContexts = 45;
 
 void WriteDCTokens(const Image3S& quant_dc, const EntropyCode& dc_code,
                    BitWriter* writer) {
+  size_t nblocks = quant_dc.xsize() * quant_dc.ysize();
+  size_t allotment_size = kMaxBitsPerToken * nblocks;
   const intptr_t onerow = quant_dc.Plane(0).PixelsPerRow();
   for (size_t c : {1, 0, 2}) {
+    BitWriter::Allotment allotment(writer, allotment_size);
     for (size_t y = 0; y < quant_dc.ysize(); y++) {
       for (size_t x = 0; x < quant_dc.xsize(); x++) {
         const int16_t* qrow = quant_dc.PlaneRow(c, y);
@@ -293,9 +297,15 @@ void WriteDCTokens(const Image3S& quant_dc, const EntropyCode& dc_code,
         int32_t residual = qrow[x] - guess;
         uint32_t ctx_id = kGradientContextLut[gradprop];
         Token token(ctx_id, PackSigned(residual));
+#if OPTIMIZE_CODE
+        writer->Write(8, dc_code.context_map[token.context]);
+        writer->Write(16, token.value);
+#else
         WriteToken(token, dc_code, writer);
+#endif
       }
     }
+    allotment.Reclaim(writer);
   }
 }
 
@@ -314,56 +324,96 @@ void WriteACMetadataTokens(const ImageSB& ytox_map, const ImageSB& ytob_map,
                            const AcStrategyImage& ac_strategy,
                            const ImageB& raw_quant_field,
                            const EntropyCode& dc_code, BitWriter* writer) {
-  // YtoX and YtoB tokens.
-  for (size_t c = 0; c < 2; ++c) {
-    const ImageSB& cfl_map = (c == 0 ? ytox_map : ytob_map);
-    const intptr_t onerow = cfl_map.PixelsPerRow();
-    for (size_t y = 0; y < cfl_map.ysize(); y++) {
-      const int8_t* row = cfl_map.ConstRow(y);
-      for (size_t x = 0; x < cfl_map.xsize(); x++) {
-        int64_t left = (x ? row[x - 1] : y ? *(row + x - onerow) : 0);
-        int64_t top = (y ? *(row + x - onerow) : left);
-        int64_t topleft = (x && y ? *(row + x - 1 - onerow) : left);
-        int32_t guess = ClampedGradient(top, left, topleft);
-        int32_t residual = static_cast<int32_t>(row[x]) - guess;
-        uint32_t ctx_id = 2u - c;
-        Token token(ctx_id, PackSigned(residual));
-        WriteToken(token, dc_code, writer);
+  size_t xsize_blocks = ac_strategy.xsize();
+  size_t ysize_blocks = ac_strategy.ysize();
+  size_t nblocks = xsize_blocks * ysize_blocks;
+  size_t allotment_size = kMaxBitsPerToken * nblocks;
+  {
+    // YtoX and YtoB tokens.
+    BitWriter::Allotment allotment(writer, allotment_size);
+    for (size_t c = 0; c < 2; ++c) {
+      const ImageSB& cfl_map = (c == 0 ? ytox_map : ytob_map);
+      const intptr_t onerow = cfl_map.PixelsPerRow();
+      for (size_t y = 0; y < cfl_map.ysize(); y++) {
+        const int8_t* row = cfl_map.ConstRow(y);
+        for (size_t x = 0; x < cfl_map.xsize(); x++) {
+          int64_t left = (x ? row[x - 1] : y ? *(row + x - onerow) : 0);
+          int64_t top = (y ? *(row + x - onerow) : left);
+          int64_t topleft = (x && y ? *(row + x - 1 - onerow) : left);
+          int32_t guess = ClampedGradient(top, left, topleft);
+          int32_t residual = static_cast<int32_t>(row[x]) - guess;
+          uint32_t ctx_id = 2u - c;
+          Token token(ctx_id, PackSigned(residual));
+#if OPTIMIZE_CODE
+          writer->Write(8, dc_code.context_map[token.context]);
+          writer->Write(16, token.value);
+#else
+          WriteToken(token, dc_code, writer);
+#endif
+        }
       }
     }
+    allotment.Reclaim(writer);
   }
-  // Ac strategy tokens.
-  int32_t left = 0;
-  for (size_t y = 0; y < ac_strategy.ysize(); y++) {
-    AcStrategyRow row_acs = ac_strategy.ConstRow(y);
-    for (size_t x = 0; x < ac_strategy.xsize(); x++) {
-      if (!row_acs[x].IsFirstBlock()) continue;
-      int32_t cur = row_acs[x].StrategyCode();
-      uint32_t ctx_id = (left > 11 ? 7 : left > 5 ? 8 : left > 3 ? 9 : 10);
-      Token token(ctx_id, PackSigned(cur));
-      WriteToken(token, dc_code, writer);
-      left = cur;
+  {
+    // Ac strategy tokens.
+    BitWriter::Allotment allotment(writer, allotment_size);
+    int32_t left = 0;
+    for (size_t y = 0; y < ysize_blocks; y++) {
+      AcStrategyRow row_acs = ac_strategy.ConstRow(y);
+      for (size_t x = 0; x < xsize_blocks; x++) {
+        if (!row_acs[x].IsFirstBlock()) continue;
+        int32_t cur = row_acs[x].StrategyCode();
+        uint32_t ctx_id = (left > 11 ? 7 : left > 5 ? 8 : left > 3 ? 9 : 10);
+        Token token(ctx_id, PackSigned(cur));
+#if OPTIMIZE_CODE
+        writer->Write(8, dc_code.context_map[token.context]);
+        writer->Write(16, token.value);
+#else
+        WriteToken(token, dc_code, writer);
+#endif
+        left = cur;
+      }
     }
+    allotment.Reclaim(writer);
   }
-  // Quant field tokens.
-  left = ac_strategy.ConstRow(0)[0].StrategyCode();
-  for (size_t y = 0; y < ac_strategy.ysize(); y++) {
-    AcStrategyRow row_acs = ac_strategy.ConstRow(y);
-    const uint8_t* row_qf = raw_quant_field.ConstRow(y);
-    for (size_t x = 0; x < ac_strategy.xsize(); x++) {
-      if (!row_acs[x].IsFirstBlock()) continue;
-      size_t cur = row_qf[x] - 1;
-      int32_t residual = cur - left;
-      uint32_t ctx_id = (left > 11 ? 3 : left > 5 ? 4 : left > 3 ? 5 : 6);
-      Token token(ctx_id, PackSigned(residual));
-      WriteToken(token, dc_code, writer);
-      left = cur;
+  {
+    // Quant field tokens.
+    BitWriter::Allotment allotment(writer, allotment_size);
+    int32_t left = ac_strategy.ConstRow(0)[0].StrategyCode();
+    for (size_t y = 0; y < ysize_blocks; y++) {
+      AcStrategyRow row_acs = ac_strategy.ConstRow(y);
+      const uint8_t* row_qf = raw_quant_field.ConstRow(y);
+      for (size_t x = 0; x < xsize_blocks; x++) {
+        if (!row_acs[x].IsFirstBlock()) continue;
+        size_t cur = row_qf[x] - 1;
+        int32_t residual = cur - left;
+        uint32_t ctx_id = (left > 11 ? 3 : left > 5 ? 4 : left > 3 ? 5 : 6);
+        Token token(ctx_id, PackSigned(residual));
+#if OPTIMIZE_CODE
+        writer->Write(8, dc_code.context_map[token.context]);
+        writer->Write(16, token.value);
+#else
+        WriteToken(token, dc_code, writer);
+#endif
+        left = cur;
+      }
     }
+    allotment.Reclaim(writer);
   }
-  // EPF tokens.
-  for (size_t i = 0; i < ac_strategy.ysize() * ac_strategy.xsize(); ++i) {
-    Token token(0, PackSigned(4));
-    WriteToken(token, dc_code, writer);
+  {
+    // EPF tokens.
+    BitWriter::Allotment allotment(writer, allotment_size);
+    for (size_t i = 0; i < nblocks; ++i) {
+      Token token(0, PackSigned(4));
+#if OPTIMIZE_CODE
+      writer->Write(8, dc_code.context_map[token.context]);
+      writer->Write(16, token.value);
+#else
+      WriteToken(token, dc_code, writer);
+#endif
+    }
+    allotment.Reclaim(writer);
   }
 }
 
@@ -432,15 +482,17 @@ void WriteContextTree(size_t num_dc_groups, BitWriter* writer) {
   std::vector<Token> tokens(kContextTreeTokens,
                             kContextTreeTokens + kNumContextTreeTokens);
   tokens[1].value = PackSigned(1 + num_dc_groups);
-  EntropyCode code(kContextTreeContextMap, kNumTreeContexts, nullptr,
-                   kNumContextTreePrefixCodes);
-  OptimizePrefixCodes(tokens, &code);
+  EntropyCode code(nullptr, kNumTreeContexts, nullptr, 0);
+  // NOTE: this could be done offline since we have a static context tree.
+  OptimizeEntropyCode(tokens, &code);
   writer->AllocateAndWrite(1, 1);  // not an empty tree
   writer->AllocateAndWrite(1, 0);  // no lz77
   WriteEntropyCode(code, writer);
+  BitWriter::Allotment allotment(writer, kMaxBitsPerToken * tokens.size());
   for (const Token& t : tokens) {
     WriteToken(t, code, writer);
   }
+  allotment.Reclaim(writer);
 }
 
 void WriteDCGlobal(const DistanceParams& distp, const size_t num_dc_groups,
@@ -473,22 +525,36 @@ void WriteDCGroup(const DCGroupData& data, const EntropyCode& dc_code,
                   BitWriter* writer) {
   {
     BitWriter::Allotment allotment(writer, 1024);
+#if OPTIMIZE_CODE
+    writer->Write(8, kMaxContexts + 6);
+    writer->Write(16, 12);
+#else
     writer->Write(2, 0);  // extra_dc_precision
     writer->Write(4, 3);  // use global tree, default wp, no transforms
+#endif
     allotment.Reclaim(writer);
-    WriteDCTokens(data.quant_dc, dc_code, writer);
   }
+  WriteDCTokens(data.quant_dc, dc_code, writer);
   {
     size_t num_blocks = data.ac_strategy.xsize() * data.ac_strategy.ysize();
     size_t num_ac_blocks = CountACBlocks(data.ac_strategy);
     size_t nb_bits = CeilLog2Nonzero(num_blocks);
     BitWriter::Allotment allotment(writer, 1024);
+#if OPTIMIZE_CODE
+    if (nb_bits != 0) {
+      writer->Write(8, kMaxContexts + nb_bits);
+      writer->Write(16, num_ac_blocks - 1);
+    }
+    writer->Write(8, kMaxContexts + 4);
+    writer->Write(16, 3);
+#else
     if (nb_bits != 0) writer->Write(nb_bits, num_ac_blocks - 1);
     writer->Write(4, 3);  // use global tree, default wp, no transforms
+#endif
     allotment.Reclaim(writer);
-    WriteACMetadataTokens(data.ytox_map, data.ytob_map, data.ac_strategy,
-                          data.raw_quant_field, dc_code, writer);
   }
+  WriteACMetadataTokens(data.ytox_map, data.ytob_map, data.ac_strategy,
+                        data.raw_quant_field, dc_code, writer);
 }
 
 void WriteTOC(const std::vector<BitWriter>& sections, BitWriter* output) {
@@ -497,6 +563,7 @@ void WriteTOC(const std::vector<BitWriter>& sections, BitWriter* output) {
   output->ZeroPadToByte();  // before TOC entries
   for (size_t i = 0; i < sections.size(); i++) {
     size_t section_size = DivCeil(sections[i].BitsWritten(), kBitsPerByte);
+    JXL_ASSERT(section_size < (1u << 22));
     size_t offset = 0;
     bool success = false;
     static const size_t kBits[4] = {10, 14, 22, 30};
@@ -644,12 +711,46 @@ Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
   return true;
 }
 
-void CombineSections(const ImageDim& dim, const DistanceParams& distp,
-                     EntropyCode* dc_code, EntropyCode* ac_code,
-                     std::vector<BitWriter>* sections, BitWriter* writer) {
-  WriteDCGlobal(distp, dim.num_dc_groups, *dc_code, &(*sections)[0]);
-  WriteACGlobal(dim.num_groups, *ac_code, &(*sections)[1 + dim.num_dc_groups]);
-  WriteFrameHeader(distp.x_qm_scale, distp.epf_iters, writer);
+#if OPTIMIZE_CODE
+void OptimizeSections(EntropyCode* code, BitWriter* sections, size_t num) {
+  std::vector<Histogram> histograms(code->num_prefix_codes);
+  for (size_t i = 0; i < num; ++i) {
+    Span<const uint8_t> bytes = sections[i].GetSpan();
+    JXL_ASSERT(bytes.size() % 3 == 0);
+    for (size_t j = 0; j < bytes.size(); j += 3) {
+      uint8_t context = bytes[j];
+      uint16_t value = (bytes[j + 2] << 8) + bytes[j + 1];
+      if (context < kMaxContexts) {
+        JXL_ASSERT(context < histograms.size());
+        uint32_t tok, nbits, bits;
+        UintCoder().Encode(value, &tok, &nbits, &bits);
+        JXL_ASSERT(tok < kAlphabetSize);
+        histograms[context].Add(tok);
+      }
+    }
+  }
+  OptimizeEntropyCode(&histograms, code);
+  for (size_t i = 0; i < num; ++i) {
+    Span<const uint8_t> bytes = sections[i].GetSpan();
+    BitWriter writer;
+    size_t num_tokens = bytes.size() / 3;
+    BitWriter::Allotment allotment(&writer, kMaxBitsPerToken * num_tokens);
+    for (size_t j = 0; j < bytes.size(); j += 3) {
+      uint8_t context = bytes[j];
+      uint16_t value = (bytes[j + 2] << 8) + bytes[j + 1];
+      if (context >= kMaxContexts) {
+        writer.Write(context - kMaxContexts, value);
+      } else {
+        WriteToken(Token(context, value), *code, &writer);
+      }
+    }
+    allotment.Reclaim(&writer);
+    std::swap(sections[i], writer);
+  }
+}
+#endif
+
+void CombineSections(std::vector<BitWriter>* sections, BitWriter* writer) {
   // TODO(szabadka) Fix this for small images.
   WriteTOC(*sections, writer);
   writer->AppendByteAligned(sections);
@@ -684,8 +785,19 @@ Status EncodeFrame(const float distance, const Image3F& linear,
                                        dc_code, ac_code, pool, &sections));
   }
 
-  // Assemble final bit stream.
-  CombineSections(dim, distp, &dc_code, &ac_code, &sections, writer);
+#if OPTIMIZE_CODE
+  OptimizeSections(&dc_code, &sections[1], dim.num_dc_groups);
+  size_t ac_group_start = 2 + dim.num_dc_groups;
+  OptimizeSections(&ac_code, &sections[ac_group_start], dim.num_groups);
+#endif
+
+  // Generate DC and AC global sections.
+  WriteDCGlobal(distp, dim.num_dc_groups, dc_code, &sections[0]);
+  WriteACGlobal(dim.num_groups, ac_code, &sections[1 + dim.num_dc_groups]);
+
+  // Assemble final bitstream.
+  WriteFrameHeader(distp.x_qm_scale, distp.epf_iters, writer);
+  CombineSections(&sections, writer);
   return true;
 }
 

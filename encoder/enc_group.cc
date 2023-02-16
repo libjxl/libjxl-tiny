@@ -21,6 +21,7 @@
 #include "encoder/base/compiler_specific.h"
 #include "encoder/chroma_from_luma.h"
 #include "encoder/common.h"
+#include "encoder/config.h"
 #include "encoder/enc_entropy_code.h"
 #include "encoder/enc_transforms-inl.h"
 #include "encoder/image.h"
@@ -435,6 +436,8 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
       }
 
       // Tokenize coefficients
+      size_t max_tokens = 3 * covered_blocks * kDCTBlockSize;
+      BitWriter::Allotment allotment(writer, kMaxBitsPerToken * max_tokens);
       const size_t log2_covered_blocks =
           Num0BitsBelowLS1Bit_Nonzero(covered_blocks);
       for (int c : {1, 0, 2}) {
@@ -457,7 +460,12 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
         const size_t histo_offset = ZeroDensityContextsOffset(block_ctx);
 
         Token token(nzero_ctx, nzeros);
+#if OPTIMIZE_CODE
+        writer->Write(8, ac_code.context_map[token.context]);
+        writer->Write(16, token.value);
+#else
         WriteToken(token, ac_code, writer);
+#endif
         // Skip LLF.
         size_t prev = (nzeros > static_cast<ssize_t>(size / 16) ? 0 : 1);
         for (size_t k = covered_blocks; k < size && nzeros != 0; ++k) {
@@ -467,12 +475,18 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
                                                 log2_covered_blocks, prev);
           uint32_t u_coeff = PackSigned(coeff);
           Token token(ctx, u_coeff);
+#if OPTIMIZE_CODE
+          writer->Write(8, ac_code.context_map[token.context]);
+          writer->Write(16, token.value);
+#else
           WriteToken(token, ac_code, writer);
+#endif
           prev = coeff != 0;
           nzeros -= prev;
         }
         JXL_DASSERT(nzeros == 0);
       }
+      allotment.Reclaim(writer);
     }
   }
 }

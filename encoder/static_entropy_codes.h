@@ -13,9 +13,8 @@
 
 namespace jxl {
 
-static constexpr uint8_t kContextTreeContextMap[] = {0, 1, 2, 1, 1, 1};
-static constexpr size_t kNumContextTreePrefixCodes = 3;
-
+// TODO(szabaka) Create context maps with more histograms for the
+// OPTIMIZE_CODE case.
 static constexpr uint8_t kDCContextMap[] = {
     0, 1, 2, 2, 1, 1, 3, 0, 3, 0, 4, 5, 6, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6,
     6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 6, 7, 6, 7, 6, 6, 5, 5,
