@@ -23,6 +23,8 @@ void OptimizeEntropyCode(const std::vector<Token>& tokens, EntropyCode* code);
 
 void OptimizeEntropyCode(std::vector<Histogram>* histograms, EntropyCode* code);
 
+void WriteContextMap(const EntropyCode& code, BitWriter* writer);
+
 void WriteEntropyCode(const EntropyCode& code, BitWriter* writer);
 
 // This is an upper bound on the average bits per token on an array of

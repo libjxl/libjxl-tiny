@@ -42,14 +42,24 @@ constexpr int kZeroDensityContextCount = 458;
 // Supremum of ZeroDensityContext(x, y) + 1.
 constexpr int kZeroDensityContextLimit = 474;
 
+static constexpr uint8_t kCompactBlockContextMap[] = {
+    0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,  // Y
+    2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3,  // X
+    2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3,  // B
+};
 static constexpr uint8_t kBlockContextMap[] = {
-    7, 8,  8,  8,  9,  9,  10, 10, 11, 11, 12, 12, 8,  8,  8,  8, 8,
-    8, 13, 14, 14, 14, 14, 14, 14, 14, 14, 0,  1,  1,  1,  2,  2, 3,
-    3, 3,  3,  4,  4,  1,  1,  1,  1,  1,  1,  5,  6,  6,  6,  6, 6,
-    6, 6,  6,  7,  8,  8,  8,  9,  9,  10, 10, 11, 11, 12, 12, 8, 8,
-    8, 8,  8,  8,  13, 14, 14, 14, 14, 14, 14, 14, 14};
+    // X
+    2, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0,  //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,     //
+    // Y
+    0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0,  //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,     //
+    // B
+    2, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0,  //
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,     //
+};
 static constexpr size_t kNumAcStrategyCodes = 27;
-static constexpr size_t kNumBlockCtxs = 15;
+static constexpr size_t kNumBlockCtxs = 4;
 
 static constexpr size_t BlockContext(size_t c, uint8_t ac_strategy_code) {
   return kBlockContextMap[c * kNumAcStrategyCodes + ac_strategy_code];
