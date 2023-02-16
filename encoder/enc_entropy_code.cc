@@ -452,27 +452,39 @@ void WritePrefixCodes(const PrefixCode* prefix_codes, size_t num,
   }
 }
 
-void WriteContextMap(const uint8_t* context_map, size_t num_contexts,
-                     BitWriter* writer) {
+void WriteContextMap(const EntropyCode& code, BitWriter* writer) {
+  const size_t num_contexts =
+      code.orig_context_map ? code.orig_num_contexts : code.num_contexts;
   if (num_contexts == 0) {
     return;
   }
-  if (*std::max_element(context_map, context_map + num_contexts) == 0) {
+  if (*std::max_element(code.context_map,
+                        code.context_map + code.num_contexts) == 0) {
     writer->AllocateAndWrite(3, 1);  // simple code, 0 bits per entry
     return;
   }
   writer->AllocateAndWrite(3, 0);  // no simple code, no MTF, no LZ77
   std::vector<Token> tokens;
-  for (size_t i = 0; i < num_contexts; i++) {
-    tokens.emplace_back(0, context_map[i]);
+  if (code.orig_context_map) {
+    for (size_t i = 0; i < code.orig_num_contexts; i++) {
+      tokens.emplace_back(0, code.context_map[code.orig_context_map[i]]);
+    }
+  } else {
+    for (size_t i = 0; i < code.num_contexts; i++) {
+      tokens.emplace_back(0, code.context_map[i]);
+    }
   }
   uint8_t dummy_ctx_map = 0;
-  EntropyCode code(&dummy_ctx_map, 1, nullptr, 1);
-  OptimizePrefixCodes(tokens, &code);
-  WritePrefixCodes(code.prefix_codes, code.num_prefix_codes, writer);
+  EntropyCode ctxmap_code(&dummy_ctx_map, 1, nullptr, 1);
+  OptimizePrefixCodes(tokens, &ctxmap_code);
+  WritePrefixCodes(ctxmap_code.prefix_codes, ctxmap_code.num_prefix_codes,
+                   writer);
+
+  BitWriter::Allotment allotment(writer, kMaxBitsPerToken * tokens.size());
   for (const Token& t : tokens) {
-    WriteToken(t, code, writer);
+    WriteToken(t, ctxmap_code, writer);
   }
+  allotment.Reclaim(writer);
 }
 
 void BuildHistograms(const std::vector<Token>& tokens,
@@ -524,8 +536,20 @@ void OptimizeEntropyCode(const std::vector<Token>& tokens, EntropyCode* code) {
   BuildHuffmanCodes(histograms, code);
 }
 
+void OptimizeEntropyCode(std::vector<Histogram>* histograms,
+                         EntropyCode* code) {
+  JXL_ASSERT(code->num_prefix_codes == histograms->size());
+  ClusterHistograms(histograms, &code->context_map_storage);
+  code->orig_context_map = code->context_map;
+  code->orig_num_contexts = code->num_contexts;
+  code->context_map = code->context_map_storage.data();
+  code->num_contexts = code->num_prefix_codes;
+  JXL_ASSERT(code->context_map_storage.size() == code->num_contexts);
+  BuildHuffmanCodes(*histograms, code);
+}
+
 void WriteEntropyCode(const EntropyCode& code, BitWriter* writer) {
-  WriteContextMap(code.context_map, code.num_contexts, writer);
+  WriteContextMap(code, writer);
   WritePrefixCodes(code.prefix_codes, code.num_prefix_codes, writer);
 }
 

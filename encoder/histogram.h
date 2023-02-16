@@ -20,7 +20,10 @@ struct Histogram {
     memset(counts, 0, sizeof(counts));
     total_count = 0;
   }
-  void Add(uint32_t symbol) { counts[symbol]++; }
+  void Add(uint32_t symbol) {
+    ++counts[symbol];
+    ++total_count;
+  }
   void AddHistogram(const Histogram& other) {
     for (size_t i = 0; i < kAlphabetSize; ++i) {
       counts[i] += other.counts[i];
