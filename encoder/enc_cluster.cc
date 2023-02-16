@@ -7,13 +7,8 @@
 #include "encoder/enc_cluster.h"
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <map>
-#include <memory>
-#include <numeric>
-#include <queue>
-#include <tuple>
 
 #include "encoder/enc_huffman_tree.h"
 
@@ -23,7 +18,7 @@ namespace {
 void HistogramBitCost(const Histogram& a) {
   a.bit_cost = 0;
   if (a.total_count == 0) return;
-  uint8_t depths[kAlphabetSize];
+  uint8_t depths[kAlphabetSize] = {};
   CreateHuffmanTree(a.counts, kAlphabetSize, 15, depths);
   for (size_t i = 0; i < kAlphabetSize; ++i) {
     a.bit_cost += a.counts[i] * depths[i];
@@ -70,7 +65,8 @@ void FastClusterHistograms(const std::vector<Histogram>& in,
     largest_idx = 0;
     for (size_t i = 0; i < in.size(); i++) {
       if (dists[i] == 0.0f) continue;
-      dists[i] = std::min(HistogramDistance(in[i], out->back()), dists[i]);
+      float dist = HistogramDistance(in[i], out->back());
+      dists[i] = std::min(dist, dists[i]);
       if (dists[i] > dists[largest_idx]) largest_idx = i;
     }
     if (dists[largest_idx] < kMinDistanceForDistinct) break;
