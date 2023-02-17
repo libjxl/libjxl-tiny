@@ -802,7 +802,13 @@ void OptimizeSections(EntropyCode* code, BitWriter* sections, size_t num) {
 #endif
 
 void CombineSections(std::vector<BitWriter>* sections, BitWriter* writer) {
-  // TODO(szabadka) Fix this for small images.
+  if (sections->size() == 4) {
+    // If we have only one AC group, everything must be put into one section.
+    for (size_t i = 1; i < 4; ++i) {
+      (*sections)[0].Append((*sections)[i]);
+    }
+    sections->resize(1);
+  }
   WriteTOC(*sections, writer);
   writer->AppendByteAligned(sections);
 }
