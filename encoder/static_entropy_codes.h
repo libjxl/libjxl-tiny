@@ -160,7 +160,7 @@ static constexpr PrefixCode kDCPrefixCodes[kNumDCPrefixCodes] = {
 #if OPTIMIZE_CODE
 static constexpr size_t kNumACPrefixCodes = 64;
 static constexpr const PrefixCode* kACPrefixCodes = nullptr;
-// TODO(szabaka) Make the context map dependent on the distance setting.
+// TODO(szabadka) Make the context map dependent on the distance setting.
 /* clang-format off */
 static constexpr uint8_t kACContextMap[] = {
     // Context map for number of nonzeros

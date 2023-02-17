@@ -62,6 +62,7 @@ struct BitWriter {
   }
 
  public:
+  void Append(const BitWriter& other);
   void AppendByteAligned(std::vector<BitWriter>* others);
 
   class Allotment {

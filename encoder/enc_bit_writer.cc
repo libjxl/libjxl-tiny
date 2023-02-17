@@ -87,6 +87,26 @@ void BitWriter::AppendByteAligned(std::vector<BitWriter>* others) {
   bits_written_ += other_bytes * kBitsPerByte;
 }
 
+void BitWriter::Append(const BitWriter& other) {
+  // Total size to add so we can preallocate
+  size_t other_bytes = DivCeil(other.BitsWritten(), kBitsPerByte);
+  if (other_bytes == 0) {
+    return;
+  }
+  storage_.resize(storage_.size() + other_bytes + 1);  // extra zero padding
+
+  size_t other_full_bytes = other.BitsWritten() / kBitsPerByte;
+  size_t other_trailing_bits = other.BitsWritten() % kBitsPerByte;
+  for (size_t i = 0; i < other_full_bytes; ++i) {
+    Write(8, other.storage_[i]);
+  }
+  if (other_trailing_bits > 0) {
+    uint64_t last_byte = other.storage_[other_full_bytes];
+    uint64_t last_byte_mask = (1u << other_trailing_bits) - 1;
+    Write(other_trailing_bits, last_byte & last_byte_mask);
+  }
+}
+
 // Example: let's assume that 3 bits (Rs below) have been written already:
 // BYTE+0       BYTE+1       BYTE+2
 // 0000 0RRR    ???? ????    ???? ????
