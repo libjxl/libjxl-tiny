@@ -27,14 +27,13 @@
 
 namespace jxl {
 
+static constexpr size_t kMaxCoeffDim = 2 * kBlockDim;
+static constexpr size_t kMaxCoeffArea = 2 * kDCTBlockSize;
+static_assert((kMaxCoeffArea * sizeof(float)) % hwy::kMaxVectorSize == 0,
+              "Coefficient area is not a multiple of vector size");
+
 class AcStrategy {
  public:
-  // TODO(szabadka): why does it not work with 2?
-  static constexpr size_t kMaxCoeffBlocks = 4;
-  static constexpr size_t kMaxCoeffArea = kMaxCoeffBlocks * kDCTBlockSize;
-  static_assert((kMaxCoeffArea * sizeof(float)) % hwy::kMaxVectorSize == 0,
-                "Coefficient area is not a multiple of vector size");
-
   // Raw strategy types.
   enum Type : uint32_t {
     // Regular block size DCT
