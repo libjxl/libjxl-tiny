@@ -154,10 +154,6 @@ HWY_AFTER_NAMESPACE();
 namespace jxl {
 HWY_EXPORT(EstimateEntropy);
 
-// These definitions are needed before C++17.
-constexpr size_t AcStrategy::kMaxCoeffBlocks;
-constexpr size_t AcStrategy::kMaxCoeffArea;
-
 float EstimateEntropy(const AcStrategy& acs, const Image3F& opsin, size_t bx,
                       size_t by, size_t cx, size_t cy, const float distance,
                       const DequantMatrices& matrices, const ImageF& qf,
