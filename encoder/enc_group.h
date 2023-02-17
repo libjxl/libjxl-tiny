@@ -18,10 +18,23 @@
 
 namespace jxl {
 
+struct GroupProcessorMemory {
+  GroupProcessorMemory() {
+    mem_dct = hwy::AllocateAligned<float>(kMaxCoeffArea * 4);
+    mem_coeff = hwy::AllocateAligned<int32_t>(kMaxCoeffArea * 3);
+  }
+  float* block_storage() { return mem_dct.get(); }
+  float* scratch_space() { return mem_dct.get() + 3 * kMaxCoeffArea; }
+  int32_t* coeff_storage() { return mem_coeff.get(); }
+  hwy::AlignedFreeUniquePtr<float[]> mem_dct;
+  hwy::AlignedFreeUniquePtr<int32_t[]> mem_coeff;
+};
+
 void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
                   const DequantMatrices& matrices, const float scale,
                   const float scale_dc, const uint32_t x_qm_scale,
                   DCGroupData* dc_data, const EntropyCode& ac_code,
+                  Image3B* num_nzeros, GroupProcessorMemory* mem,
                   BitWriter* writer);
 
 }  // namespace jxl

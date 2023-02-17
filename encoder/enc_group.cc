@@ -48,12 +48,12 @@ using hwy::HWY_NAMESPACE::Xor;
 // Returns number of non-zero coefficients (but skip LLF).
 // We cannot rely on block[] being all-zero bits, so first truncate to integer.
 // Also writes the per-8x8 block nzeros starting at nzeros_pos.
-int32_t NumNonZeroExceptLLF(const size_t cx, const size_t cy,
+uint8_t NumNonZeroExceptLLF(const size_t cx, const size_t cy,
                             const AcStrategy acs, const size_t covered_blocks,
                             const size_t log2_covered_blocks,
                             const int32_t* JXL_RESTRICT block,
                             const size_t nzeros_stride,
-                            int32_t* JXL_RESTRICT nzeros_pos) {
+                            uint8_t* JXL_RESTRICT nzeros_pos) {
   const HWY_CAPPED(int32_t, kBlockDim) di;
 
   const auto zero = Zero(di);
@@ -92,7 +92,7 @@ int32_t NumNonZeroExceptLLF(const size_t cx, const size_t cy,
   const int32_t nzeros =
       int32_t(cx * cy * kDCTBlockSize) + GetLane(SumOfLanes(di, neg_sum_zero));
 
-  const int32_t shifted_nzeros = static_cast<int32_t>(
+  const uint8_t shifted_nzeros = static_cast<uint8_t>(
       (nzeros + covered_blocks - 1) >> log2_covered_blocks);
   // Need non-canonicalized dimensions!
   for (size_t y = 0; y < acs.covered_blocks_y(); y++) {
@@ -106,8 +106,8 @@ int32_t NumNonZeroExceptLLF(const size_t cx, const size_t cy,
 
 // Specialization for 8x8, where only top-left is LLF/DC.
 // About 1% overall speedup vs. NumNonZeroExceptLLF.
-int32_t NumNonZero8x8ExceptDC(const int32_t* JXL_RESTRICT block,
-                              int32_t* JXL_RESTRICT nzeros_pos) {
+uint8_t NumNonZero8x8ExceptDC(const int32_t* JXL_RESTRICT block,
+                              uint8_t* JXL_RESTRICT nzeros_pos) {
   const HWY_CAPPED(int32_t, kBlockDim) di;
 
   const auto zero = Zero(di);
@@ -138,17 +138,18 @@ int32_t NumNonZero8x8ExceptDC(const int32_t* JXL_RESTRICT block,
   }
 
   // We want 64 - sum_zero, add because neg_sum_zero is already negated.
-  const int32_t nzeros =
-      int32_t(kDCTBlockSize) + GetLane(SumOfLanes(di, neg_sum_zero));
+  const uint8_t nzeros =
+      static_cast<uint8_t>(static_cast<int32_t>(kDCTBlockSize) +
+                           GetLane(SumOfLanes(di, neg_sum_zero)));
 
   *nzeros_pos = nzeros;
 
   return nzeros;
 }
 
-JXL_INLINE int32_t PredictFromTopAndLeft(
-    const int32_t* const JXL_RESTRICT row_top,
-    const int32_t* const JXL_RESTRICT row, size_t x, int32_t default_val) {
+JXL_INLINE uint8_t PredictFromTopAndLeft(
+    const uint8_t* const JXL_RESTRICT row_top,
+    const uint8_t* const JXL_RESTRICT row, size_t x, int32_t default_val) {
   if (x == 0) {
     return row_top == nullptr ? default_val : row_top[x];
   }
@@ -304,6 +305,7 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
                   const DequantMatrices& matrices, const float scale,
                   const float scale_dc, const uint32_t x_qm_scale,
                   DCGroupData* dc_data, const EntropyCode& ac_code,
+                  Image3B* num_nzeros, GroupProcessorMemory* mem,
                   BitWriter* writer) {
   const size_t xsize_blocks = group_brect.xsize();
   const size_t ysize_blocks = group_brect.ysize();
@@ -318,13 +320,10 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
       static_cast<size_t>(dc_data->quant_dc.PixelsPerRow());
   const size_t opsin_stride = static_cast<size_t>(opsin.PixelsPerRow());
 
-  // TODO(veluca): consider strategies to reduce this memory.
-  auto mem = hwy::AllocateAligned<int32_t>(3 * kMaxCoeffArea);
-  auto fmem = hwy::AllocateAligned<float>(4 * kMaxCoeffArea);
-  float* JXL_RESTRICT scratch_space = fmem.get() + 3 * kMaxCoeffArea;
   constexpr HWY_CAPPED(float, kDCTBlockSize) d;
-  HWY_ALIGN float* coeffs_in = fmem.get();
-  HWY_ALIGN int32_t* quantized = mem.get();
+  float* coeffs_in = mem->block_storage();
+  float* scratch_space = mem->scratch_space();
+  int32_t* quantized = mem->coeff_storage();
 
   HWY_ALIGN float tmp_dc[4];
   const size_t tmp_dc_stride = 2;
@@ -334,8 +333,8 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
     inv_factor[c] = kInvDCQuant[c] * scale_dc;
   }
 
-  Image3I num_nzeros(kGroupDimInBlocks, kGroupDimInBlocks);
-  const size_t nzeros_stride = num_nzeros.PixelsPerRow();
+  const size_t nzeros_by0 = group_brect.y0() % kGroupDimInBlocks;
+  const size_t nzeros_stride = num_nzeros->PixelsPerRow();
   const float x_qm_mul = std::pow(1.25f, x_qm_scale - 2.0f);
 
   for (size_t by = 0; by < ysize_blocks; ++by) {
@@ -361,15 +360,16 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
     };
     AcStrategyRow ac_strategy_row =
         dc_data->ac_strategy.ConstRow(group_brect, by);
-    int32_t* JXL_RESTRICT row_nzeros[3] = {
-        num_nzeros.PlaneRow(0, by),
-        num_nzeros.PlaneRow(1, by),
-        num_nzeros.PlaneRow(2, by),
+    size_t nzeros_by = nzeros_by0 + by;
+    uint8_t* JXL_RESTRICT row_nzeros[3] = {
+        num_nzeros->PlaneRow(0, nzeros_by),
+        num_nzeros->PlaneRow(1, nzeros_by),
+        num_nzeros->PlaneRow(2, nzeros_by),
     };
-    const int32_t* JXL_RESTRICT row_nzeros_top[3] = {
-        by == 0 ? nullptr : num_nzeros.ConstPlaneRow(0, by - 1),
-        by == 0 ? nullptr : num_nzeros.ConstPlaneRow(1, by - 1),
-        by == 0 ? nullptr : num_nzeros.ConstPlaneRow(2, by - 1),
+    const uint8_t* JXL_RESTRICT row_nzeros_top[3] = {
+        nzeros_by == 0 ? nullptr : num_nzeros->ConstPlaneRow(0, nzeros_by - 1),
+        nzeros_by == 0 ? nullptr : num_nzeros->ConstPlaneRow(1, nzeros_by - 1),
+        nzeros_by == 0 ? nullptr : num_nzeros->ConstPlaneRow(2, nzeros_by - 1),
     };
     for (size_t bx = 0; bx < xsize_blocks; ++bx) {
 #if OPTIMIZE_CHROMA_FROM_LUMA
@@ -508,10 +508,11 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
                   const DequantMatrices& matrices, const float scale,
                   const float scale_dc, const uint32_t x_qm_scale,
                   DCGroupData* dc_data, const EntropyCode& ac_code,
+                  Image3B* num_nzeros, GroupProcessorMemory* mem,
                   BitWriter* writer) {
   return HWY_DYNAMIC_DISPATCH(WriteACGroup)(opsin, group_brect, matrices, scale,
                                             scale_dc, x_qm_scale, dc_data,
-                                            ac_code, writer);
+                                            ac_code, num_nzeros, mem, writer);
 }
 }  // namespace jxl
 #endif  // HWY_ONCE
