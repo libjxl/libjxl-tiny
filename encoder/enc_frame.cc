@@ -60,16 +60,22 @@ struct ImageDim {
         num_groups(xsize_groups * ysize_groups),
         num_dc_groups(xsize_dc_groups * ysize_dc_groups) {}
 
+  Rect PixelRect(size_t ix, size_t iy, size_t dimx, size_t dimy) const {
+    return Rect(ix * dimx, iy * dimy, dimx, dimy, xsize, ysize);
+  }
   Rect PixelRect(size_t ix, size_t iy, size_t dim) const {
-    return Rect(ix * dim, iy * dim, dim, dim, xsize, ysize);
+    return PixelRect(ix, iy, dim, dim);
   }
 
+  Rect BlockRect(size_t ix, size_t iy, size_t dimx, size_t dimy) const {
+    return Rect(ix * dimx, iy * dimy, dimx, dimy, xsize_blocks, ysize_blocks);
+  }
   Rect BlockRect(size_t ix, size_t iy, size_t dim) const {
-    return Rect(ix * dim, iy * dim, dim, dim, xsize_blocks, ysize_blocks);
+    return BlockRect(ix, iy, dim, dim);
   }
 
-  Rect TileRect(size_t ix, size_t iy, size_t dim) const {
-    return Rect(ix * dim, iy * dim, dim, dim, xsize_tiles, ysize_tiles);
+  Rect TileRect(size_t ix, size_t iy, size_t dimx, size_t dimy) const {
+    return Rect(ix * dimx, iy * dimy, dimx, dimy, xsize_tiles, ysize_tiles);
   }
 
   const size_t xsize;
@@ -610,7 +616,7 @@ void CopyAndPadImage(const Image3F& from, const Rect& r, Image3F* to) {
   }
 }
 
-// These are temporary structures needed to process one 64x64 tile.
+// These are temporary structures needed to process one tile.
 struct TileProcessorMemory {
   TileProcessorMemory()
       : quant_field(kTileDimInBlocks, kTileDimInBlocks),
@@ -634,7 +640,6 @@ struct TileProcessorMemory {
   float* scratch_space() { return mem_dct.get() + 3 * kMaxCoeffArea; }
 #endif
 #if OPTIMIZE_CHROMA_FROM_LUMA
-  // float* coeff_storage() { return mem_dct.get() + 4 * kMaxCoeffArea; }
   float* coeff_storage() { return mem_cmap.get(); }
   hwy::AlignedFreeUniquePtr<float[]> mem_cmap;
 #endif
@@ -689,41 +694,66 @@ Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
   // Dimensions of the current DC group.
   ImageDim dc_group_dim(dc_group_rect.xsize(), dc_group_rect.ysize());
 
+  // 514 kB total memory for DC group data (384 kB quantized DC, 64 kB AQ field
+  // 64 kB AC strategy, 2 kB Chroma from luma).
   DCGroupData dc_data(dc_group_dim.xsize_blocks, dc_group_dim.ysize_blocks);
-  Image3F group(kGroupDim, kGroupDim);
+  // 192 kB for holding the XYB image for one AC stripe, can be reduced to 48 kB
+  // if OPTIMIZE_CHROMA_FROM_LUMA is disabled and 16x16 tiles are used. One per
+  // group processor thread.
+  Image3F stripe(kGroupDim, kTileDim);
+  // 3.5 kB of temporary data for DCT and holding the quantized coefficients.
+  // One per group processor thread.
+  GroupProcessorMemory gmem;
+  // 3 kB for the number of nonzeros per block, needed for context calculation.
+  // One per group processor thread.
+  Image3B num_nzeros(kGroupDimInBlocks, kGroupDimInBlocks);
+  // 68 kB temporary data per tile processor thread, this can be reduced to less
+  // than 4 kB if OPTIMIZE_CHROMA_FROM_LUMA is disabled.
   TileProcessorMemory tmem;
 
-  // Process AC groups.
+  // Process AC groups, can be done in parallel, each thread fills in 1/64th of
+  // the dc_data.
   for (size_t gix = 0; gix < dc_group_dim.num_groups; ++gix) {
     size_t gx = gix % dc_group_dim.xsize_groups;
     size_t gy = gix / dc_group_dim.xsize_groups;
     size_t image_gx = dc_gx * kBlockDim + gx;
     size_t image_gy = dc_gy * kBlockDim + gy;
+    const size_t ac_group_idx =
+        2 + dim.num_dc_groups + image_gy * dim.xsize_groups + image_gx;
     // Rectangle of the current AC group within the image.
     Rect group_rect = dim.PixelRect(image_gx, image_gy, kGroupDim);
     // Dimensions of the current AC group.
     ImageDim group_dim(group_rect.xsize(), group_rect.ysize());
-    // Block-rectangle of the current AC group within the DC group.
-    Rect group_brect = dc_group_dim.BlockRect(gx, gy, kGroupDimInBlocks);
-    // Tile-rectangle of the current AC group within the DC group.
-    Rect group_trect = dc_group_dim.TileRect(gx, gy, kGroupDimInTiles);
-    // Convert current AC group to XYB, pad to whole blocks if necessary.
-    CopyAndPadImage(linear, group_rect, &group);
-    ToXYB(&group);
-    // Compute heuristics data one 64x64 tile at a time.
-    for (size_t tx = 0; tx < group_dim.xsize_tiles; ++tx) {
-      for (size_t ty = 0; ty < group_dim.ysize_tiles; ++ty) {
-        // Block-rectangle of the current tile within the AC group.
-        Rect tile_brect = group_dim.BlockRect(tx, ty, kTileDimInBlocks);
-        ProcessTile(group, tile_brect, group_brect, group_trect, distp,
+    // Process AC group one 256 x kTileDim stripe at a time. These must be done
+    // sequentially, because there is context dependence between the stripes.
+    for (size_t ty = 0; ty < group_dim.ysize_tiles; ++ty) {
+      size_t dc_ty = gy * kGroupDimInTiles + ty;
+      size_t image_ty = image_gy * kGroupDimInTiles + ty;
+      // Rectangle of the current AC stripe within the image.
+      Rect stripe_rect = dim.PixelRect(image_gx, image_ty, kGroupDim, kTileDim);
+      // Dimensions of the current AC stripe.
+      ImageDim stripe_dim(stripe_rect.xsize(), stripe_rect.ysize());
+      // Block-rectangle of the current AC stripe within the DC group.
+      Rect stripe_brect = dc_group_dim.BlockRect(gx, dc_ty, kGroupDimInBlocks,
+                                                 kTileDimInBlocks);
+      // Tile-rectangle of the current AC stripe within the DC group.
+      Rect stripe_trect = dc_group_dim.TileRect(gx, dc_ty, kGroupDimInTiles, 1);
+      // Convert current AC stripe to XYB, pad to whole blocks if necessary.
+      CopyAndPadImage(linear, stripe_rect, &stripe);
+      ToXYB(&stripe);
+      // Compute heuristics data one kTileDim x kTileDim tile at a time. These
+      // can be done in parallel.
+      for (size_t tx = 0; tx < group_dim.xsize_tiles; ++tx) {
+        // Block-rectangle of the current tile within the AC stripe.
+        Rect tile_brect = stripe_dim.BlockRect(tx, 0, kTileDimInBlocks);
+        ProcessTile(stripe, tile_brect, stripe_brect, stripe_trect, distp,
                     matrices, &dc_data, &tmem);
       }
+      // Write AC stripe to bitstream and fill in dc_data->quant_dc.
+      WriteACGroup(stripe, stripe_brect, matrices, distp.scale, distp.scale_dc,
+                   distp.x_qm_scale, &dc_data, ac_code, &num_nzeros, &gmem,
+                   &(*output)[ac_group_idx]);
     }
-    const size_t ac_group_idx =
-        2 + dim.num_dc_groups + image_gy * dim.xsize_groups + image_gx;
-    // Write AC group to bitstream and fill in dc_data->quant_dc.
-    WriteACGroup(group, group_brect, matrices, distp.scale, distp.scale_dc,
-                 distp.x_qm_scale, &dc_data, ac_code, &(*output)[ac_group_idx]);
   }
 
   // Write DC group to bitstream.
@@ -799,6 +829,7 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   std::vector<BitWriter> sections(num_sections);
 
   // Generate DC group and AC group sections per 2048x2048 tile.
+  // These can be done in parallel.
   for (size_t i = 0; i < dim.num_dc_groups; ++i) {
     size_t dc_gx = i % dim.xsize_dc_groups;
     size_t dc_gy = i / dim.xsize_dc_groups;
