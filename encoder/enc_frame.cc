@@ -51,8 +51,8 @@ struct ImageDim {
         ysize(ys),
         xsize_blocks(DivCeil(xsize, kBlockDim)),
         ysize_blocks(DivCeil(ysize, kBlockDim)),
-        xsize_tiles(DivCeil(xsize, kColorTileDim)),
-        ysize_tiles(DivCeil(ysize, kColorTileDim)),
+        xsize_tiles(DivCeil(xsize, kTileDim)),
+        ysize_tiles(DivCeil(ysize, kTileDim)),
         xsize_groups(DivCeil(xsize, kGroupDim)),
         ysize_groups(DivCeil(ysize, kGroupDim)),
         xsize_dc_groups(DivCeil(xsize, kDCGroupDim)),
@@ -613,22 +613,31 @@ void CopyAndPadImage(const Image3F& from, const Rect& r, Image3F* to) {
 // These are temporary structures needed to process one 64x64 tile.
 struct TileProcessorMemory {
   TileProcessorMemory()
-      : quant_field(kColorTileDimInBlocks, kColorTileDimInBlocks),
-        masking(kColorTileDimInBlocks, kColorTileDimInBlocks),
-        pre_erosion(kColorTileDimInBlocks * 2 + 2,
-                    kColorTileDimInBlocks * 2 + 2),
-        diff_buffer(kColorTileDim + 8, 1) {
-    mem = hwy::AllocateAligned<float>(AcStrategy::kMaxCoeffArea * 4 +
-                                      kColorTileDim * kColorTileDim * 4);
+      : quant_field(kTileDimInBlocks, kTileDimInBlocks),
+        masking(kTileDimInBlocks, kTileDimInBlocks),
+        pre_erosion(kTileDimInBlocks * 2 + 2, kTileDimInBlocks * 2 + 2),
+        diff_buffer(kTileDim + 8, 1) {
+#if (OPTIMIZE_BLOCK_SIZES || OPTIMIZE_CHROMA_FROM_LUMA)
+    mem_dct = hwy::AllocateAligned<float>(kMaxCoeffArea * 4);
+#endif
+#if OPTIMIZE_CHROMA_FROM_LUMA
+    mem_cmap = hwy::AllocateAligned<float>(kTileDim * kTileDim * 4);
+#endif
   }
-  float* block_storage() { return mem.get(); }
-  float* scratch_space() { return mem.get() + 3 * AcStrategy::kMaxCoeffArea; }
-  float* coeff_storage() { return mem.get() + AcStrategy::kMaxCoeffArea; }
   ImageF quant_field;
   ImageF masking;
   ImageF pre_erosion;
   ImageF diff_buffer;
-  hwy::AlignedFreeUniquePtr<float[]> mem;
+#if (OPTIMIZE_BLOCK_SIZES || OPTIMIZE_CHROMA_FROM_LUMA)
+  hwy::AlignedFreeUniquePtr<float[]> mem_dct;
+  float* block_storage() { return mem_dct.get(); }
+  float* scratch_space() { return mem_dct.get() + 3 * kMaxCoeffArea; }
+#endif
+#if OPTIMIZE_CHROMA_FROM_LUMA
+  // float* coeff_storage() { return mem_dct.get() + 4 * kMaxCoeffArea; }
+  float* coeff_storage() { return mem_cmap.get(); }
+  hwy::AlignedFreeUniquePtr<float[]> mem_cmap;
+#endif
 };
 
 void ProcessTile(const Image3F& group, const Rect& tile_brect,
@@ -639,14 +648,19 @@ void ProcessTile(const Image3F& group, const Rect& tile_brect,
                                 distp.inv_scale, &tmem->pre_erosion,
                                 tmem->diff_buffer.Row(0), &tmem->quant_field,
                                 &tmem->masking, &dc_data->raw_quant_field);
-  int8_t ytox, ytob;
+  int8_t ytox = 0, ytob = 0;
+  (void)ytox;
+  (void)ytob;
+#if OPTIMIZE_CHROMA_FROM_LUMA
   ComputeCmapTile(group, tile_brect, matrices, &ytox, &ytob,
-                  tmem->block_storage(), tmem->coeff_storage(),
-                  tmem->scratch_space());
-  const size_t tx = tile_brect.x0() / kColorTileDimInBlocks;
-  const size_t ty = tile_brect.y0() / kColorTileDimInBlocks;
+                  tmem->block_storage(), tmem->scratch_space(),
+                  tmem->coeff_storage());
+  const size_t tx = tile_brect.x0() / kTileDimInBlocks;
+  const size_t ty = tile_brect.y0() / kTileDimInBlocks;
   group_trect.Row(&dc_data->ytox_map, ty)[tx] = ytox;
   group_trect.Row(&dc_data->ytob_map, ty)[tx] = ytob;
+#endif
+#if OPTIMIZE_BLOCK_SIZES
   for (size_t cy = 0; cy + 1 < tile_brect.ysize(); cy += 2) {
     for (size_t cx = 0; cx + 1 < tile_brect.xsize(); cx += 2) {
       FindBest16x16Transform(group, group_brect, tile_brect.x0(),
@@ -660,6 +674,7 @@ void ProcessTile(const Image3F& group, const Rect& tile_brect,
             group_brect.y0() + tile_brect.y0(), tile_brect.xsize(),
             tile_brect.ysize());
   AdjustQuantField(dc_data->ac_strategy, rect, &dc_data->raw_quant_field);
+#endif
 }
 
 Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
@@ -691,7 +706,7 @@ Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
     // Block-rectangle of the current AC group within the DC group.
     Rect group_brect = dc_group_dim.BlockRect(gx, gy, kGroupDimInBlocks);
     // Tile-rectangle of the current AC group within the DC group.
-    Rect group_trect = dc_group_dim.TileRect(gx, gy, kGroupDimInColorTiles);
+    Rect group_trect = dc_group_dim.TileRect(gx, gy, kGroupDimInTiles);
     // Convert current AC group to XYB, pad to whole blocks if necessary.
     CopyAndPadImage(linear, group_rect, &group);
     ToXYB(&group);
@@ -699,7 +714,7 @@ Status ProcessDCGroup(const Image3F& linear, size_t dc_gx, size_t dc_gy,
     for (size_t tx = 0; tx < group_dim.xsize_tiles; ++tx) {
       for (size_t ty = 0; ty < group_dim.ysize_tiles; ++ty) {
         // Block-rectangle of the current tile within the AC group.
-        Rect tile_brect = group_dim.BlockRect(tx, ty, kColorTileDimInBlocks);
+        Rect tile_brect = group_dim.BlockRect(tx, ty, kTileDimInBlocks);
         ProcessTile(group, tile_brect, group_brect, group_trect, distp,
                     matrices, &dc_data, &tmem);
       }

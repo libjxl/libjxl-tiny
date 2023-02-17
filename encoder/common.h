@@ -13,6 +13,7 @@
 #include <stddef.h>
 
 #include "encoder/base/compiler_specific.h"
+#include "encoder/config.h"
 
 namespace jxl {
 
@@ -36,8 +37,13 @@ constexpr size_t kGroupDim = 256;
 constexpr size_t kGroupDimInBlocks = kGroupDim / kBlockDim;
 constexpr size_t kDCGroupDim = kGroupDim * kBlockDim;
 constexpr size_t kColorTileDim = 64;
-constexpr size_t kColorTileDimInBlocks = kColorTileDim / kBlockDim;
-constexpr size_t kGroupDimInColorTiles = kGroupDim / kColorTileDim;
+#if OPTIMIZE_CHROMA_FROM_LUMA
+constexpr size_t kTileDim = kColorTileDim;
+#else
+constexpr size_t kTileDim = 16;
+#endif
+constexpr size_t kTileDimInBlocks = kTileDim / kBlockDim;
+constexpr size_t kGroupDimInTiles = kGroupDim / kTileDim;
 
 template <typename T>
 JXL_INLINE T Clamp1(T val, T low, T hi) {

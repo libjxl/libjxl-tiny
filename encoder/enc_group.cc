@@ -62,12 +62,9 @@ int32_t NumNonZeroExceptLLF(const size_t cx, const size_t cy,
 
   {
     // Mask sufficient for one row of coefficients.
-    HWY_ALIGN const int32_t
-        llf_mask_lanes[AcStrategy::kMaxCoeffBlocks * (1 + kBlockDim)] = {
-            -1, -1, -1, -1};
+    HWY_ALIGN const int32_t llf_mask_lanes[4 + kMaxCoeffDim] = {-1, -1, -1, -1};
     // First cx=1,2,4 elements are FF..FF, others 0.
-    const int32_t* llf_mask_pos =
-        llf_mask_lanes + AcStrategy::kMaxCoeffBlocks - cx;
+    const int32_t* llf_mask_pos = llf_mask_lanes + 4 - cx;
 
     // Rows with LLF: mask out the LLF
     for (size_t y = 0; y < cy; y++) {
@@ -310,20 +307,21 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
                   BitWriter* writer) {
   const size_t xsize_blocks = group_brect.xsize();
   const size_t ysize_blocks = group_brect.ysize();
-  const Rect cmap_rect(group_brect.x0() / kColorTileDimInBlocks,
-                       group_brect.y0() / kColorTileDimInBlocks,
-                       DivCeil(xsize_blocks, kColorTileDimInBlocks),
-                       DivCeil(ysize_blocks, kColorTileDimInBlocks));
+#if OPTIMIZE_CHROMA_FROM_LUMA
+  const Rect cmap_rect(group_brect.x0() / kTileDimInBlocks,
+                       group_brect.y0() / kTileDimInBlocks,
+                       DivCeil(xsize_blocks, kTileDimInBlocks),
+                       DivCeil(ysize_blocks, kTileDimInBlocks));
+#endif
 
   const size_t dc_stride =
       static_cast<size_t>(dc_data->quant_dc.PixelsPerRow());
   const size_t opsin_stride = static_cast<size_t>(opsin.PixelsPerRow());
 
   // TODO(veluca): consider strategies to reduce this memory.
-  auto mem = hwy::AllocateAligned<int32_t>(3 * AcStrategy::kMaxCoeffArea);
-  auto fmem = hwy::AllocateAligned<float>(5 * AcStrategy::kMaxCoeffArea);
-  float* JXL_RESTRICT scratch_space =
-      fmem.get() + 3 * AcStrategy::kMaxCoeffArea;
+  auto mem = hwy::AllocateAligned<int32_t>(3 * kMaxCoeffArea);
+  auto fmem = hwy::AllocateAligned<float>(4 * kMaxCoeffArea);
+  float* JXL_RESTRICT scratch_space = fmem.get() + 3 * kMaxCoeffArea;
   constexpr HWY_CAPPED(float, kDCTBlockSize) d;
   HWY_ALIGN float* coeffs_in = fmem.get();
   HWY_ALIGN int32_t* quantized = mem.get();
@@ -343,12 +341,14 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
   for (size_t by = 0; by < ysize_blocks; ++by) {
     const uint8_t* JXL_RESTRICT row_quant_ac =
         group_brect.ConstRow(dc_data->raw_quant_field, by);
-    size_t ty = by / kColorTileDimInBlocks;
+#if OPTIMIZE_CHROMA_FROM_LUMA
+    size_t ty = by / kTileDimInBlocks;
     const int8_t* JXL_RESTRICT row_cmap[3] = {
         cmap_rect.ConstRow(dc_data->ytox_map, ty),
         nullptr,
         cmap_rect.ConstRow(dc_data->ytob_map, ty),
     };
+#endif
     const float* JXL_RESTRICT opsin_rows[3] = {
         opsin.ConstPlaneRow(0, by * kBlockDim),
         opsin.ConstPlaneRow(1, by * kBlockDim),
@@ -372,9 +372,14 @@ void WriteACGroup(const Image3F& opsin, const Rect& group_brect,
         by == 0 ? nullptr : num_nzeros.ConstPlaneRow(2, by - 1),
     };
     for (size_t bx = 0; bx < xsize_blocks; ++bx) {
-      size_t tx = bx / kColorTileDimInBlocks;
+#if OPTIMIZE_CHROMA_FROM_LUMA
+      size_t tx = bx / kTileDimInBlocks;
       const auto x_factor = Set(d, YtoXRatio(row_cmap[0][tx]));
       const auto b_factor = Set(d, YtoBRatio(row_cmap[2][tx]));
+#else
+      const auto x_factor = Set(d, 0.0f);
+      const auto b_factor = Set(d, 1.0f);
+#endif
       const AcStrategy acs = ac_strategy_row[bx];
       if (!acs.IsFirstBlock()) continue;
 

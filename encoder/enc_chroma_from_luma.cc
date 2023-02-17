@@ -77,9 +77,9 @@ void ComputeCmapTile(const Image3F& opsin, const Rect& tile_brect,
   float* HWY_RESTRICT block_x = block_y + kDCTBlockSize;
   float* HWY_RESTRICT block_b = block_x + kDCTBlockSize;
   float* HWY_RESTRICT coeffs_yx = coeff_storage;
-  float* HWY_RESTRICT coeffs_x = coeffs_yx + kColorTileDim * kColorTileDim;
-  float* HWY_RESTRICT coeffs_yb = coeffs_x + kColorTileDim * kColorTileDim;
-  float* HWY_RESTRICT coeffs_b = coeffs_yb + kColorTileDim * kColorTileDim;
+  float* HWY_RESTRICT coeffs_x = coeffs_yx + kTileDim * kTileDim;
+  float* HWY_RESTRICT coeffs_yb = coeffs_x + kTileDim * kTileDim;
+  float* HWY_RESTRICT coeffs_b = coeffs_yb + kTileDim * kTileDim;
   float* HWY_RESTRICT scratch_space = scratch;
 
   size_t num_ac = 0;
@@ -109,7 +109,7 @@ void ComputeCmapTile(const Image3F& opsin, const Rect& tile_brect,
       block_y[0] = 0;
       block_x[0] = 0;
       block_b[0] = 0;
-      for (size_t i = 0; i < 64; i += Lanes(df)) {
+      for (size_t i = 0; i < kDCTBlockSize; i += Lanes(df)) {
         const auto b_y = Load(df, block_y + i);
         const auto b_x = Load(df, block_x + i);
         const auto b_b = Load(df, block_b + i);

@@ -21,10 +21,10 @@ struct DCGroupData {
       : quant_dc(xsize_blocks, ysize_blocks),
         raw_quant_field(xsize_blocks, ysize_blocks),
         ac_strategy(xsize_blocks, ysize_blocks),
-        ytox_map(DivCeil(xsize_blocks, kColorTileDimInBlocks),
-                 DivCeil(ysize_blocks, kColorTileDimInBlocks)),
-        ytob_map(DivCeil(xsize_blocks, kColorTileDimInBlocks),
-                 DivCeil(ysize_blocks, kColorTileDimInBlocks)) {
+        ytox_map(DivCeil(xsize_blocks * kBlockDim, kColorTileDim),
+                 DivCeil(ysize_blocks * kBlockDim, kColorTileDim)),
+        ytob_map(DivCeil(xsize_blocks * kBlockDim, kColorTileDim),
+                 DivCeil(ysize_blocks * kBlockDim, kColorTileDim)) {
     ac_strategy.FillDCT8();
     ZeroFillImage(&ytox_map);
     ZeroFillImage(&ytob_map);
